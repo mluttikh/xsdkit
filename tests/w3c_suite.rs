@@ -27,6 +27,17 @@ fn suite() -> Option<PathBuf> {
     p.join("suite.xml").is_file().then_some(p)
 }
 
+/// One instance case: a document, the schema it belongs to, and whether the
+/// suite says the document is valid against it.
+#[derive(Debug)]
+struct InstanceCase {
+    set: String,
+    version: String,
+    schema_documents: Vec<PathBuf>,
+    instance: PathBuf,
+    expect_valid: bool,
+}
+
 /// One schema case: the documents to load, and whether the suite says the
 /// schema is valid.
 #[derive(Debug)]
@@ -41,8 +52,9 @@ struct SchemaCase {
 /// Reads the `.testSet` metadata with the crate itself is not appropriate —
 /// these are ordinary XML, read with a small hand-rolled scan so a bug in
 /// `xsdkit` cannot silently change which cases run.
-fn parse_test_sets(root: &Path) -> Vec<SchemaCase> {
+fn parse_test_sets(root: &Path) -> (Vec<SchemaCase>, Vec<InstanceCase>) {
     let mut out = Vec::new();
+    let mut instances = Vec::new();
     let mut dirs = vec![root.to_path_buf()];
     let mut files = Vec::new();
     while let Some(d) = dirs.pop() {
@@ -114,13 +126,48 @@ fn parse_test_sets(root: &Path) -> Vec<SchemaCase> {
                     set: set.clone(),
                     group: name.clone(),
                     version: version.clone(),
-                    documents,
+                    documents: documents.clone(),
                     expect_valid,
                 });
+
+                // Instance cases only mean anything against a schema the
+                // suite says is valid; a document cannot be judged against a
+                // schema that should not have compiled.
+                if !expect_valid {
+                    continue;
+                }
+                for it in group.children().filter(|n| n.has_tag_name("instanceTest")) {
+                    let Some(href) = it
+                        .children()
+                        .find(|n| n.has_tag_name("instanceDocument"))
+                        .and_then(|n| n.attribute(("http://www.w3.org/1999/xlink", "href")))
+                    else {
+                        continue;
+                    };
+                    let Some(validity) = it
+                        .children()
+                        .find(|n| n.has_tag_name("expected"))
+                        .and_then(|n| n.attribute("validity"))
+                    else {
+                        continue;
+                    };
+                    let expect = match validity {
+                        "valid" => true,
+                        "invalid" => false,
+                        _ => continue,
+                    };
+                    instances.push(InstanceCase {
+                        set: set.clone(),
+                        version: version.clone(),
+                        schema_documents: documents.clone(),
+                        instance: dir.join(href),
+                        expect_valid: expect,
+                    });
+                }
             }
         }
     }
-    out
+    (out, instances)
 }
 
 /// Whether `xsdkit` considers the schema valid.
@@ -176,7 +223,7 @@ fn w3c_schema_conformance() {
         eprintln!("XSDTESTS is not set; skipping the W3C suite");
         return;
     };
-    let cases = parse_test_sets(&root);
+    let (cases, _) = parse_test_sets(&root);
     assert!(
         cases.len() > 5000,
         "expected the whole suite, found {}",
@@ -268,5 +315,156 @@ fn w3c_schema_conformance() {
     assert!(
         accepted_pct >= 50.0,
         "valid-schema acceptance fell to {accepted_pct:.1}%"
+    );
+}
+
+/// Ignored by default: 21,671 documents takes minutes even with the schema
+/// cache, where the schema half takes seconds. Run it deliberately:
+///
+/// ```text
+/// XSDTESTS=/tmp/xsdtests cargo test --test w3c_suite -- --ignored --nocapture
+/// ```
+#[test]
+#[ignore = "21,671 documents; run deliberately with --ignored"]
+fn w3c_instance_conformance() {
+    let Some(root) = suite() else {
+        eprintln!("XSDTESTS is not set; skipping the W3C suite");
+        return;
+    };
+    let (_, cases) = parse_test_sets(&root);
+    assert!(
+        cases.len() > 10_000,
+        "expected the instance suite, found {}",
+        cases.len()
+    );
+
+    let mut tally = Tally::default();
+    let mut unusable = 0usize;
+    let mut by_set: BTreeMap<String, Tally> = BTreeMap::new();
+    // Many groups share one schema, and compiling is the expensive half.
+    // "Compile once, validate many" is the crate's own claim; the harness
+    // takes it at its word or the run takes ten minutes instead of one.
+    let mut cache: BTreeMap<String, Option<xsdkit::Schemas>> = BTreeMap::new();
+
+    let hook = std::panic::take_hook();
+    std::panic::set_hook(Box::new(|_| {}));
+    for c in &cases {
+        let Ok(xml) = std::fs::read_to_string(&c.instance) else {
+            unusable += 1;
+            continue;
+        };
+        let key = format!(
+            "{}|{}",
+            c.version,
+            c.schema_documents
+                .iter()
+                .map(|p| p.display().to_string())
+                .collect::<Vec<_>>()
+                .join(",")
+        );
+        let entry = cache.entry(key).or_insert_with(|| {
+            let version = if c.version.contains("1.1") && !c.version.contains("1.0") {
+                Version::Xsd11
+            } else {
+                Version::Xsd10
+            };
+            let mut b = SchemaSetBuilder::new()
+                .version(version)
+                .conformance(Conformance::Lax);
+            if let Some(dir) = c.schema_documents[0].parent() {
+                b = b.search_path(dir);
+            }
+            for d in &c.schema_documents {
+                b = b.file(d.display().to_string());
+            }
+            std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                let (schemas, diags) = b.build_with_warnings();
+                // A schema this crate could not load says nothing about the
+                // document, so those are counted apart rather than scored.
+                (!diags.has_errors()).then_some(schemas)
+            }))
+            .unwrap_or(None)
+        });
+        let verdict = match entry {
+            None => Ok(None),
+            Some(schemas) => std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                Some(schemas.instance_validator().validate(&xml).is_valid())
+            })),
+        };
+        let t = by_set.entry(c.set.clone()).or_default();
+        match verdict {
+            Ok(Some(accepted)) => match (c.expect_valid, accepted) {
+                (true, true) => {
+                    tally.accepted_valid += 1;
+                    t.accepted_valid += 1;
+                }
+                (true, false) => {
+                    tally.rejected_valid += 1;
+                    t.rejected_valid += 1;
+                }
+                (false, false) => {
+                    tally.rejected_invalid += 1;
+                    t.rejected_invalid += 1;
+                }
+                (false, true) => {
+                    tally.accepted_invalid += 1;
+                    t.accepted_invalid += 1;
+                }
+            },
+            _ => unusable += 1,
+        }
+    }
+    std::panic::set_hook(hook);
+
+    let pct = |n: usize, d: usize| {
+        if d == 0 {
+            100.0
+        } else {
+            n as f64 * 100.0 / d as f64
+        }
+    };
+    let valid_total = tally.accepted_valid + tally.rejected_valid;
+    let invalid_total = tally.rejected_invalid + tally.accepted_invalid;
+    println!("\n=== W3C XML Schema Test Suite — instance tests ===");
+    println!("cases scored              {}", tally.total());
+    println!("skipped (schema unusable) {unusable}");
+    println!(
+        "correct                   {} ({:.1}%)",
+        tally.correct(),
+        pct(tally.correct(), tally.total())
+    );
+    println!(
+        "\nvalid documents accepted  {}/{} ({:.1}%)   <- false alarms",
+        tally.accepted_valid,
+        valid_total,
+        pct(tally.accepted_valid, valid_total)
+    );
+    println!(
+        "invalid documents rejected {}/{} ({:.1}%)   <- what validation catches",
+        tally.rejected_invalid,
+        invalid_total,
+        pct(tally.rejected_invalid, invalid_total)
+    );
+
+    println!("\nworst sets by false alarm:");
+    let mut sets: Vec<_> = by_set.iter().collect();
+    sets.sort_by_key(|(_, t)| std::cmp::Reverse(t.rejected_valid));
+    for (name, t) in sets.iter().take(8) {
+        if t.rejected_valid == 0 {
+            break;
+        }
+        println!(
+            "  {name:24} {:5} of {:5} valid documents rejected",
+            t.rejected_valid,
+            t.accepted_valid + t.rejected_valid
+        );
+    }
+
+    // A ratchet on false alarms: rejecting a valid document is the failure
+    // that makes a validator unusable.
+    let accepted = pct(tally.accepted_valid, valid_total);
+    assert!(
+        accepted >= 40.0,
+        "valid-document acceptance fell to {accepted:.1}%"
     );
 }

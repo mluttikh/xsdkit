@@ -206,6 +206,9 @@ That asymmetry is by construction, not neglect: the Schema Component
 Constraints and the Derivation Valid rules are unimplemented (see §7). A
 schema this crate accepts is not thereby a *valid* schema.
 
+The instance half — 21,671 documents — is `#[ignore]`d because it takes
+minutes where the schema half takes seconds. Run it with `-- --ignored`.
+
 The harness carries a floor assertion on acceptance. **Raise it as the number
 improves; never lower it silently** — a drop means a schema that used to load
 no longer does.
