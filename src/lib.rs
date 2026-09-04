@@ -52,6 +52,7 @@ pub mod load;
 pub mod model;
 pub mod names;
 pub mod regex;
+pub mod validate;
 pub mod values;
 
 #[cfg(feature = "python")]
