@@ -2,7 +2,7 @@
 name = "xsdkit"
 version = "0.1.0"
 edition = "2024"
-rust-version = "1.85"
+rust-version = "1.87"
 description = "A generic XSD reader: parse W3C XML Schema into a queryable schema component model"
 license = "MIT"
 repository = "https://github.com/mluttikh/xsdkit"
@@ -20,6 +20,7 @@ roxmltree = "0.20"
 fxhash = "0.2.1"
 indexmap = "2.14.0"
 encoding_rs = "0.8.35"
+oxsdatatypes = "0.2.3"
 
 [dev-dependencies]
 rstest = "0.25"

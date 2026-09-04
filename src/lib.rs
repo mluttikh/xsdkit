@@ -51,6 +51,7 @@ pub mod encoding;
 pub mod load;
 pub mod model;
 pub mod names;
+pub mod values;
 
 #[cfg(feature = "python")]
 mod python;
@@ -69,6 +70,7 @@ pub use model::{
     TypeId, ValueConstraint, Wildcard,
 };
 pub use names::{Interner, QName};
+pub use values::{FacetViolation, Value, ValueError, check_facets};
 
 use load::Loader;
 
