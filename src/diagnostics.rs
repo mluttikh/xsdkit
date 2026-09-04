@@ -120,6 +120,27 @@ pub enum DiagCode {
     /// A content model breaches Unique Particle Attribution: one element
     /// could be matched by two different particles.
     AmbiguousContentModel,
+
+    // 2000-2099 — instance documents
+    /// No global element declaration matches the document's root.
+    ElementNotDeclared,
+    /// An element appeared where its parent's content model does not allow it.
+    UnexpectedElement,
+    /// An element ended before its content model was satisfied.
+    IncompleteContent,
+    /// A value is not valid against its type.
+    InvalidValue,
+    /// An attribute is not permitted on this element.
+    AttributeNotAllowed,
+    /// A required attribute is absent.
+    MissingRequiredAttribute,
+    /// Character data appeared where the content model permits none.
+    UnexpectedText,
+    /// `xsi:type` names a type that is unknown, or not derived from the
+    /// declared one.
+    InvalidXsiType,
+    /// An element marked `xsi:nil="true"` is not empty.
+    NilElementNotEmpty,
 }
 
 impl DiagCode {
@@ -147,6 +168,16 @@ impl DiagCode {
             DiagCode::InvalidOccurrence => "XSD1302",
             DiagCode::ConflictingTypeDefinition => "XSD1303",
             DiagCode::AmbiguousContentModel => "XSD1304",
+
+            DiagCode::ElementNotDeclared => "XSD2001",
+            DiagCode::UnexpectedElement => "XSD2002",
+            DiagCode::IncompleteContent => "XSD2003",
+            DiagCode::InvalidValue => "XSD2004",
+            DiagCode::AttributeNotAllowed => "XSD2005",
+            DiagCode::MissingRequiredAttribute => "XSD2006",
+            DiagCode::UnexpectedText => "XSD2007",
+            DiagCode::InvalidXsiType => "XSD2008",
+            DiagCode::NilElementNotEmpty => "XSD2009",
         }
     }
 }
@@ -311,6 +342,15 @@ mod tests {
             DiagCode::InvalidOccurrence,
             DiagCode::ConflictingTypeDefinition,
             DiagCode::AmbiguousContentModel,
+            DiagCode::ElementNotDeclared,
+            DiagCode::UnexpectedElement,
+            DiagCode::IncompleteContent,
+            DiagCode::InvalidValue,
+            DiagCode::AttributeNotAllowed,
+            DiagCode::MissingRequiredAttribute,
+            DiagCode::UnexpectedText,
+            DiagCode::InvalidXsiType,
+            DiagCode::NilElementNotEmpty,
         ];
         let mut seen = std::collections::HashSet::new();
         for c in all {

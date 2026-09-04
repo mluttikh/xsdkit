@@ -118,6 +118,9 @@ cargo run --example inspect -- schemas/report.xsd --lax
 - **Resolution** — references, attribute-group flattening (transitive),
   substitution-group closure (transitive, skipping abstract heads),
   `keyref` → `key`.
+- **Instance validation** in one streaming pass over `quick-xml`, with a
+  typed PSVI: values arrive as `Value::Integer(42)`, not `"42"`. Handles
+  `xsi:type`, `xsi:nil`, substitution groups and wildcards.
 - **Content models** compiled to Glushkov position automata, with
   **Unique Particle Attribution** checking falling out of the same structure.
   Extension appends to the base's content; restriction replaces it.
@@ -132,8 +135,8 @@ cargo run --example inspect -- schemas/report.xsd --lax
 | ✅ | Component model, loading, composition | done |
 | ✅ | Content automata, UPA | done |
 | ✅ | Python bindings, type stubs, encoding detection | done |
-| → | **Instance validation, typed reading (PSVI)** | next |
-| | Unit binding extraction (GML, Energistics, `appinfo`) | |
+| ✅ | Instance validation, typed reading (PSVI) | done |
+| → | **Unit binding extraction** | next |
 | | XSD 1.1 | |
 | | `xsd2arrow`, a separate package | |
 

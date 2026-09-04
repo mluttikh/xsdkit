@@ -84,9 +84,13 @@ pub struct Position {
     /// particle when a numeric range was unrolled.
     pub particle: ParticleId,
     pub label: Label,
-    /// Every name this position admits, precomputed for element labels.
-    /// Empty for wildcards, whose admission is a predicate.
-    pub admits: Vec<QName>,
+    /// Every element declaration this position admits — the substitution
+    /// closure, precomputed. Empty for wildcards, whose admission is a
+    /// predicate rather than a set.
+    ///
+    /// Declarations rather than names because a validator needs the one that
+    /// matched: a substituting element has its own type.
+    pub admits: Vec<ElementId>,
 }
 
 /// A Glushkov position automaton over a content model.
@@ -167,7 +171,7 @@ pub struct AllGroup {
 pub struct AllMember {
     pub particle: ParticleId,
     pub label: Label,
-    pub admits: Vec<QName>,
+    pub admits: Vec<ElementId>,
     pub min_occurs: u32,
     pub max_occurs: MaxOccurs,
 }
@@ -200,22 +204,20 @@ impl ContentModel {
     /// Every element declaration this model may admit directly, in first
     /// appearance order, with substitution groups expanded and duplicates
     /// removed.
-    pub fn admitted_elements(&self, schemas: &Schemas) -> Vec<ElementId> {
+    pub fn admitted_elements(&self) -> Vec<ElementId> {
         let mut out = Vec::new();
         let mut seen = FxHashSet::default();
-        let mut push = |label: &Label| {
-            if let Label::Element(e) = label {
-                for m in schemas.substitution_closure(*e) {
-                    if seen.insert(m) {
-                        out.push(m);
-                    }
+        let mut push = |admits: &[ElementId]| {
+            for m in admits {
+                if seen.insert(*m) {
+                    out.push(*m);
                 }
             }
         };
         match self {
             ContentModel::Empty => {}
-            ContentModel::Automaton(a) => a.positions.iter().for_each(|p| push(&p.label)),
-            ContentModel::All(a) => a.members.iter().for_each(|m| push(&m.label)),
+            ContentModel::Automaton(a) => a.positions.iter().for_each(|p| push(&p.admits)),
+            ContentModel::All(a) => a.members.iter().for_each(|m| push(&m.admits)),
         }
         out
     }
@@ -266,12 +268,7 @@ impl<'a> Builder<'a> {
 
     fn add_position(&mut self, particle: ParticleId, label: Label) -> PositionId {
         let admits = match &label {
-            Label::Element(e) => self
-                .schemas
-                .substitution_closure(*e)
-                .into_iter()
-                .map(|m| self.schemas[m].name)
-                .collect(),
+            Label::Element(e) => self.schemas.substitution_closure(*e),
             Label::Wildcard => Vec::new(),
         };
         let id = self.positions.len() as PositionId;
@@ -590,11 +587,7 @@ fn build_all_group(schemas: &Schemas, particles: &[ParticleId]) -> AllGroup {
             _ => continue,
         };
         let admits = match &label {
-            Label::Element(e) => schemas
-                .substitution_closure(*e)
-                .into_iter()
-                .map(|m| schemas[m].name)
-                .collect(),
+            Label::Element(e) => schemas.substitution_closure(*e),
             Label::Wildcard => Vec::new(),
         };
         members.push(AllMember {
@@ -678,17 +671,21 @@ enum Overlap {
 fn overlap(schemas: &Schemas, p: &Position, q: &Position) -> Option<Overlap> {
     match (&p.label, &q.label) {
         (Label::Element(_), Label::Element(_)) => {
-            let rhs: FxHashSet<QName> = q.admits.iter().copied().collect();
+            // By *name*, not by declaration identity. Two distinct local
+            // declarations that share a name are precisely what makes a
+            // content model ambiguous.
+            let rhs: FxHashSet<QName> = q.admits.iter().map(|e| schemas[*e].name).collect();
             p.admits
                 .iter()
+                .map(|e| schemas[*e].name)
                 .find(|n| rhs.contains(n))
-                .map(|n| Overlap::Name(*n))
+                .map(Overlap::Name)
         }
         (Label::Element(_), Label::Wildcard) => {
-            wildcard_of(schemas, q).and_then(|w| first_admitted(w, &p.admits))
+            wildcard_of(schemas, q).and_then(|w| first_admitted(schemas, w, &p.admits))
         }
         (Label::Wildcard, Label::Element(_)) => {
-            wildcard_of(schemas, p).and_then(|w| first_admitted(w, &q.admits))
+            wildcard_of(schemas, p).and_then(|w| first_admitted(schemas, w, &q.admits))
         }
         (Label::Wildcard, Label::Wildcard) => {
             let (Some(a), Some(b)) = (wildcard_of(schemas, p), wildcard_of(schemas, q)) else {
@@ -706,11 +703,12 @@ fn wildcard_of<'a>(schemas: &'a Schemas, p: &Position) -> Option<&'a Wildcard> {
     }
 }
 
-fn first_admitted(w: &Wildcard, names: &[QName]) -> Option<Overlap> {
-    names
+fn first_admitted(schemas: &Schemas, w: &Wildcard, elements: &[ElementId]) -> Option<Overlap> {
+    elements
         .iter()
+        .map(|e| schemas[*e].name)
         .find(|n| w.namespace.admits(n.ns) && !w.not_qname.contains(n))
-        .map(|n| Overlap::ElementAndWildcard(*n))
+        .map(Overlap::ElementAndWildcard)
 }
 
 /// Whether two wildcards can both match some name.
@@ -807,6 +805,8 @@ pub struct ContentMatcher<'a> {
     model: &'a ContentModel,
     /// Active positions, for an automaton model.
     active: Vec<PositionId>,
+    /// The declaration the last successful `step` matched, if it named one.
+    matched: Option<ElementId>,
     /// Per-member counts, for an `xs:all` model.
     counts: Vec<u32>,
     started: bool,
@@ -823,6 +823,7 @@ impl<'a> ContentMatcher<'a> {
             schemas,
             model,
             active: Vec::new(),
+            matched: None,
             counts,
             started: false,
             failed: false,
@@ -838,7 +839,9 @@ impl<'a> ContentMatcher<'a> {
         let ok = match self.model {
             ContentModel::Empty => false,
             ContentModel::Automaton(a) => self.step_automaton(a, name),
-            ContentModel::All(g) => Self::step_all(self.schemas, g, &mut self.counts, name),
+            ContentModel::All(g) => {
+                Self::step_all(self.schemas, g, &mut self.counts, name, &mut self.matched)
+            }
         };
         if !ok {
             self.failed = true;
@@ -856,40 +859,69 @@ impl<'a> ContentMatcher<'a> {
             a.first().to_vec()
         };
         let mut next = Vec::new();
+        let mut matched = None;
         for c in candidates {
-            if admits(self.schemas, a.position(c), name) && !next.contains(&c) {
-                next.push(c);
+            if let Some(decl) = admits(self.schemas, a.position(c), name) {
+                if !next.contains(&c) {
+                    next.push(c);
+                }
+                // On a model that breaches UPA several positions may accept.
+                // The first wins, which is what a processor would have done
+                // had the model been unambiguous.
+                if matched.is_none() {
+                    matched = decl;
+                }
             }
         }
         self.started = true;
         self.active = next;
+        self.matched = matched;
         !self.active.is_empty()
     }
 
-    fn step_all(schemas: &Schemas, g: &AllGroup, counts: &mut [u32], name: QName) -> bool {
+    fn step_all(
+        schemas: &Schemas,
+        g: &AllGroup,
+        counts: &mut [u32],
+        name: QName,
+        matched: &mut Option<ElementId>,
+    ) -> bool {
         for (i, m) in g.members.iter().enumerate() {
-            let matches = match &m.label {
-                Label::Element(_) => m.admits.contains(&name),
+            let decl = match &m.label {
+                Label::Element(_) => m
+                    .admits
+                    .iter()
+                    .find(|e| schemas[**e].name == name)
+                    .map(|e| Some(*e)),
                 Label::Wildcard => match &schemas[m.particle].term {
-                    Term::Wildcard(w) => {
-                        w.namespace.admits(name.ns) && !w.not_qname.contains(&name)
+                    Term::Wildcard(w)
+                        if w.namespace.admits(name.ns) && !w.not_qname.contains(&name) =>
+                    {
+                        Some(None)
                     }
-                    _ => false,
+                    _ => None,
                 },
             };
-            if !matches {
-                continue;
-            }
+            let Some(decl) = decl else { continue };
             let room = match m.max_occurs {
                 MaxOccurs::Unbounded => true,
                 MaxOccurs::Bounded(n) => counts[i] < n,
             };
             if room {
                 counts[i] += 1;
+                *matched = decl;
                 return true;
             }
         }
         false
+    }
+
+    /// The declaration the last successful [`Self::step`] matched.
+    ///
+    /// `None` when a wildcard matched, which admits a name without naming a
+    /// declaration for it.
+    pub fn matched(&self) -> Option<ElementId> {
+        self.matched
     }
 
     /// Whether the content seen so far is a complete, valid match.
@@ -914,12 +946,22 @@ impl<'a> ContentMatcher<'a> {
     }
 }
 
-fn admits(schemas: &Schemas, p: &Position, name: QName) -> bool {
+/// The declaration this position matches `name` with, if any.
+///
+/// `Some(None)` means a wildcard matched, which admits a name without naming
+/// a declaration for it.
+fn admits(schemas: &Schemas, p: &Position, name: QName) -> Option<Option<ElementId>> {
     match &p.label {
-        Label::Element(_) => p.admits.contains(&name),
+        Label::Element(_) => p
+            .admits
+            .iter()
+            .find(|e| schemas[**e].name == name)
+            .map(|e| Some(*e)),
         Label::Wildcard => match &schemas[p.particle].term {
-            Term::Wildcard(w) => w.namespace.admits(name.ns) && !w.not_qname.contains(&name),
-            _ => false,
+            Term::Wildcard(w) if w.namespace.admits(name.ns) && !w.not_qname.contains(&name) => {
+                Some(None)
+            }
+            _ => None,
         },
     }
 }
@@ -945,7 +987,7 @@ impl Schemas {
     /// substitution groups expanded.
     pub fn possible_children(&self, id: TypeId) -> Vec<ElementId> {
         self.content_model(id)
-            .map(|m| m.admitted_elements(self))
+            .map(ContentModel::admitted_elements)
             .unwrap_or_default()
     }
 
@@ -958,18 +1000,17 @@ impl Schemas {
         let Some(model) = self.content_model(parent) else {
             return false;
         };
-        let name = self[child].name;
         match model {
             ContentModel::Empty => false,
             ContentModel::All(g) => g
                 .members
                 .iter()
-                .any(|m| m.admits.contains(&name) && m.max_occurs.is_repeating()),
+                .any(|m| m.admits.contains(&child) && m.max_occurs.is_repeating()),
             ContentModel::Automaton(a) => a
                 .positions()
                 .iter()
                 .enumerate()
-                .filter(|(_, p)| p.admits.contains(&name))
+                .filter(|(_, p)| p.admits.contains(&child))
                 .any(|(i, p)| self[p.particle].is_repeating() || a.repeats(i as PositionId)),
         }
     }
@@ -980,13 +1021,12 @@ impl Schemas {
         let Some(model) = self.content_model(parent) else {
             return true;
         };
-        let name = self[child].name;
         match model {
             ContentModel::Empty => true,
             ContentModel::All(g) => g
                 .members
                 .iter()
-                .filter(|m| m.admits.contains(&name))
+                .filter(|m| m.admits.contains(&child))
                 .all(|m| m.min_occurs == 0),
             ContentModel::Automaton(a) => {
                 // Optional unless every path to the end passes through it.
@@ -994,7 +1034,7 @@ impl Schemas {
                     .positions()
                     .iter()
                     .enumerate()
-                    .filter(|(_, p)| p.admits.contains(&name))
+                    .filter(|(_, p)| p.admits.contains(&child))
                     .map(|(i, _)| i as PositionId)
                     .collect();
                 if required.is_empty() {

@@ -36,7 +36,7 @@
 //! `import` (chameleon includes included), reference resolution, attribute
 //! group flattening and substitution-group closure.
 //!
-//! Not yet: content-model automata and UPA, instance validation, XSD 1.1
+//! Not yet: XSD 1.1
 //! assertions and conditional type assignment, and `redefine`/`override`
 //! (currently read as plain includes, with a warning).
 
@@ -48,6 +48,7 @@ pub mod content;
 pub mod datatypes;
 pub mod diagnostics;
 pub mod encoding;
+pub mod instance;
 pub mod load;
 pub mod model;
 pub mod names;

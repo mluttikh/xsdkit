@@ -13,6 +13,8 @@ pub const XS: &str = "http://www.w3.org/2001/XMLSchema";
 pub const XSI: &str = "http://www.w3.org/2001/XMLSchema-instance";
 /// The `xml:` namespace, implicitly available to every schema.
 pub const XML: &str = "http://www.w3.org/XML/1998/namespace";
+/// The namespace of namespace declarations themselves.
+pub const XMLNS: &str = "http://www.w3.org/2000/xmlns/";
 
 /// An interned string: either a namespace URI or a local name.
 #[derive(Copy, Clone, PartialEq, Eq, Hash, PartialOrd, Ord, Debug)]
