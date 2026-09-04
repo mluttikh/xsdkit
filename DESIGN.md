@@ -816,6 +816,48 @@ for d in diags:
     d.code, d.severity, d.message, d.spans, d.help
 ```
 
+#### Input encoding — a breaking change that belongs here
+
+`roxmltree` parses `&str`, so bytes must be decoded before parsing. Today
+`FileResolver` calls `read_to_string`, so a schema declaring
+`encoding="ISO-8859-1"` — perfectly legal, and common in older European
+industry schemas — simply fails:
+
+```text
+error[XSD1101]: latin1.xsd: stream did not contain valid UTF-8
+  help: add a search path, or supply a custom Resolver
+```
+
+Two things are wrong there. The document does not load at all, and the
+diagnostic blames the wrong thing: it is reported as an unresolved
+`schemaLocation`, with help about search paths, when the file was found and
+read perfectly well.
+
+The fix is not "decode inside `FileResolver`". It is a change to the
+**`Resolver` trait**:
+
+```rust
+// today — every resolver must decode, and each will get it wrong differently
+fn resolve(&self, location: &str, base: Option<&str>) -> Result<(String, String), String>;
+
+// after — resolvers fetch bytes; the loader decodes once, correctly
+fn resolve(&self, location: &str, base: Option<&str>) -> Result<(String, Vec<u8>), String>;
+```
+
+Decoding then happens in one place, following XML Appendix F: BOM first
+(UTF-8, UTF-16 LE/BE), then the `encoding=` pseudo-attribute of the XML
+declaration, then UTF-8 as the default. `encoding_rs` does the transcoding —
+a dependency `quick-xml` pulls in at P4 anyway for the instance side, so it is
+shared rather than added.
+
+It lands in P3 because `Resolver` is public API and the change is breaking.
+Wrapping it in Python first and changing it after means doing the same work
+twice, in two languages, with a released binding to migrate.
+
+New diagnostic codes: `UnsupportedEncoding` for a declared encoding we cannot
+decode, and `MalformedEncoding` for bytes that do not decode as the encoding
+they claim. Neither should masquerade as a missing file.
+
 Mechanics:
 
 - `maturin`, `pyo3`, **abi3** — one wheel per platform across 3.9+.
@@ -842,7 +884,7 @@ streaming reads (`schemas.read_typed("doc.xml")`, P4), unit bindings
 | ~~**P0**~~ | ~~`datatypes`: 19 primitives + derived, 14 facets~~ | **done** — facet composition, whiteSpace ordering |
 | ~~**P1**~~ | ~~`load` + `model`: documents, resolver, include/import, arena, symbol tables~~ | **done** — W3C schema-for-schemas loads |
 | ~~**P2**~~ | ~~`compile`: derivation, substitution closure, content automata, UPA~~ | **done** — 55 automata, 0 UPA findings on a valid schema |
-| **P3** | **Python bindings** — the component model, Pythonic, on PyPI | wheels on 3.9–3.14; the fixture's schema queried from Python |
+| **P3** | **Python bindings** — the component model, Pythonic, on PyPI. Plus the `Resolver` encoding fix (below), which is breaking and must land before the API is wrapped. | wheels on 3.9–3.14; the fixture queried from Python; a Latin-1 schema loads |
 | **P4** | `validate`: streaming validator + PSVI + `TypedReader`, exposed in Python as it lands | W3C instance tests; differential vs. `xmlschema` |
 | **P5** | `units`: extraction profiles and dictionaries (GML, Energistics, appinfo, fixed-attribute) | fixed *and* per-instance bindings recovered from a real WITSML schema |
 | **P6** | XSD 1.1: assertions, conditional type assignment, `openContent`, `override` | W3C 1.1 tests |

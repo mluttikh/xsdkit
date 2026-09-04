@@ -110,6 +110,12 @@ cargo run --example inspect -- schemas/report.xsd --lax
 `redefine`/`override` are currently read as plain includes, with a warning.
 Code generation is permanently out of scope.
 
+**Known limitation:** schema documents must currently be UTF-8. A schema
+declaring `encoding="ISO-8859-1"` fails to load, and reports the failure as a
+missing file. Fixed in the next release, alongside the Python bindings — the
+`Resolver` trait has to return bytes rather than text, which is a breaking
+change worth making before an API gets wrapped.
+
 ## Diagnostics
 
 Building returns every diagnostic at once:

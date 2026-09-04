@@ -9,8 +9,19 @@
 - **Crate:** `xsdkit` is a **generic XSD reader** — it parses W3C XML Schema
   into a queryable **schema component model**. Python bindings are the next
   phase and are first-class, not an afterthought.
-- **Stack:** Rust (edition 2024), `roxmltree` (schema documents),
-  `fxhash`, later `pyo3`.
+- **Stack:** Rust (edition 2024), `roxmltree` (schema documents), `fxhash`,
+  later `pyo3` and `quick-xml`.
+
+**Two XML libraries, on purpose.** Schema loading needs random access —
+lookahead into children before deciding, three passes over one subtree,
+`appinfo` captured verbatim — and runs once per schema, so it uses
+`roxmltree`. Instance validation (P4) is strictly forward over unbounded
+input, so it will use `quick-xml`, as `xml2arrow` does. Same split
+CodeSynthesis ships deliberately (C++/Tree vs C++/Parser). The cost is near
+zero: `roxmltree` has no transitive dependencies. The risk to watch is that
+the two libraries have subtly different XML-level semantics — entity handling,
+whitespace, DTD acceptance — so where that matters it must be a documented
+contract, not an accident.
 - **Not in this crate:** the `xml2arrow` YAML generator is a **separate
   package** (`xsd2arrow`). Never add an `arrow` or `xml2arrow` dependency
   here — someone with an XSD problem and no interest in Arrow must still want
@@ -172,5 +183,21 @@ When touching the public API, remember P3 is imminent: every type here is
 about to be wrapped in a `#[pyclass]` holding `(Arc<Schemas>, Id)`. Keep
 accessors cheap and id-shaped, and keep `Schemas: Send + Sync` so the GIL can
 be released around `build()`.
+
+### Known gap: input encoding (fix scheduled for P3)
+
+`roxmltree` parses `&str`, so `FileResolver` calls `read_to_string` and a
+schema declaring `encoding="ISO-8859-1"` does not load at all — and the
+failure is reported as `UnresolvedSchemaLocation` with help about search
+paths, which blames the wrong thing entirely.
+
+The fix is a **breaking change to `Resolver`**: it must return `Vec<u8>` and
+the loader must decode centrally (BOM, then the XML declaration's `encoding=`,
+then UTF-8), because a trait that hands back `String` forces every custom
+resolver to reimplement detection and get it wrong differently. That is why it
+is scheduled *with* the Python bindings rather than after them — changing a
+public trait once a binding wraps it means doing the work twice.
+
+Do not paper over this by decoding inside `FileResolver` alone.
 
 Code generation is **permanently out of scope**. `xsd-parser` covers it.
