@@ -652,6 +652,55 @@ cannot compile to a constant `scale`/`offset`. Only `Fixed` can. That is a
 property of the schemas, not of this implementation, and it is the same
 finding already recorded for `xml2arrow` in §3.9.
 
+#### How common is `fixed`, and how is it written?
+
+Measured over nine shipping schemas — GML 3.2 (`measures`, `units`,
+`basicTypes`), OGC O&M 2.0, WaterML 2.0, CityGML 2.0, SensorML, SWE Common,
+and UBL 2.1 — there are five unit-bearing attribute declarations and
+**none of them uses `fixed`**. All five are `use="required"` with a free
+value.
+
+That is not an oversight either. An interchange standard exists to carry data
+from many producers; pinning the unit would force every one of them to convert
+before serialising. `fixed` is a **closed-schema** decision — right when you
+own both ends and the unit is a modelling choice rather than data.
+
+It is also the *only* shape that compiles to a constant `scale`/`offset`, so
+it stays the highest-value case to detect even though it is the rarer one.
+
+Writing it has one trap. A base measure type plus per-quantity subtypes cannot
+pin the unit by **extension**: extension merges the base's attribute uses with
+its own, and two uses may not share a name. It must be a **restriction**, and
+the restriction may not widen — if the base says `use="required"`, so must the
+derived:
+
+```xml
+<xs:complexType name="LengthMetres">
+  <xs:simpleContent>
+    <xs:restriction base="tns:MeasureType">
+      <xs:attribute name="uom" type="xs:string" use="required" fixed="m"/>
+    </xs:restriction>
+  </xs:simpleContent>
+</xs:complexType>
+```
+
+Declaring it fresh needs no restriction, because `xs:double` has no `unit`
+attribute to clash with:
+
+```xml
+<xs:complexType name="Metres">
+  <xs:simpleContent>
+    <xs:extension base="xs:double">
+      <xs:attribute name="unit" type="xs:string" fixed="m"/>
+    </xs:extension>
+  </xs:simpleContent>
+</xs:complexType>
+```
+
+`xsdkit` currently accepts both the illegal extension and the widening
+restriction: the Derivation Valid constraints are not implemented. Recorded in
+`AGENTS.md` rather than fixed piecemeal.
+
 ### 3.8 `xsd2arrow` — the downstream config generator
 
 A **separate package** (§3.0b), built on `xsdkit` and scheduled last. It is

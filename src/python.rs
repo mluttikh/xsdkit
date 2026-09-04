@@ -448,6 +448,7 @@ impl PySchemaSet {
                         }),
                         value,
                         lexical: a.lexical,
+                        from_schema: a.from_schema,
                     });
                 }
                 PyPsviEvent {
@@ -1462,6 +1463,7 @@ pub struct PyAttributeValue {
     declaration: Option<PyAttribute>,
     value: Option<Py<PyAny>>,
     lexical: String,
+    from_schema: bool,
 }
 
 /// Hand-written because `Py<PyAny>` needs the GIL to clone.
@@ -1472,6 +1474,7 @@ impl Clone for PyAttributeValue {
             declaration: self.declaration.clone(),
             value: self.value.as_ref().map(|v| v.clone_ref(py)),
             lexical: self.lexical.clone(),
+            from_schema: self.from_schema,
         })
     }
 }
@@ -1499,8 +1502,22 @@ impl PyAttributeValue {
     fn lexical(&self) -> String {
         self.lexical.clone()
     }
+    /// True when the document did not spell this out and the schema supplied
+    /// it from a `default` or `fixed` value.
+    ///
+    /// Named `is_from_schema` in Rust so clippy does not read it as a
+    /// constructor; Python sees `from_schema`, which is the right name there.
+    #[getter(from_schema)]
+    fn is_from_schema(&self) -> bool {
+        self.from_schema
+    }
     fn __repr__(&self) -> String {
-        format!("<AttributeValue {}={:?}>", self.name.1, self.lexical)
+        let src = if self.from_schema {
+            " (from schema)"
+        } else {
+            ""
+        };
+        format!("<AttributeValue {}={:?}{}>", self.name.1, self.lexical, src)
     }
 }
 

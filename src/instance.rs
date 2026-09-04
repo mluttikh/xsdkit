@@ -68,6 +68,9 @@ pub struct AttributePsvi {
     pub declaration: Option<AttributeId>,
     pub value: Option<Value>,
     pub lexical: String,
+    /// True when the document did not spell this attribute out and the
+    /// schema supplied it from a `default` or `fixed` value.
+    pub from_schema: bool,
 }
 
 /// The outcome of validating a document.
@@ -581,6 +584,7 @@ impl<'a, S: FnMut(PsviEvent)> Run<'a, '_, S> {
                         declaration: Some(u.attribute),
                         value,
                         lexical: a.value.clone(),
+                        from_schema: false,
                     });
                 }
                 None => {
@@ -591,23 +595,50 @@ impl<'a, S: FnMut(PsviEvent)> Run<'a, '_, S> {
                         declaration: None,
                         value: None,
                         lexical: a.value.clone(),
+                        from_schema: false,
                     });
                 }
             }
         }
 
         for u in &uses {
-            if u.kind == AttributeUseKind::Required {
-                let name = self.v.schemas[u.attribute].name;
-                if !seen.contains(&name) {
-                    let shown = self.show(name);
-                    self.error(
-                        DiagCode::MissingRequiredAttribute,
-                        line,
-                        format!("required attribute `{shown}` is absent"),
-                    );
-                }
+            let name = self.v.schemas[u.attribute].name;
+            if seen.contains(&name) {
+                continue;
             }
+            if u.kind == AttributeUseKind::Required {
+                let shown = self.show(name);
+                self.error(
+                    DiagCode::MissingRequiredAttribute,
+                    line,
+                    format!("required attribute `{shown}` is absent"),
+                );
+                continue;
+            }
+            if u.kind == AttributeUseKind::Prohibited {
+                continue;
+            }
+            // An absent attribute with `fixed` or `default` is *supplied* by
+            // the schema. That is the whole point of a schema-fixed unit:
+            // `<length>3.2</length>` still has a unit, and a reader that only
+            // reported attributes the document spelled out would miss it.
+            let Some(vc) = u
+                .value_constraint
+                .as_ref()
+                .or(self.v.schemas[u.attribute].value_constraint.as_ref())
+            else {
+                continue;
+            };
+            let ty = self.v.schemas[u.attribute].type_id;
+            let lexical = vc.value().to_string();
+            let value = self.v.values.validate(ty, &lexical).ok();
+            out.push(AttributePsvi {
+                name,
+                declaration: Some(u.attribute),
+                value,
+                lexical,
+                from_schema: true,
+            });
         }
 
         out

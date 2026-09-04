@@ -238,6 +238,10 @@ class AttributeValue:
         """The typed value, or ``None`` when it did not validate."""
     @property
     def lexical(self) -> str: ...
+    @property
+    def from_schema(self) -> bool:
+        """True when the document did not spell this attribute out and the
+        schema supplied it from a ``default`` or ``fixed`` value."""
 
 class PsviEvent:
     @property

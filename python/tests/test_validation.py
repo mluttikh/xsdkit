@@ -217,3 +217,53 @@ def test_malformed_xml_is_a_diagnostic_not_an_exception(schemas):
     report = schemas.validate("<reading xmlns='urn:example'><at>")
     assert not report.is_valid
     assert any(d.code == "XSD1001" for d in report.errors)
+
+
+# --- schema-supplied attribute values ---------------------------------------
+
+
+def test_a_fixed_attribute_is_supplied_when_absent():
+    """The pattern a units layer leans on: `<len>3.2</len>` still has a unit."""
+    s = build(
+        '<xs:element name="len"><xs:complexType><xs:simpleContent>'
+        '<xs:extension base="xs:double">'
+        '<xs:attribute name="uom" type="xs:string" fixed="m"/>'
+        "</xs:extension></xs:simpleContent></xs:complexType></xs:element>"
+    )
+    events, report = s.read_typed('<len xmlns="urn:example">3.2</len>')
+    assert report.is_valid
+    (uom,) = events[0].attributes
+    assert uom.local_name == "uom"
+    assert uom.value == "m"
+    assert uom.from_schema, "the schema supplied it, the document did not"
+
+
+def test_a_written_attribute_is_not_from_the_schema():
+    s = build(
+        '<xs:element name="len"><xs:complexType><xs:simpleContent>'
+        '<xs:extension base="xs:double">'
+        '<xs:attribute name="uom" type="xs:string" fixed="m"/>'
+        "</xs:extension></xs:simpleContent></xs:complexType></xs:element>"
+    )
+    events, _ = s.read_typed('<len xmlns="urn:example" uom="m">3.2</len>')
+    assert not events[0].attributes[0].from_schema
+
+
+def test_an_inherited_fixed_unit_survives_a_vacuous_extension():
+    """GML's measure family is built this way, so it has to work."""
+    s = build(
+        '<xs:complexType name="Metres"><xs:simpleContent>'
+        '<xs:extension base="xs:double">'
+        '<xs:attribute name="uom" type="xs:string" fixed="m"/>'
+        "</xs:extension></xs:simpleContent></xs:complexType>"
+        '<xs:complexType name="Depth"><xs:simpleContent>'
+        '<xs:extension base="tns:Metres"/></xs:simpleContent></xs:complexType>'
+        '<xs:element name="depth" type="tns:Depth"/>'
+    )
+    # The declared unit is reachable from the schema alone, with no document.
+    uses = s.type(NS, "Depth").attributes
+    assert [(u.local_name, u.fixed) for u in uses] == [("uom", "m")]
+
+    events, report = s.read_typed('<depth xmlns="urn:example">120.5</depth>')
+    assert report.is_valid
+    assert events[0].attributes[0].value == "m"

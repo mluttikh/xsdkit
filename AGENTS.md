@@ -138,7 +138,7 @@ cannot express this.
   because `roxmltree` performs no I/O. Do not "harden" this by rejecting
   DTDs — it would reject the W3C's own schema.
 
-### 8. Security
+### 9. Security
 - Network fetching is **opt-in**: `FileResolver` refuses `http(s)://`.
 - Every graph walk needs a bound: `MAX_DEPTH` for includes, `nodes_limit` per
   document, cycle guards in `base_chain` and `check_cycles`.
@@ -241,7 +241,27 @@ be released around `build()`.
 - A pyclass holding `Py<PyAny>` cannot derive `Clone`; write it by hand with
   `Python::attach` and `clone_ref`.
 
-### 7. Input encoding
+### 7. Schema-supplied values, and checks we do not do
+
+An absent attribute with `fixed` or `default` is **supplied** by the schema
+into the PSVI, flagged `from_schema`. Without that, `<length>3.2</length>`
+appears to have no unit even when the schema pins one — which is the whole
+point of the `fixed` pattern.
+
+Two derivation validity checks are **not** implemented, and both currently
+pass silently:
+
+- An `xs:extension` that redeclares an attribute the base already has is
+  illegal (two attribute uses cannot share a name), but we accept it and let
+  the own use win.
+- An `xs:restriction` that widens — base `use="required"`, derived omitting
+  `use` and so defaulting to `optional` — is illegal, and we accept it.
+
+Both belong with the other derivation constraints (Derivation Valid
+(Extension) / (Restriction, Complex)), none of which are implemented. Do not
+add them piecemeal; do the set, or leave the gap documented.
+
+### 8. Input encoding
 
 Decoding happens in `encoding.rs` and **only** there. `Resolver` returns
 `Vec<u8>` precisely so no resolver reimplements BOM and XML-declaration

@@ -489,3 +489,142 @@ fn diagnostics_carry_a_line_number() {
         e.spans[0].line
     );
 }
+
+// ---------------------------------------------------------------------------
+// Schema-supplied attribute values
+// ---------------------------------------------------------------------------
+
+/// An absent attribute with `fixed` or `default` is *supplied* by the schema.
+///
+/// This is what makes a schema-declared unit usable: `<len>3.2</len>` still
+/// has a unit, and a reader that only reported attributes the document spelled
+/// out would miss it entirely.
+#[test]
+fn a_fixed_attribute_is_supplied_when_absent() {
+    let s = schema(
+        r#"<xs:element name="len">
+             <xs:complexType><xs:simpleContent>
+               <xs:extension base="xs:double">
+                 <xs:attribute name="uom" type="xs:string" fixed="m"/>
+               </xs:extension>
+             </xs:simpleContent></xs:complexType>
+           </xs:element>"#,
+    );
+    let mut attrs = Vec::new();
+    let report =
+        s.instance_validator()
+            .validate_with(r#"<len xmlns="urn:example">3.2</len>"#, |ev| {
+                if let PsviEvent::StartElement { attributes, .. } = ev {
+                    attrs = attributes;
+                }
+            });
+    assert!(report.is_valid(), "{}", report.diagnostics);
+    assert_eq!(attrs.len(), 1, "the schema supplies the absent uom");
+    assert_eq!(attrs[0].lexical, "m");
+    assert!(attrs[0].from_schema, "and says it came from the schema");
+    assert_eq!(attrs[0].value, Some(Value::String("m".into())));
+}
+
+#[test]
+fn a_default_attribute_is_supplied_too() {
+    let s = schema(
+        r#"<xs:element name="v">
+             <xs:complexType><xs:simpleContent>
+               <xs:extension base="xs:int">
+                 <xs:attribute name="scale" type="xs:int" default="1"/>
+               </xs:extension>
+             </xs:simpleContent></xs:complexType>
+           </xs:element>"#,
+    );
+    let mut attrs = Vec::new();
+    s.instance_validator()
+        .validate_with(r#"<v xmlns="urn:example">7</v>"#, |ev| {
+            if let PsviEvent::StartElement { attributes, .. } = ev {
+                attrs = attributes;
+            }
+        });
+    assert_eq!(attrs.len(), 1);
+    assert_eq!(attrs[0].value, Some(Value::Integer(1)));
+    assert!(attrs[0].from_schema);
+}
+
+/// A value the document *did* spell out is not marked as schema-supplied.
+#[test]
+fn a_written_attribute_is_not_marked_as_from_the_schema() {
+    let s = schema(
+        r#"<xs:element name="len">
+             <xs:complexType><xs:simpleContent>
+               <xs:extension base="xs:double">
+                 <xs:attribute name="uom" type="xs:string" fixed="m"/>
+               </xs:extension>
+             </xs:simpleContent></xs:complexType>
+           </xs:element>"#,
+    );
+    let mut attrs = Vec::new();
+    s.instance_validator()
+        .validate_with(r#"<len xmlns="urn:example" uom="m">3.2</len>"#, |ev| {
+            if let PsviEvent::StartElement { attributes, .. } = ev {
+                attrs = attributes;
+            }
+        });
+    assert_eq!(attrs.len(), 1);
+    assert!(!attrs[0].from_schema);
+}
+
+/// A `fixed` unit inherited through a vacuous extension must still be
+/// supplied — the GML measure-family shape.
+#[test]
+fn an_inherited_fixed_attribute_is_supplied() {
+    let s = schema(
+        r#"<xs:complexType name="Metres">
+             <xs:simpleContent><xs:extension base="xs:double">
+               <xs:attribute name="uom" type="xs:string" fixed="m"/>
+             </xs:extension></xs:simpleContent>
+           </xs:complexType>
+           <xs:complexType name="Depth">
+             <xs:simpleContent><xs:extension base="tns:Metres"/></xs:simpleContent>
+           </xs:complexType>
+           <xs:element name="depth" type="tns:Depth"/>"#,
+    );
+    let mut attrs = Vec::new();
+    let report =
+        s.instance_validator()
+            .validate_with(r#"<depth xmlns="urn:example">120.5</depth>"#, |ev| {
+                if let PsviEvent::StartElement { attributes, .. } = ev {
+                    attrs = attributes;
+                }
+            });
+    assert!(report.is_valid(), "{}", report.diagnostics);
+    assert_eq!(
+        attrs.len(),
+        1,
+        "the inherited fixed uom must survive derivation"
+    );
+    assert_eq!(attrs[0].lexical, "m");
+}
+
+/// A prohibited attribute is never supplied, even if the base gave it a value.
+#[test]
+fn a_prohibited_attribute_is_not_supplied() {
+    let s = schema(
+        r#"<xs:complexType name="Metres">
+             <xs:simpleContent><xs:extension base="xs:double">
+               <xs:attribute name="uom" type="xs:string" fixed="m"/>
+             </xs:extension></xs:simpleContent>
+           </xs:complexType>
+           <xs:complexType name="Unitless">
+             <xs:simpleContent><xs:restriction base="tns:Metres">
+               <xs:attribute name="uom" use="prohibited"/>
+             </xs:restriction></xs:simpleContent>
+           </xs:complexType>
+           <xs:element name="ratio" type="tns:Unitless"/>"#,
+    );
+    let mut attrs = Vec::new();
+    s.instance_validator()
+        .validate_with(r#"<ratio xmlns="urn:example">0.5</ratio>"#, |ev| {
+            if let PsviEvent::StartElement { attributes, .. } = ev {
+                attrs = attributes;
+            }
+        });
+    assert!(attrs.is_empty(), "a prohibited attribute is not supplied");
+}
