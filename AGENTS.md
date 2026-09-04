@@ -99,8 +99,16 @@ cannot express this.
   model to warnings. Widening only ever *adds* reachable positions, so an
   approximated model accepts a superset — false positives, never false
   negatives.
-- **Extension appends, restriction replaces.** `effective_particles` walks
-  the base chain and stops at the first restriction step. Building from a
+- **Extension appends, restriction replaces — for *content*.** 
+  `effective_particles` walks the base chain and stops at the first
+  restriction step.
+- **Attributes are different: *both* derivation methods inherit them.**
+  Extension adds uses; restriction may only narrow one already present or
+  remove it with `use="prohibited"`. `merge_inherited_attributes` folds the
+  chain, and an own use replaces the inherited one for the same name. Getting
+  this wrong is invisible on synthetic schemas and fatal on real ones: GML's
+  whole measure family is *vacuous* extensions of `gml:MeasureType`, so every
+  measure type reported no `uom` at all. Building from a
   type's own particle alone silently loses every inherited child; a real
   schema catches this immediately (`xs:keyref` adds only an attribute).
 - **`xs:all` gets counters, not an automaton.** Interleaving `n` members is

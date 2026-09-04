@@ -6,9 +6,11 @@
 //!
 //! 1. `resolve_references` patches every placeholder id from the fixup list.
 //! 2. `merge_attribute_groups` flattens `xs:attributeGroup` references.
-//! 3. `resolve_simple_content` points simple-content types at their base.
-//! 4. `check_cycles` rejects derivation and group chains that loop.
-//! 5. `build_substitution_closure` precomputes transitive substitution.
+//! 3. `merge_inherited_attributes` folds each type's base chain into its own
+//!    attribute uses.
+//! 4. `resolve_simple_content` points simple-content types at their base.
+//! 5. `check_cycles` rejects derivation and group chains that loop.
+//! 6. `build_substitution_closure` precomputes transitive substitution.
 //! 6. [`crate::content`] compiles every content model and checks UPA. It runs
 //!    against the finished `Schemas`, so it can expand substitution groups
 //!    while building.
@@ -22,6 +24,7 @@ use fxhash::{FxHashMap, FxHashSet};
 pub(crate) fn compile(mut loader: Loader<'_>, mode: Conformance) -> (Schemas, Diagnostics) {
     resolve_references(&mut loader, mode);
     merge_attribute_groups(&mut loader);
+    merge_inherited_attributes(&mut loader);
     resolve_simple_content(&mut loader);
     check_cycles(&mut loader);
     let substitution_closure = build_substitution_closure(&loader);
@@ -407,7 +410,76 @@ fn expand_group(
 }
 
 // ---------------------------------------------------------------------------
-// 3. Simple content
+// 3. Inherited attribute uses
+// ---------------------------------------------------------------------------
+
+/// Folds each complex type's base chain into its own attribute uses.
+///
+/// **Both** derivation methods inherit attributes, unlike content models
+/// where extension appends and restriction replaces. Extension adds uses;
+/// restriction may only narrow one already present, or remove it with
+/// `use="prohibited"`.
+///
+/// Without this, a type that extends another without adding attributes has
+/// none at all — and that is not a corner case. GML's whole measure family is
+/// vacuous extensions of `gml:MeasureType`, so every one of its twenty
+/// measure types would report no `uom`.
+fn merge_inherited_attributes(l: &mut Loader<'_>) {
+    let n = l.types.len();
+    let mut done: Vec<Option<Vec<AttributeUse>>> = vec![None; n];
+    let mut in_progress = FxHashSet::default();
+    for i in 0..n {
+        let uses = effective_attributes(l, TypeId::from_index(i), &mut done, &mut in_progress);
+        if let TypeDefinition::Complex(c) = l.types.get_mut(i as u32) {
+            c.attribute_uses = uses;
+        }
+    }
+}
+
+fn effective_attributes(
+    l: &mut Loader<'_>,
+    id: TypeId,
+    done: &mut Vec<Option<Vec<AttributeUse>>>,
+    in_progress: &mut FxHashSet<TypeId>,
+) -> Vec<AttributeUse> {
+    if let Some(cached) = &done[id.index()] {
+        return cached.clone();
+    }
+    let TypeDefinition::Complex(c) = l.types.get(id.0) else {
+        done[id.index()] = Some(Vec::new());
+        return Vec::new();
+    };
+    let own = c.attribute_uses.clone();
+    let base = c.base;
+
+    // A derivation cycle is reported by `check_cycles`; here it must simply
+    // not recurse forever.
+    if base == id || base.is_placeholder() || !in_progress.insert(id) {
+        done[id.index()] = Some(own.clone());
+        return own;
+    }
+
+    let mut out = effective_attributes(l, base, done, in_progress);
+    for u in own {
+        let name = l.attributes.get(u.attribute.0).name;
+        // An own use replaces the inherited one for the same attribute — that
+        // is how a restriction narrows or prohibits.
+        match out
+            .iter()
+            .position(|e| l.attributes.get(e.attribute.0).name == name)
+        {
+            Some(i) => out[i] = u,
+            None => out.push(u),
+        }
+    }
+
+    in_progress.remove(&id);
+    done[id.index()] = Some(out.clone());
+    out
+}
+
+// ---------------------------------------------------------------------------
+// 4. Simple content
 // ---------------------------------------------------------------------------
 
 /// Points a `simpleContent` complex type at the simple type it validates
@@ -440,7 +512,7 @@ fn resolve_simple_content(l: &mut Loader<'_>) {
 }
 
 // ---------------------------------------------------------------------------
-// 4. Cycle detection
+// 5. Cycle detection
 // ---------------------------------------------------------------------------
 
 fn check_cycles(l: &mut Loader<'_>) {
@@ -489,7 +561,7 @@ fn next_base(l: &Loader<'_>, id: TypeId) -> Option<TypeId> {
 }
 
 // ---------------------------------------------------------------------------
-// 5. Substitution closure
+// 6. Substitution closure
 // ---------------------------------------------------------------------------
 
 /// Precomputes, for every head, the transitive set of elements that may

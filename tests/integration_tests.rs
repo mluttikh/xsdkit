@@ -962,3 +962,106 @@ fn an_included_document_is_decoded_on_its_own_terms() {
         "the included document's own encoding declaration must be honoured"
     );
 }
+
+// ---------------------------------------------------------------------------
+// Inherited attribute uses
+// ---------------------------------------------------------------------------
+
+/// Both derivation methods inherit attributes — unlike content models, where
+/// extension appends and restriction replaces.
+///
+/// Regression: a vacuous extension reported no attributes at all. That is not
+/// a corner case; GML's whole measure family is vacuous extensions of
+/// `gml:MeasureType`, so every one of its measure types lost its `uom`.
+#[test]
+fn attribute_uses_are_inherited_through_derivation() {
+    let s = build(&schema(
+        r#"<xs:complexType name="MeasureType">
+             <xs:simpleContent><xs:extension base="xs:double">
+               <xs:attribute name="uom" type="xs:string" use="required"/>
+             </xs:extension></xs:simpleContent>
+           </xs:complexType>
+           <xs:complexType name="LengthType">
+             <xs:simpleContent><xs:extension base="tns:MeasureType"/></xs:simpleContent>
+           </xs:complexType>
+           <xs:complexType name="PressureType">
+             <xs:simpleContent><xs:extension base="tns:MeasureType">
+               <xs:attribute name="datum" type="xs:string"/>
+             </xs:extension></xs:simpleContent>
+           </xs:complexType>"#,
+    ));
+    let names = |n: &str| -> Vec<String> {
+        s.attribute_uses(s.type_(Some(NS), n).unwrap())
+            .iter()
+            .map(|u| s.names().resolve(s[u.attribute].name.local).to_string())
+            .collect()
+    };
+    assert_eq!(names("MeasureType"), ["uom"]);
+    assert_eq!(
+        names("LengthType"),
+        ["uom"],
+        "a vacuous extension still has uom"
+    );
+    assert_eq!(
+        names("PressureType"),
+        ["uom", "datum"],
+        "base first, then own"
+    );
+}
+
+/// A restriction's own use replaces the inherited one, which is how a schema
+/// narrows an attribute — or pins it to a constant.
+#[test]
+fn a_restriction_narrows_an_inherited_attribute() {
+    let s = build(&schema(
+        r#"<xs:complexType name="MeasureType">
+             <xs:simpleContent><xs:extension base="xs:double">
+               <xs:attribute name="uom" type="xs:string" use="required"/>
+             </xs:extension></xs:simpleContent>
+           </xs:complexType>
+           <xs:complexType name="Metres">
+             <xs:simpleContent><xs:restriction base="tns:MeasureType">
+               <xs:attribute name="uom" type="xs:string" fixed="m"/>
+             </xs:restriction></xs:simpleContent>
+           </xs:complexType>
+           <xs:complexType name="NoUnit">
+             <xs:simpleContent><xs:restriction base="tns:MeasureType">
+               <xs:attribute name="uom" use="prohibited"/>
+             </xs:restriction></xs:simpleContent>
+           </xs:complexType>"#,
+    ));
+    let uses = s.attribute_uses(s.type_(Some(NS), "Metres").unwrap());
+    assert_eq!(uses.len(), 1, "not duplicated with the inherited one");
+    // A schema-declared constant unit: known without seeing any document.
+    assert_eq!(
+        s[uses[0].attribute]
+            .value_constraint
+            .as_ref()
+            .map(|v| v.value()),
+        Some("m")
+    );
+
+    let prohibited = s.attribute_uses(s.type_(Some(NS), "NoUnit").unwrap());
+    assert_eq!(prohibited.len(), 1);
+    assert_eq!(prohibited[0].kind, AttributeUseKind::Prohibited);
+}
+
+/// Inheritance runs through a chain, not just one step.
+#[test]
+fn inherited_attributes_accumulate_down_a_chain() {
+    let s = build(&schema(
+        r#"<xs:complexType name="A"><xs:attribute name="a" type="xs:string"/></xs:complexType>
+           <xs:complexType name="B"><xs:complexContent><xs:extension base="tns:A">
+             <xs:attribute name="b" type="xs:string"/>
+           </xs:extension></xs:complexContent></xs:complexType>
+           <xs:complexType name="C"><xs:complexContent><xs:extension base="tns:B">
+             <xs:attribute name="c" type="xs:string"/>
+           </xs:extension></xs:complexContent></xs:complexType>"#,
+    ));
+    let names: Vec<_> = s
+        .attribute_uses(s.type_(Some(NS), "C").unwrap())
+        .iter()
+        .map(|u| s.names().resolve(s[u.attribute].name.local).to_string())
+        .collect();
+    assert_eq!(names, ["a", "b", "c"]);
+}
