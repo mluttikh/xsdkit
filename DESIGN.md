@@ -569,69 +569,88 @@ Three honest limitations, stated up front rather than discovered later:
 
 ### 3.7 The units layer
 
-```rust
-pub struct UnitBinding {
-    pub quantity: Option<QuantityKind>,   // "length", "pressure" — from schema or dict
-    pub source:   UnitSource,
-}
+#### There is no standard, and that is a finding, not a gap
 
+The obvious first question — *which standard do we implement?* — has a
+definite answer: **none, because XSD deliberately declined to have one.**
+
+- **It was proposed and rejected.** Olken and McCarthy put measurement units
+  to the XML Schema Working Group in 1999, as an optional *facet* on scalar
+  datatypes. Their own framing was "the question is not whether the
+  XML-Schema Working Group will include measurement units as part of its
+  recommendation, but whether we do so in a systematic, extensible way or in
+  a less consistent, ad-hoc way." XSD adopted `dateTime` and `duration` and
+  left units out. Ad-hoc won.
+- **UnitsML never landed.** The OASIS technical committee formed in July 2003;
+  Committee Specification Draft 04 was approved in December 2011 and it has
+  not reached OASIS Standard since. It is also a markup language for
+  *describing units themselves*, not a convention for annotating a schema.
+
+What **is** standardised is the *vocabulary* — the code you write in the slot
+— not the slot:
+
+| Registry | Who mandates it |
+|---|---|
+| **UN/CEFACT Rec. 20/21** | UBL, CII, Peppol, XRechnung, EN 16931 e-invoicing |
+| **UCUM** | HL7 FHIR, DICOM, LOINC, ISO 11240 — and GML, whose `uom` is "expected to be a unit symbol appearing in UCUM" when it is not a URI |
+| **QUDT** | an RDF ontology, not an XSD binding |
+| **VOUnits** | astronomy only |
+
+#### What real schemas actually do
+
+Measured, not read: `xsdkit` was pointed at GML 3.2, UBL 2.1 and the W3C
+schema-for-schemas. All loaded with zero error diagnostics.
+
+| Schema | Slot | Type | Use |
+|---|---|---|---|
+| GML 3.2 `measures.xsd` | `@uom` | `gml:UomIdentifier` — a URI *or* a UCUM symbol | required |
+| UBL 2.1 | `@unitCode` | `xs:normalizedString`, values from UN/CEFACT Rec. 20 | required |
+| WITSML/Energistics | `@uom` | an enumeration per quantity class, plus a dictionary | required |
+
+**The survey found a bug**, which is the real argument for doing it. GML's
+measure family is built from *vacuous* extensions — `gml:LengthType` is
+literally `<extension base="gml:MeasureType"/>` — and `attribute_uses` did not
+inherit through derivation, so all twenty GML measure types reported no `uom`
+at all. Fixed before this section was written.
+
+#### Consequence for the design
+
+Profiles were the right instinct, for a better reason than "several
+conventions exist": with no standard to implement, a pluggable extraction
+layer is not a convenience, it is the only correct architecture. But the
+survey narrows it considerably.
+
+**Detect structurally, not by vendor.** A measure type has a recognisable
+*shape*: simple content over a numeric base, carrying an attribute. That one
+rule finds GML, UBL, WITSML and in-house schemas alike, with no per-vendor
+code. Names (`uom`, `unitCode`, `unit`, `units`) are then only a hint for
+*which* attribute is the unit when a type has several — a tie-breaker, not
+the detector.
+
+**Three binding shapes, not six.** The five "conventions" collapse once the
+question is "what does the reader have to do to learn the unit":
+
+```rust
 pub enum UnitSource {
-    Fixed(Unit),                            // schema-fixed attribute, or appinfo
-    Attribute { name: QName },              // uom="m" — per instance value
-    Sibling   { path: RelPath },            // <value/><unit/> pairs
-    Dictionary{ key: QName, dict: DictId }, // WITSML uomDict, gml:UnitDefinition
-    None,
+    /// A schema-`fixed` attribute, or a constant in `appinfo`. Known without
+    /// reading any document — the only shape that compiles to a constant.
+    Fixed(UnitRef),
+    /// A `uom`/`unitCode` attribute carrying the unit per value.
+    Attribute { name: QName },
+    /// A key or URI into an external dictionary (WITSML `uomDict`,
+    /// `gml:UnitDefinition`).
+    Dictionary { key: QName, dict: DictId },
 }
 ```
 
-**Extraction is pluggable.** A `UnitProfile` trait, with built-ins matching the
-conventions found in §1.9:
+**Two vocabularies are worth shipping**, since between them they cover the
+schemas that exist: UCUM and UN/CEFACT Recommendation 20. Both are code lists,
+not algorithms; the arithmetic still lives outside `xsdkit` (§3.0b).
 
-- `FixedAttributeProfile` — any `xs:attribute` with a `fixed` value whose name
-  is in a configurable set (`uom`, `unit`, `units`, `unitCode`).
-- `AppinfoProfile` — a user-supplied selector into `xs:appinfo`.
-- `GmlProfile` — `uom` attribute, `gml:UnitDefinition` dictionaries,
-  `xlink:href="#m"` resolution.
-- `EnergisticsProfile` — WITSML/PRODML `uom` + `witsmlUnitDict.xml`, quantity
-  class from the measure type.
-- `TypeNameProfile` — regex over type names (`(?<q>.*)Measure`).
-- `UnitsMlProfile`.
-
-**Conversion is runtime, not compile-time.** `uom` (the crate) does
-zero-cost dimensional analysis with types known at compile time; we don't know
-the units until we read the schema. So:
-
-```rust
-pub struct Unit { dim: Dimension, factor: f64, offset: f64 }  // affine
-pub struct Dimension([i8; 7]);   // SI base exponents
-```
-
-Conversion is legal iff dimensions match; the result is
-`value * (from.factor / to.factor) + (from.offset − to.offset)/to.factor`.
-Two rules that catch real bugs: **reject offset units inside products**
-(`°C/m` is meaningless), and **reject non-linear units** (dB, pH) unless a
-plugin supplies them. Ship a UCUM-backed default `UnitSystem` behind a feature
-(`ucum` or `octofhir-ucum-core`), plus loaders for the GML and Energistics
-dictionaries — but keep `UnitSystem` a trait so no one convention is baked in.
-
-**The payoff.** `xml2arrow` already computes `value = value * scale + offset`
-per field. That is precisely affine unit conversion:
-
-| Conversion | `scale` | `offset` |
-|---|---|---|
-| °C → K | 1.0 | 273.15 |
-| hPa → Pa | 100.0 | 0.0 |
-| ft → m | 0.3048 | 0.0 |
-| °F → K | 5/9 | 255.372… |
-
-So for every `UnitSource::Fixed` binding, the generator can emit the conversion
-into the YAML with no runtime support needed at all — automating exactly what
-the `xml2arrow` README's own example does by hand.
-
-`UnitSource::Attribute` (per-row units) is the one case that cannot be
-expressed. It needs either a post-pass over the Arrow batch or a new
-`xml2arrow` feature (a field whose `scale` is looked up from a sibling
-attribute). Worth raising as an issue there.
+**State the limit plainly.** `Attribute` bindings vary per value, so they
+cannot compile to a constant `scale`/`offset`. Only `Fixed` can. That is a
+property of the schemas, not of this implementation, and it is the same
+finding already recorded for `xml2arrow` in §3.9.
 
 ### 3.8 `xsd2arrow` — the downstream config generator
 
