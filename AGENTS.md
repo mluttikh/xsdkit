@@ -9,8 +9,9 @@
 - **Crate:** `xsdkit` is a **generic XSD reader** — it parses W3C XML Schema
   into a queryable **schema component model**. Python bindings are the next
   phase and are first-class, not an afterthought.
-- **Stack:** Rust (edition 2024), `roxmltree` (schema documents), `fxhash`,
-  later `pyo3` and `quick-xml`.
+- **Stack:** Rust (edition 2024), `roxmltree` (schema documents),
+  `encoding_rs`, `fxhash`, `pyo3` (behind the `python` feature), and
+  `quick-xml` later for instance reading.
 
 **Two XML libraries, on purpose.** Schema loading needs random access —
 lookahead into children before deciding, three passes over one subtree,
@@ -129,7 +130,7 @@ cannot express this.
   because `roxmltree` performs no I/O. Do not "harden" this by rejecting
   DTDs — it would reject the W3C's own schema.
 
-### 5. Security
+### 8. Security
 - Network fetching is **opt-in**: `FileResolver` refuses `http(s)://`.
 - Every graph walk needs a bound: `MAX_DEPTH` for includes, `nodes_limit` per
   document, cycle guards in `base_chain` and `check_cycles`.
@@ -159,16 +160,20 @@ warnings otherwise, and two had already crept in. A fourth job compiles on the
 declared `rust-version`, because nothing enforces that claim at publish time.
 Run all five locally before pushing; they take seconds.
 
+Python: `maturin develop` then `pytest python/tests -q`. On a machine with
+conda active, maturin refuses to run while both `VIRTUAL_ENV` and
+`CONDA_PREFIX` are set — `env -u CONDA_PREFIX` in front of the command.
+
 Adding a schema feature? Add: a synthetic test for the feature alone, a
 failure test for its malformed form, and a check that it survives the real
 fixture.
 
 ## Planned, not present
 
-Deliberately out of scope until their phase (see `DESIGN.md` §3.14): Python
-bindings (P3, next), instance validation and PSVI (P4), unit binding
-extraction (P5), XSD 1.1 assertions and conditional type assignment (P6).
-The `xsd2arrow` package (P7) lives in its own repository.
+Deliberately out of scope until their phase (see `DESIGN.md` §3.14): instance
+validation and PSVI (P4, next), unit binding extraction (P5), XSD 1.1
+assertions and conditional type assignment (P6). The `xsd2arrow` package (P7)
+lives in its own repository.
 
 Three seams already exist and must not be removed:
 - `Annotation::appinfo` keeps `appinfo` XML **verbatim** — the units layer
@@ -184,20 +189,34 @@ about to be wrapped in a `#[pyclass]` holding `(Arc<Schemas>, Id)`. Keep
 accessors cheap and id-shaped, and keep `Schemas: Send + Sync` so the GIL can
 be released around `build()`.
 
-### Known gap: input encoding (fix scheduled for P3)
+### 6. The Python bindings
 
-`roxmltree` parses `&str`, so `FileResolver` calls `read_to_string` and a
-schema declaring `encoding="ISO-8859-1"` does not load at all — and the
-failure is reported as `UnresolvedSchemaLocation` with help about search
-paths, which blames the wrong thing entirely.
+- Every wrapper is `(Arc<Schemas>, Id)`. **Never copy components into Python
+  objects** — handles must stay free so a schema with thousands of globals
+  costs nothing to walk.
+- `#[pyclass(frozen)]` everywhere: the model is immutable, and `frozen` gives
+  `Sync` and skips runtime borrow checks.
+- **Release the GIL** with `py.detach()` around every `build()`. That is why
+  `Resolver: Send + Sync` — do not remove those bounds.
+- Adding a `DiagCode` variant needs no binding change (codes are rendered as
+  strings), but adding a **pyclass member** does: `python/xsdkit/_xsdkit.pyi`
+  must gain it, and `test_stubs.py` fails if it does not.
+- `SchemaError.diagnostics` has a class-level default so
+  `except SchemaError as e: e.diagnostics` is always safe. The stub test found
+  that; keep it.
 
-The fix is a **breaking change to `Resolver`**: it must return `Vec<u8>` and
-the loader must decode centrally (BOM, then the XML declaration's `encoding=`,
-then UTF-8), because a trait that hands back `String` forces every custom
-resolver to reimplement detection and get it wrong differently. That is why it
-is scheduled *with* the Python bindings rather than after them — changing a
-public trait once a binding wraps it means doing the work twice.
+### 7. Input encoding
 
-Do not paper over this by decoding inside `FileResolver` alone.
+Decoding happens in `encoding.rs` and **only** there. `Resolver` returns
+`Vec<u8>` precisely so no resolver reimplements BOM and XML-declaration
+sniffing and gets it wrong differently. Do not decode inside a resolver.
+
+Decoding is strict: bytes that are not valid in the encoding they claim are an
+error, not a document full of U+FFFD, because a schema quietly full of
+replacement characters produces components that are quietly wrong.
+
+Note for tests: `encoding_rs` has **no UTF-16 encoder** — per WHATWG,
+`encode()` falls back to UTF-8 — so UTF-16 test bytes must be built by hand.
+The first version of that test passed while exercising nothing.
 
 Code generation is **permanently out of scope**. `xsd-parser` covers it.

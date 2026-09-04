@@ -1,0 +1,38 @@
+[build-system]
+requires = ["maturin>=1.7,<2.0"]
+build-backend = "maturin"
+
+[project]
+name = "xsdkit"
+description = "A generic XSD reader: parse W3C XML Schema into a queryable schema component model"
+readme = "README.md"
+license = { file = "LICENSE" }
+requires-python = ">=3.9"
+keywords = ["xsd", "xml", "schema", "parser", "validation"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Rust",
+    "Programming Language :: Python :: Implementation :: CPython",
+    "Topic :: Text Processing :: Markup :: XML",
+    "Typing :: Typed",
+]
+dynamic = ["version"]
+
+[project.urls]
+Repository = "https://github.com/mluttikh/xsdkit"
+
+[tool.maturin]
+# `extension-module` links against libpython, which is correct for a wheel and
+# wrong for `cargo test`. It lives behind its own feature so CI can lint and
+# test the same crate without it.
+features = ["pyo3/extension-module", "extension-module"]
+module-name = "xsdkit._xsdkit"
+python-source = "python"
+include = ["python/xsdkit/*.pyi", "python/xsdkit/py.typed"]
+# abi3 means one wheel per platform serves every supported Python.
+
+
+[dependency-groups]
+dev = ["pytest>=8", "maturin>=1.7"]

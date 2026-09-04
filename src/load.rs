@@ -31,7 +31,12 @@ use std::path::{Path, PathBuf};
 /// `String` would make every implementor redo that, and get it wrong in a
 /// different way each time. Hand back the bytes; [`crate::encoding`] decodes
 /// them once, in one place.
-pub trait Resolver {
+///
+/// # Why `Send + Sync`
+///
+/// So callers can release the GIL around `build()` in the Python bindings,
+/// and so a future parallel loader is not blocked by the trait.
+pub trait Resolver: Send + Sync {
     /// Resolves `location`, relative to `base` when `base` is known.
     ///
     /// Returns the absolute URI it resolved to and the document's raw bytes.

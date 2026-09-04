@@ -4,12 +4,12 @@
 [![License](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 
 A **generic XSD reader**: parse W3C XML Schema into a queryable schema
-component model, in Rust and (soon) Python.
+component model, in Rust and Python.
 
 > **Status: early.** The component model, document loading, reference
-> resolution and content-model compilation work, and are tested against real
-> schemas. Python bindings are next, then instance validation and the units
-> layer — see [DESIGN.md](DESIGN.md) §3.14.
+> resolution, content-model compilation and the Python bindings work, and are
+> tested against real schemas. Instance validation and the units layer come
+> next — see [DESIGN.md](DESIGN.md) §3.14.
 
 ## Why
 
@@ -65,6 +65,36 @@ let mut m = schemas.match_content(ty).unwrap();
 let ok = m.step(schemas.qname(Some("urn:example"), "title").unwrap()) && m.accepts_end();
 ```
 
+### Python
+
+```bash
+pip install xsdkit
+```
+
+```python
+import xsdkit
+
+schemas = xsdkit.SchemaSet.from_file("report.xsd", search_paths=["schemas/"])
+report = schemas.element("urn:example", "report")
+
+for child in report.type.children:
+    print(child.local_name,
+          "repeats" if report.type.repeats(child) else "once",
+          "optional" if report.type.optional(child) else "required")
+
+# Does a child sequence satisfy the content model?
+report.type.accepts(["{urn:example}title", "{urn:example}count"])
+```
+
+Schemas that are expected to be imperfect return their diagnostics instead of
+raising:
+
+```python
+schemas, diagnostics = xsdkit.load("vendor/partial.xsd", conformance="lax")
+for d in diagnostics:
+    print(d)          # error[XSD1201]: ...  --> file.xsd:12
+```
+
 Inspect a schema from the command line:
 
 ```bash
@@ -101,8 +131,8 @@ cargo run --example inspect -- schemas/report.xsd --lax
 |---|---|---|
 | ✅ | Component model, loading, composition | done |
 | ✅ | Content automata, UPA | done |
-| → | **Python bindings** | next |
-| | Instance validation, typed reading (PSVI) | |
+| ✅ | Python bindings, type stubs, encoding detection | done |
+| → | **Instance validation, typed reading (PSVI)** | next |
 | | Unit binding extraction (GML, Energistics, `appinfo`) | |
 | | XSD 1.1 | |
 | | `xsd2arrow`, a separate package | |
@@ -110,11 +140,9 @@ cargo run --example inspect -- schemas/report.xsd --lax
 `redefine`/`override` are currently read as plain includes, with a warning.
 Code generation is permanently out of scope.
 
-**Known limitation:** schema documents must currently be UTF-8. A schema
-declaring `encoding="ISO-8859-1"` fails to load, and reports the failure as a
-missing file. Fixed in the next release, alongside the Python bindings — the
-`Resolver` trait has to return bytes rather than text, which is a breaking
-change worth making before an API gets wrapped.
+Document encodings are detected from a byte-order mark, then the XML
+declaration, then UTF-8; bytes that contradict the encoding they claim are an
+error rather than a document quietly full of replacement characters.
 
 ## Diagnostics
 

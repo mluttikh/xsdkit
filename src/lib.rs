@@ -52,6 +52,9 @@ pub mod load;
 pub mod model;
 pub mod names;
 
+#[cfg(feature = "python")]
+mod python;
+
 pub use content::{
     AllGroup, AllMember, ContentAutomaton, ContentMatcher, ContentModel, ContentStats, Label,
     MAX_POSITIONS, Position,

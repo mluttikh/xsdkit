@@ -10,6 +10,11 @@ keywords = ["xsd", "xml", "schema", "parser", "validation"]
 categories = ["parser-implementations", "data-structures"]
 readme = "README.md"
 
+[lib]
+# `cdylib` for the Python extension module; `rlib` so the Rust crate, tests and
+# examples still build normally.
+crate-type = ["cdylib", "rlib"]
+
 [dependencies]
 roxmltree = "0.20"
 fxhash = "0.2.1"
@@ -20,10 +25,19 @@ encoding_rs = "0.8.35"
 rstest = "0.25"
 encoding_rs = "0.8.35"
 
+[dependencies.pyo3]
+version = "0.28"
+default-features = false
+optional = true
+features = ["abi3-py39", "macros"]
+
 [features]
 default = []
+python = ["dep:pyo3"]
+# Linking against libpython is only correct when building an actual wheel;
+# `cargo check`/`clippy`/`test` must not. maturin turns this on, CI does not.
+extension-module = ["python", "pyo3/extension-module"]
 # Reserved for later phases; see DESIGN.md §3.14.
-#   python   = []   # pyo3 bindings                    (P3, next)
 #   validate = []   # streaming validator + PSVI       (P4)
 #   units    = []   # unit binding extraction          (P5)
 #

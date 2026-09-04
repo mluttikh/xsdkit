@@ -5,3 +5,10 @@
 /python/dist
 /python/.venv
 __pycache__/
+
+# Python
+/.venv
+/python/xsdkit/*.so
+/python/xsdkit/*.pyd
+.pytest_cache/
+*.egg-info/

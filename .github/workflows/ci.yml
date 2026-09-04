@@ -23,6 +23,10 @@ jobs:
         run: cargo fmt --check
       - name: Clippy
         run: cargo clippy --all-targets -- -D warnings
+      # The bindings are behind a feature, so the default lint run never sees
+      # them. CI is the only thing that will.
+      - name: Clippy (python feature)
+        run: cargo clippy --all-targets --features python -- -D warnings
 
   test:
     name: Test (${{ matrix.os }})
@@ -56,6 +60,28 @@ jobs:
         env:
           RUSTDOCFLAGS: -D warnings
         run: cargo doc --no-deps
+
+  python:
+    name: Python (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      # `pip install .` goes through the maturin backend, which turns on the
+      # `extension-module` feature. Installing the wheel rather than using
+      # `maturin develop` keeps this identical to what a user gets.
+      - name: Build and install the wheel
+        run: pip install .
+      - name: Run the Python tests
+        run: pip install pytest && pytest python/tests -q
 
   msrv:
     name: MSRV
