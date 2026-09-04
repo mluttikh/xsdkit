@@ -131,6 +131,13 @@ cannot express this.
 - **The innermost enumeration wins**; a restriction may only narrow.
 - **Chameleon includes** key the document cache on `(uri, coerced_ns)`, never
   on `uri` alone. The same file yields different components per includer.
+- **Inside `xs:redefine`, a reference to the name being redefined means the
+  *original*.** `<complexType name="T"><extension base="T">` extends the
+  included T, not the one being declared. `capture_originals` snapshots them
+  and `pin_self_references` resolves those fixups immediately, before the new
+  component takes the name. `xs:override` has no such rule — its references
+  mean the new components — which is why the two share a reader but differ in
+  one argument.
 - **The `xml:` prefix is bound implicitly**, and `xml:lang`/`space`/`base`/`id`
   are predeclared. A schema must not need to fetch `xml.xsd`.
 - **Redeclaring a built-in is not a duplicate-global error.** The

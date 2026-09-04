@@ -32,11 +32,14 @@
 //!
 //! # Status
 //!
-//! Implemented: the component model, document loading with `include` /
-//! `import` (chameleon includes included), reference resolution, attribute
-//! group flattening and substitution-group closure.
+//! Implemented: the component model, document loading with `include`,
+//! `import`, `redefine` and `override` (chameleon includes included),
+//! reference resolution, attribute group flattening, substitution-group
+//! closure, content-model automata with UPA, and streaming instance
+//! validation with a typed PSVI.
 //!
-//! Not yet: XSD 1.1 assertions and conditional type assignment.
+//! Not yet: XSD 1.1 assertions and conditional type assignment, `openContent`,
+//! and identity constraints.
 //! assertions and conditional type assignment, and `redefine`/`override`
 //! (currently read as plain includes, with a warning).
 

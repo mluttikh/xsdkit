@@ -588,22 +588,8 @@ fn a_missing_schema_location_is_an_error_but_lax_downgrades_it() {
     assert!(!d.is_empty(), "lax mode should still say something");
 }
 
-#[test]
-fn redefine_is_read_as_an_include_with_a_warning() {
-    let part = format!(
-        r#"<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema" targetNamespace="{NS}">
-             <xs:simpleType name="T"><xs:restriction base="xs:string"/></xs:simpleType>
-           </xs:schema>"#
-    );
-    let main = schema(r#"<xs:redefine schemaLocation="part.xsd"/>"#);
-    let (s, d) = SchemaSetBuilder::new()
-        .resolver(MapResolver::default().with("part.xsd", &part))
-        .text(&main, "mem://main.xsd")
-        .build_with_warnings();
-    assert!(!d.has_errors(), "{d}");
-    assert!(d.iter().any(|x| x.code == DiagCode::Unsupported), "{d}");
-    assert!(s.type_(Some(NS), "T").is_some(), "components still load");
-}
+// `xs:redefine` and `xs:override` have their own suite now that they are
+// implemented rather than warned about — see `tests/redefine.rs`.
 
 // ---------------------------------------------------------------------------
 // Identity constraints

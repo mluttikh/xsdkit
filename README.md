@@ -133,9 +133,9 @@ cargo run --example inspect -- schemas/report.xsd --lax
 - **Facets** with correct composition: patterns OR within a restriction step
   and AND across steps; the innermost enumeration wins; `whiteSpace` applied
   before lexical parsing.
-- **Composition** — `include`, `import`, and **chameleon includes**, where a
-  document with no `targetNamespace` is absorbed into its includer's. Circular
-  graphs terminate.
+- **Composition** — `include`, `import`, `redefine` and `override`, including
+  **chameleon includes**, where a document with no `targetNamespace` is
+  absorbed into its includer's. Circular graphs terminate.
 - **Resolution** — references, attribute-group flattening (transitive),
   substitution-group closure (transitive, skipping abstract heads),
   `keyref` → `key`.
@@ -157,10 +157,10 @@ cargo run --example inspect -- schemas/report.xsd --lax
 | ✅ | Content automata, UPA | done |
 | ✅ | Python bindings, type stubs, encoding detection | done |
 | ✅ | Instance validation, typed reading (PSVI) | done |
-| → | **XSD 1.1** | next |
+| ✅ | `redefine` / `override` | done |
+| → | **XSD 1.1: assertions, CTA, openContent** | next |
 | | `xsd2arrow`, a separate package | |
 
-`redefine`/`override` are currently read as plain includes, with a warning.
 Code generation is permanently out of scope.
 
 ### Units of measure

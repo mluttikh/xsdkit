@@ -198,6 +198,15 @@ pub(crate) enum AttrOwner {
     AttributeGroup(AttrGroupId),
 }
 
+/// The components a `redefine` is replacing, kept so its self-references can
+/// still reach the originals.
+#[derive(Default, Debug)]
+pub(crate) struct Originals {
+    types: FxHashMap<QName, TypeId>,
+    groups: FxHashMap<QName, GroupId>,
+    attribute_groups: FxHashMap<QName, AttrGroupId>,
+}
+
 /// Per-document state that local declarations inherit.
 #[derive(Clone, Debug)]
 struct DocCtx {
@@ -240,6 +249,9 @@ pub(crate) struct Loader<'r> {
     /// attributes. A document redeclaring one is not a duplicate-global
     /// error — the schema-for-schemas declares all 50 built-ins.
     predeclared: FxHashSet<QName>,
+    /// True while reading the children of a `redefine`/`override`, where a
+    /// name colliding with the included document's is the whole point.
+    in_redefine: bool,
 }
 
 const MAX_DEPTH: usize = 64;
@@ -274,6 +286,7 @@ impl<'r> Loader<'r> {
             depth: 0,
             nodes_limit: DEFAULT_NODES_LIMIT,
             predeclared: FxHashSet::default(),
+            in_redefine: false,
         };
         l.install_builtins();
         l.install_xml_attributes();
@@ -499,20 +512,8 @@ impl<'r> Loader<'r> {
             match child.tag_name().name() {
                 "include" => self.read_include(doc, child, ctx),
                 "import" => self.read_import(doc, child, ctx),
-                "redefine" | "override" => {
-                    let what = child.tag_name().name();
-                    self.diags.push(
-                        Diagnostic::warning(
-                            DiagCode::Unsupported,
-                            format!(
-                                "`xs:{what}` is treated as `xs:include`; its modifications are ignored"
-                            ),
-                        )
-                        .at(Span::new(&ctx.uri, line_of(doc, child)))
-                        .with_help("component redefinition is not implemented yet"),
-                    );
-                    self.read_include(doc, child, ctx);
-                }
+                "redefine" => self.read_redefine(doc, child, ctx),
+                "override" => self.read_override(doc, child, ctx),
                 _ => {}
             }
         }
@@ -568,6 +569,252 @@ impl<'r> Loader<'r> {
             Ok((uri, bytes)) => self.load_bytes(&bytes, &uri, ctx.target_ns),
             Err(e) => self.push_resolution_failure(e, doc, node, ctx),
         }
+    }
+
+    /// `xs:redefine` — include a document, then modify some of its
+    /// components.
+    ///
+    /// The awkward part is that a redefinition refers to **itself** by name to
+    /// mean the *original*: `<xs:complexType name="T"><xs:extension
+    /// base="T">` extends the T that was just included, not the T being
+    /// declared. Every other reference means what it usually means.
+    ///
+    /// So the originals are captured before the redefinitions are read, and
+    /// any reference a redefinition makes to a name it is itself redefining is
+    /// resolved immediately against that capture, before the new component
+    /// takes the name.
+    fn read_redefine(&mut self, doc: &roxmltree::Document, node: roxmltree::Node, ctx: &DocCtx) {
+        if !self.include_target(doc, node, ctx) {
+            return;
+        }
+        let originals = self.capture_originals(node, ctx);
+        self.read_modifications(doc, node, ctx, Some(&originals));
+    }
+
+    /// `xs:override` — include a document, then replace some of its
+    /// components outright.
+    ///
+    /// Unlike `redefine`, an override's own references mean the **new**
+    /// components, so nothing needs capturing. XSD 1.1 also applies overrides
+    /// transitively through the included document's own includes; that part is
+    /// not implemented, and is reported rather than assumed.
+    fn read_override(&mut self, doc: &roxmltree::Document, node: roxmltree::Node, ctx: &DocCtx) {
+        if !self.include_target(doc, node, ctx) {
+            return;
+        }
+        self.read_modifications(doc, node, ctx, None);
+    }
+
+    /// Loads the document a `redefine`/`override` names, as an include would.
+    fn include_target(
+        &mut self,
+        doc: &roxmltree::Document,
+        node: roxmltree::Node,
+        ctx: &DocCtx,
+    ) -> bool {
+        let Some(loc) = node.attribute("schemaLocation") else {
+            let what = node.tag_name().name();
+            self.diags.push(
+                Diagnostic::error(
+                    DiagCode::MissingAttribute,
+                    format!("`xs:{what}` needs a schemaLocation"),
+                )
+                .at(Span::new(&ctx.uri, line_of(doc, node))),
+            );
+            return false;
+        };
+        match self.resolver.resolve(loc, Some(&ctx.uri)) {
+            Ok((uri, bytes)) => {
+                self.load_bytes(&bytes, &uri, ctx.target_ns);
+                true
+            }
+            Err(e) => {
+                self.push_resolution_failure(e, doc, node, ctx);
+                false
+            }
+        }
+    }
+
+    /// Records the components a `redefine` is about to replace, so its
+    /// self-references can still reach them.
+    fn capture_originals(&mut self, node: roxmltree::Node, ctx: &DocCtx) -> Originals {
+        let mut out = Originals::default();
+        for c in node.children().filter(is_xs_element) {
+            let Some(local) = c.attribute("name") else {
+                continue;
+            };
+            let name = self.qualified_name(local, true, ctx);
+            match c.tag_name().name() {
+                "simpleType" | "complexType" => {
+                    if let Some(id) = self.globals.types.get(&name) {
+                        out.types.insert(name, *id);
+                    }
+                }
+                "group" => {
+                    if let Some(id) = self.globals.model_groups.get(&name) {
+                        out.groups.insert(name, *id);
+                    }
+                }
+                "attributeGroup" => {
+                    if let Some(id) = self.globals.attribute_groups.get(&name) {
+                        out.attribute_groups.insert(name, *id);
+                    }
+                }
+                _ => {}
+            }
+        }
+        out
+    }
+
+    /// Reads the children of a `redefine`/`override` and installs them over
+    /// whatever the included document declared.
+    fn read_modifications(
+        &mut self,
+        doc: &roxmltree::Document,
+        node: roxmltree::Node,
+        ctx: &DocCtx,
+        originals: Option<&Originals>,
+    ) {
+        // Replacing a name the included document declared is the point here,
+        // not a duplicate-global error.
+        let outer = std::mem::replace(&mut self.in_redefine, true);
+        for c in node.children().filter(is_xs_element) {
+            let span = Span::new(&ctx.uri, line_of(doc, c));
+            let before = self.fixups.len();
+            let kind = c.tag_name().name();
+
+            match kind {
+                "simpleType" | "complexType" => {
+                    let id = if kind == "simpleType" {
+                        self.read_simple_type(doc, c, ctx, true)
+                    } else {
+                        self.read_complex_type(doc, c, ctx, true)
+                    };
+                    if let Some(o) = originals {
+                        self.pin_self_references(before, o);
+                    }
+                    if let Some(name) = self.types.get(id.0).name() {
+                        self.replace_global_type(name, id, span);
+                    }
+                }
+                "group" => {
+                    self.read_group_def(doc, c, ctx);
+                    if let Some(o) = originals {
+                        self.pin_self_references(before, o);
+                    }
+                }
+                "attributeGroup" => {
+                    self.read_attribute_group_def(doc, c, ctx);
+                    if let Some(o) = originals {
+                        self.pin_self_references(before, o);
+                    }
+                }
+                "annotation" => {}
+                other => {
+                    let what = node.tag_name().name();
+                    self.diags.push(
+                        Diagnostic::warning(
+                            DiagCode::UnknownSchemaElement,
+                            format!("ignoring `xs:{other}` inside `xs:{what}`"),
+                        )
+                        .at(span),
+                    );
+                }
+            }
+        }
+        self.in_redefine = outer;
+    }
+
+    /// Points a redefinition's self-references at the original component.
+    ///
+    /// Only the reference kinds a redefinition can legally make to itself:
+    /// a type's base, and a group or attribute group reference.
+    fn pin_self_references(&mut self, from: usize, originals: &Originals) {
+        let pending: Vec<Fixup> = self.fixups.drain(from..).collect();
+        for f in pending {
+            match &f {
+                Fixup::SimpleBase { type_, name, .. } => {
+                    if let Some(orig) = originals.types.get(name) {
+                        let (type_, orig) = (*type_, *orig);
+                        self.set_simple_base(type_, orig);
+                        continue;
+                    }
+                }
+                Fixup::ComplexBase { type_, name, .. } => {
+                    if let Some(orig) = originals.types.get(name) {
+                        if let TypeDefinition::Complex(t) = self.types.get_mut(type_.0) {
+                            t.base = *orig;
+                        }
+                        continue;
+                    }
+                }
+                Fixup::ParticleGroupRef { particle, name, .. } => {
+                    if let Some(orig) = originals.groups.get(name) {
+                        self.particles.get_mut(particle.0).term = Term::GroupRef(*orig);
+                        continue;
+                    }
+                }
+                Fixup::AttrGroupRef {
+                    owner, index, name, ..
+                } => {
+                    if let Some(orig) = originals.attribute_groups.get(name) {
+                        let (owner, index, orig) = (*owner, *index, *orig);
+                        self.set_attr_group_ref(owner, index, orig);
+                        continue;
+                    }
+                }
+                _ => {}
+            }
+            // Not a self-reference; resolve it normally at compile time.
+            self.fixups.push(f);
+        }
+    }
+
+    fn set_simple_base(&mut self, type_: TypeId, base: TypeId) {
+        let primitive = match self.types.get(base.0) {
+            TypeDefinition::Simple(b) => b.primitive.or(b.builtin),
+            TypeDefinition::Complex(_) => None,
+        };
+        if let TypeDefinition::Simple(t) = self.types.get_mut(type_.0) {
+            t.base = base;
+            if t.primitive.is_none() {
+                t.primitive = primitive;
+            }
+        }
+    }
+
+    fn set_attr_group_ref(&mut self, owner: AttrOwner, index: usize, id: AttrGroupId) {
+        let refs = match owner {
+            AttrOwner::ComplexType(t) => match self.types.get_mut(t.0) {
+                TypeDefinition::Complex(c) => Some(&mut c.attribute_group_refs),
+                TypeDefinition::Simple(_) => None,
+            },
+            AttrOwner::AttributeGroup(g) => {
+                Some(&mut self.attribute_groups.get_mut(g.0).attribute_group_refs)
+            }
+        };
+        if let Some(refs) = refs {
+            if index < refs.len() {
+                refs[index] = id;
+            }
+        }
+    }
+
+    /// Installs a redefined type over the one the included document declared,
+    /// without the duplicate-global complaint a fresh declaration would draw.
+    fn replace_global_type(&mut self, name: QName, id: TypeId, span: Span) {
+        if self.predeclared.contains(&name) {
+            let shown = self.names.display(name);
+            self.diags.push(
+                Diagnostic::error(
+                    DiagCode::DuplicateGlobal,
+                    format!("cannot redefine the built-in type `{shown}`"),
+                )
+                .at(span),
+            );
+            return;
+        }
+        self.globals.types.insert(name, id);
     }
 
     fn read_import(&mut self, doc: &roxmltree::Document, node: roxmltree::Node, ctx: &DocCtx) {
@@ -1479,7 +1726,7 @@ impl<'r> Loader<'r> {
             annotation,
             span: span.clone(),
         }));
-        if self.globals.model_groups.insert(name, id).is_some() {
+        if self.globals.model_groups.insert(name, id).is_some() && !self.in_redefine {
             let shown = self.names.display(name);
             self.diags.push(
                 Diagnostic::error(
@@ -1517,7 +1764,7 @@ impl<'r> Loader<'r> {
         g.attribute_group_refs = groups;
         g.attribute_wildcard = wildcard;
 
-        if self.globals.attribute_groups.insert(name, id).is_some() {
+        if self.globals.attribute_groups.insert(name, id).is_some() && !self.in_redefine {
             let shown = self.names.display(name);
             self.diags.push(
                 Diagnostic::error(
