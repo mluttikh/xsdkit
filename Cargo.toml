@@ -21,6 +21,8 @@ fxhash = "0.2.1"
 indexmap = "2.14.0"
 encoding_rs = "0.8.35"
 oxsdatatypes = "0.2.3"
+regex = "1.13.1"
+regex-syntax = "0.8.11"
 
 [dev-dependencies]
 rstest = "0.25"

@@ -455,6 +455,8 @@ dependencies = [
  "indexmap",
  "oxsdatatypes",
  "pyo3",
+ "regex",
+ "regex-syntax",
  "roxmltree",
  "rstest",
 ]

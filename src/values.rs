@@ -510,8 +510,9 @@ fn violation(facet: &'static str, message: impl Into<String>) -> FacetViolation 
 
 /// Checks a value against a composed facet set.
 ///
-/// `pattern` is **not** checked here — it needs the XSD regular expression
-/// engine, which is a separate layer.
+/// `pattern` is **not** checked here. Patterns constrain the *lexical* form,
+/// not the value, and compiling them is expensive enough to want doing once
+/// per type rather than once per value — see [`check_patterns`].
 pub fn check_facets(
     value: &Value,
     facets: &FacetSet,
@@ -627,6 +628,28 @@ fn digit_counts(value: &Value) -> Option<(u32, u32)> {
     };
     let int_digits = int.trim_start_matches('0').len() as u32;
     Some((int_digits + frac.len() as u32, frac.len() as u32))
+}
+
+/// Checks the lexical form against compiled patterns.
+///
+/// Separate from [`check_facets`] for two reasons. Patterns constrain the
+/// lexical form rather than the value — `1.0` and `1.00` are one decimal but
+/// two strings, and a pattern can tell them apart. And compiling is expensive,
+/// so a caller compiles once per type and matches many values.
+///
+/// The form given must already be whitespace-normalised, since that is what
+/// the schema's own `whiteSpace` facet produced.
+pub fn check_patterns(
+    normalized_lexical: &str,
+    patterns: &crate::regex::Patterns,
+) -> Result<(), FacetViolation> {
+    match patterns.first_failure(normalized_lexical) {
+        None => Ok(()),
+        Some(step) => Err(violation(
+            "pattern",
+            format!("`{normalized_lexical}` does not match {}", step.as_str()),
+        )),
+    }
 }
 
 #[cfg(test)]
@@ -851,6 +874,15 @@ mod tests {
         let e = check_facets(&v(Builtin::Int, "6"), &f, Builtin::Int).unwrap_err();
         assert_eq!(e.facet, "maxInclusive");
         assert!(e.to_string().contains("maxInclusive"), "{e}");
+    }
+
+    #[test]
+    fn patterns_constrain_the_lexical_form_not_the_value() {
+        let p = crate::regex::Patterns::compile(&[vec!["[0-9]\\.[0-9]".into()]]).unwrap();
+        // Both are the same decimal value; only one has the lexical shape.
+        assert!(check_patterns("1.0", &p).is_ok());
+        assert!(check_patterns("1.00", &p).is_err());
+        assert_eq!(check_patterns("1.00", &p).unwrap_err().facet, "pattern");
     }
 
     #[test]
