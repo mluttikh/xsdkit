@@ -86,6 +86,27 @@ for child in report.type.children:
 report.type.accepts(["{urn:example}title", "{urn:example}count"])
 ```
 
+Validate a document, and read it into typed values:
+
+```python
+report = schemas.validate(open("report.xml").read())
+report.is_valid           # False
+for d in report.errors:
+    print(d)              # error[XSD2004]: `{urn:example}count`: ... --> :3
+
+events, report = schemas.read_typed(open("report.xml").read())
+for ev in events:
+    if ev.kind == "text":
+        print(type(ev.value).__name__, ev.value)
+# int       42
+# Decimal   3.14
+# datetime  2024-12-30 12:39:15+00:00
+# date      2024-03-31
+```
+
+Values arrive as native Python types, not strings to re-parse. Pass
+`on_event=` to stream instead of collecting.
+
 Schemas that are expected to be imperfect return their diagnostics instead of
 raising:
 

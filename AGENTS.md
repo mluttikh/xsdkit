@@ -222,6 +222,16 @@ be released around `build()`.
 - `SchemaError.diagnostics` has a class-level default so
   `except SchemaError as e: e.diagnostics` is always safe. The stub test found
   that; keep it.
+- **Release the GIL only where no Python is called.** `validate()` detaches;
+  `read_typed()` cannot, because every event becomes a Python object and
+  `on_event` is Python code.
+- **Values convert to native types, not strings.** That is most of what the
+  binding is for. `xs:duration` and the gregorian fragments stay lexical
+  because no lossless Python type exists — months and seconds are not
+  commensurable — but everything else maps: `Decimal`, tz-aware `datetime`,
+  `date`, `time`, `timedelta`, `bytes`, `list`.
+- A pyclass holding `Py<PyAny>` cannot derive `Clone`; write it by hand with
+  `Python::attach` and `clone_ref`.
 
 ### 7. Input encoding
 

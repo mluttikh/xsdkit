@@ -16,12 +16,14 @@
 use crate::content::ContentModel;
 use crate::datatypes::Variety;
 use crate::diagnostics::{Diagnostic, Diagnostics, Severity, Span};
+use crate::instance::PsviEvent as RustPsvi;
 use crate::model::*;
 use crate::names::QName;
+use crate::values::Value;
 use crate::{Conformance, FileResolver, SchemaSetBuilder};
 use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
-use pyo3::types::{PyList, PyTuple, PyType};
+use pyo3::types::{PyBytes, PyList, PyTuple, PyType};
 use pyo3::{IntoPyObjectExt, create_exception};
 use std::sync::Arc;
 
@@ -315,6 +317,77 @@ impl PySchemaSet {
         )
     }
 
+    /// Validates an instance document against this schema.
+    ///
+    /// Never raises for an invalid document — an invalid document is an
+    /// answer, not an error. Inspect `.is_valid` and `.diagnostics`.
+    #[pyo3(signature = (xml, *, uri="<instance>"))]
+    fn validate(&self, py: Python<'_>, xml: &str, uri: &str) -> PyResult<PyValidationReport> {
+        let schemas = self.inner.clone();
+        // No Python is called back into, so the GIL can go.
+        let report = py.detach(|| {
+            schemas
+                .instance_validator()
+                .validate_named(xml, uri, |_| {})
+        });
+        let valid = report.is_valid();
+        Ok(PyValidationReport {
+            valid,
+            diagnostics: report.diagnostics.into_iter().map(PyDiagnostic).collect(),
+        })
+    }
+
+    /// Reads a document into typed PSVI events.
+    ///
+    /// Returns the events as a list, or feeds them to `on_event` and returns
+    /// `None`. Use the callback for documents large enough that holding every
+    /// event defeats the point of streaming.
+    ///
+    /// Validation still runs; `report` carries the diagnostics either way.
+    #[pyo3(signature = (xml, *, on_event=None, uri="<instance>"))]
+    fn read_typed(
+        &self,
+        py: Python<'_>,
+        xml: &str,
+        on_event: Option<Bound<'_, PyAny>>,
+        uri: &str,
+    ) -> PyResult<(Option<Vec<Py<PyPsviEvent>>>, PyValidationReport)> {
+        let mut collected: Vec<Py<PyPsviEvent>> = Vec::new();
+        let mut callback_error: Option<PyErr> = None;
+
+        // The GIL is held throughout: every event becomes a Python object,
+        // and `on_event` is Python code.
+        let report = self
+            .inner
+            .instance_validator()
+            .validate_named(xml, uri, |ev| {
+                if callback_error.is_some() {
+                    return;
+                }
+                match self.psvi_to_py(py, ev) {
+                    Ok(obj) => match &on_event {
+                        Some(f) => {
+                            if let Err(e) = f.call1((obj,)) {
+                                callback_error = Some(e);
+                            }
+                        }
+                        None => collected.push(obj.unbind()),
+                    },
+                    Err(e) => callback_error = Some(e),
+                }
+            });
+        if let Some(e) = callback_error {
+            return Err(e);
+        }
+
+        let valid = report.is_valid();
+        let py_report = PyValidationReport {
+            valid,
+            diagnostics: report.diagnostics.into_iter().map(PyDiagnostic).collect(),
+        };
+        Ok((on_event.is_none().then_some(collected), py_report))
+    }
+
     /// Component counts, for diagnostics and smoke tests.
     #[getter]
     fn counts(&self) -> Vec<(String, usize)> {
@@ -339,6 +412,107 @@ impl PySchemaSet {
             c.types,
             c.elements
         )
+    }
+}
+
+impl PySchemaSet {
+    /// Turns one PSVI event into its Python wrapper.
+    fn psvi_to_py<'py>(&self, py: Python<'py>, ev: RustPsvi) -> PyResult<Bound<'py, PyPsviEvent>> {
+        let name_of = |q: crate::names::QName| {
+            (
+                q.ns.map(|n| self.inner.names().resolve_ns(n).to_string()),
+                self.inner.names().resolve(q.local).to_string(),
+            )
+        };
+        let wrapped = match ev {
+            RustPsvi::StartElement {
+                name,
+                declaration,
+                type_id,
+                type_from_instance,
+                nil,
+                attributes,
+                line,
+            } => {
+                let mut attrs = Vec::with_capacity(attributes.len());
+                for a in attributes {
+                    let value = match &a.value {
+                        Some(v) => Some(value_to_py(py, v)?.unbind()),
+                        None => None,
+                    };
+                    attrs.push(PyAttributeValue {
+                        name: name_of(a.name),
+                        declaration: a.declaration.map(|id| PyAttribute {
+                            s: self.inner.clone(),
+                            id,
+                        }),
+                        value,
+                        lexical: a.lexical,
+                    });
+                }
+                PyPsviEvent {
+                    kind: "start",
+                    name: name_of(name),
+                    declaration: declaration.map(|id| PyElement {
+                        s: self.inner.clone(),
+                        id,
+                    }),
+                    type_: Some(PyType_ {
+                        s: self.inner.clone(),
+                        id: type_id,
+                    }),
+                    type_from_instance,
+                    nil,
+                    attributes: attrs,
+                    value: None,
+                    lexical: None,
+                    line,
+                }
+            }
+            RustPsvi::Text {
+                value,
+                type_id,
+                lexical,
+                line,
+            } => PyPsviEvent {
+                kind: "text",
+                name: (None, String::new()),
+                declaration: None,
+                type_: Some(PyType_ {
+                    s: self.inner.clone(),
+                    id: type_id,
+                }),
+                type_from_instance: false,
+                nil: false,
+                attributes: Vec::new(),
+                value: match &value {
+                    Some(v) => Some(value_to_py(py, v)?.unbind()),
+                    None => None,
+                },
+                lexical: Some(lexical),
+                line,
+            },
+            RustPsvi::EndElement {
+                name,
+                declaration,
+                line,
+            } => PyPsviEvent {
+                kind: "end",
+                name: name_of(name),
+                declaration: declaration.map(|id| PyElement {
+                    s: self.inner.clone(),
+                    id,
+                }),
+                type_: None,
+                type_from_instance: false,
+                nil: false,
+                attributes: Vec::new(),
+                value: None,
+                lexical: None,
+                line,
+            },
+        };
+        Bound::new(py, wrapped)
     }
 }
 
@@ -776,6 +950,22 @@ impl PyType_ {
         Ok(m.accepts_end())
     }
 
+    /// Validates a lexical form against this type, returning its typed value.
+    ///
+    /// Raises `ValueError` with the reason when the value is not valid.
+    fn validate(&self, py: Python<'_>, lexical: &str) -> PyResult<Py<PyAny>> {
+        let validator = self.s.validator();
+        match validator.validate(self.id, lexical) {
+            Ok(v) => Ok(value_to_py(py, &v)?.unbind()),
+            Err(e) => Err(PyValueError::new_err(e.to_string())),
+        }
+    }
+
+    /// Whether a lexical form is valid against this type.
+    fn is_valid(&self, lexical: &str) -> bool {
+        self.s.validator().validate(self.id, lexical).is_ok()
+    }
+
     // -- simple types ------------------------------------------------------
 
     /// `"atomic"`, `"list"` or `"union"`; `None` for a complex type.
@@ -1116,6 +1306,280 @@ impl PyDiagnostic {
 }
 
 // ---------------------------------------------------------------------------
+// Values, as native Python objects
+// ---------------------------------------------------------------------------
+
+/// Converts an XSD value into the closest native Python type.
+///
+/// This is most of what a binding is *for*: `<count>42</count>` should reach
+/// Python as `42`, and a `dateTime` as a timezone-aware `datetime`, not as a
+/// string the caller has to re-parse.
+///
+/// Durations and the gregorian fragments stay as their canonical lexical
+/// forms — `xs:duration` has no lossless Python counterpart, since months and
+/// seconds are not commensurable. `xs:dayTimeDuration` alone becomes a
+/// `timedelta`, because there it is.
+fn value_to_py<'py>(py: Python<'py>, v: &Value) -> PyResult<Bound<'py, PyAny>> {
+    match v {
+        Value::String(s) | Value::AnyUri(s) => s.into_bound_py_any(py),
+        Value::Boolean(b) => b.into_bound_py_any(py),
+        Value::Integer(n) => n.into_bound_py_any(py),
+        Value::Float(f) => f32::from(*f).into_bound_py_any(py),
+        Value::Double(d) => f64::from(*d).into_bound_py_any(py),
+        Value::Decimal(d) => py
+            .import("decimal")?
+            .getattr("Decimal")?
+            .call1((d.to_string(),)),
+        Value::HexBinary(b) | Value::Base64Binary(b) => PyBytes::new(py, b).into_bound_py_any(py),
+        Value::DateTime(dt) => {
+            let (sec, micro) = split_seconds(&dt.second().to_string());
+            py.import("datetime")?.getattr("datetime")?.call1((
+                dt.year(),
+                dt.month(),
+                dt.day(),
+                dt.hour(),
+                dt.minute(),
+                sec,
+                micro,
+                tzinfo(py, dt.timezone_offset().map(tz_minutes))?,
+            ))
+        }
+        Value::Date(d) => {
+            py.import("datetime")?
+                .getattr("date")?
+                .call1((d.year(), d.month(), d.day()))
+        }
+        Value::Time(t) => {
+            let (sec, micro) = split_seconds(&t.second().to_string());
+            py.import("datetime")?.getattr("time")?.call1((
+                t.hour(),
+                t.minute(),
+                sec,
+                micro,
+                tzinfo(py, t.timezone_offset().map(tz_minutes))?,
+            ))
+        }
+        Value::DayTimeDuration(d) => py.import("datetime")?.getattr("timedelta")?.call1((
+            0,
+            d.seconds().to_string().parse::<f64>().unwrap_or(0.0),
+            0,
+            0,
+            d.minutes(),
+            d.hours(),
+            d.days(),
+        )),
+        Value::List(items) => {
+            let list = PyList::empty(py);
+            for item in items {
+                list.append(value_to_py(py, item)?)?;
+            }
+            list.into_bound_py_any(py)
+        }
+        // No lossless Python type; the canonical lexical form is exact.
+        other => other.to_string().into_bound_py_any(py),
+    }
+}
+
+/// Splits `"15.25"` into whole seconds and microseconds.
+fn split_seconds(text: &str) -> (u32, u32) {
+    let f: f64 = text.parse().unwrap_or(0.0);
+    let sec = f.trunc().max(0.0) as u32;
+    let micro = ((f - f.trunc()) * 1_000_000.0).round() as u32;
+    (sec, micro.min(999_999))
+}
+
+fn tz_minutes(tz: oxsdatatypes::TimezoneOffset) -> i16 {
+    i16::from_be_bytes(tz.to_be_bytes())
+}
+
+fn tzinfo<'py>(py: Python<'py>, minutes: Option<i16>) -> PyResult<Option<Bound<'py, PyAny>>> {
+    let Some(m) = minutes else { return Ok(None) };
+    let dt = py.import("datetime")?;
+    let delta = dt.getattr("timedelta")?.call1((0, 0, 0, 0, m))?;
+    Ok(Some(dt.getattr("timezone")?.call1((delta,))?))
+}
+
+// ---------------------------------------------------------------------------
+// Instance validation
+// ---------------------------------------------------------------------------
+
+/// The outcome of validating a document.
+#[pyclass(
+    module = "xsdkit",
+    name = "ValidationReport",
+    frozen,
+    skip_from_py_object
+)]
+pub struct PyValidationReport {
+    valid: bool,
+    diagnostics: Vec<PyDiagnostic>,
+}
+
+#[pymethods]
+impl PyValidationReport {
+    #[getter]
+    fn is_valid(&self) -> bool {
+        self.valid
+    }
+
+    #[getter]
+    fn diagnostics(&self) -> Vec<PyDiagnostic> {
+        self.diagnostics.clone()
+    }
+
+    /// Only the diagnostics that are errors.
+    #[getter]
+    fn errors(&self) -> Vec<PyDiagnostic> {
+        self.diagnostics
+            .iter()
+            .filter(|d| d.0.is_error())
+            .cloned()
+            .collect()
+    }
+
+    fn __bool__(&self) -> bool {
+        self.valid
+    }
+
+    fn __repr__(&self) -> String {
+        format!(
+            "<ValidationReport {} ({} diagnostic(s))>",
+            if self.valid { "valid" } else { "invalid" },
+            self.diagnostics.len()
+        )
+    }
+}
+
+/// An attribute after validation.
+#[pyclass(
+    module = "xsdkit",
+    name = "AttributeValue",
+    frozen,
+    skip_from_py_object
+)]
+pub struct PyAttributeValue {
+    name: (Option<String>, String),
+    declaration: Option<PyAttribute>,
+    value: Option<Py<PyAny>>,
+    lexical: String,
+}
+
+/// Hand-written because `Py<PyAny>` needs the GIL to clone.
+impl Clone for PyAttributeValue {
+    fn clone(&self) -> Self {
+        Python::attach(|py| Self {
+            name: self.name.clone(),
+            declaration: self.declaration.clone(),
+            value: self.value.as_ref().map(|v| v.clone_ref(py)),
+            lexical: self.lexical.clone(),
+        })
+    }
+}
+
+#[pymethods]
+impl PyAttributeValue {
+    #[getter]
+    fn name(&self) -> (Option<String>, String) {
+        self.name.clone()
+    }
+    #[getter]
+    fn local_name(&self) -> String {
+        self.name.1.clone()
+    }
+    #[getter]
+    fn declaration(&self) -> Option<PyAttribute> {
+        self.declaration.clone()
+    }
+    /// The typed value, or `None` when it did not validate.
+    #[getter]
+    fn value(&self, py: Python<'_>) -> Option<Py<PyAny>> {
+        self.value.as_ref().map(|v| v.clone_ref(py))
+    }
+    #[getter]
+    fn lexical(&self) -> String {
+        self.lexical.clone()
+    }
+    fn __repr__(&self) -> String {
+        format!("<AttributeValue {}={:?}>", self.name.1, self.lexical)
+    }
+}
+
+/// One post-schema-validation event.
+///
+/// A single class with a `kind` discriminator rather than three, because the
+/// consuming loop is invariably a dispatch on kind.
+#[pyclass(module = "xsdkit", name = "PsviEvent", frozen, skip_from_py_object)]
+pub struct PyPsviEvent {
+    kind: &'static str,
+    name: (Option<String>, String),
+    declaration: Option<PyElement>,
+    type_: Option<PyType_>,
+    type_from_instance: bool,
+    nil: bool,
+    attributes: Vec<PyAttributeValue>,
+    value: Option<Py<PyAny>>,
+    lexical: Option<String>,
+    line: u32,
+}
+
+#[pymethods]
+impl PyPsviEvent {
+    /// `"start"`, `"text"` or `"end"`.
+    #[getter]
+    fn kind(&self) -> &'static str {
+        self.kind
+    }
+    #[getter]
+    fn name(&self) -> (Option<String>, String) {
+        self.name.clone()
+    }
+    #[getter]
+    fn local_name(&self) -> String {
+        self.name.1.clone()
+    }
+    #[getter]
+    fn declaration(&self) -> Option<PyElement> {
+        self.declaration.clone()
+    }
+    /// The type in force, after any `xsi:type` override.
+    #[getter]
+    fn r#type(&self) -> Option<PyType_> {
+        self.type_.clone()
+    }
+    #[getter]
+    fn type_from_instance(&self) -> bool {
+        self.type_from_instance
+    }
+    #[getter]
+    fn nil(&self) -> bool {
+        self.nil
+    }
+    #[getter]
+    fn attributes(&self) -> Vec<PyAttributeValue> {
+        self.attributes.clone()
+    }
+    /// The typed value, on a `"text"` event.
+    #[getter]
+    fn value(&self, py: Python<'_>) -> Option<Py<PyAny>> {
+        self.value.as_ref().map(|v| v.clone_ref(py))
+    }
+    #[getter]
+    fn lexical(&self) -> Option<String> {
+        self.lexical.clone()
+    }
+    #[getter]
+    fn line(&self) -> u32 {
+        self.line
+    }
+    fn __repr__(&self) -> String {
+        format!(
+            "<PsviEvent {} {} line {}>",
+            self.kind, self.name.1, self.line
+        )
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Module-level functions
 // ---------------------------------------------------------------------------
 
@@ -1180,6 +1644,9 @@ fn xsdkit_module(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<PyDocument>()?;
     m.add_class::<PySpan>()?;
     m.add_class::<PyDiagnostic>()?;
+    m.add_class::<PyValidationReport>()?;
+    m.add_class::<PyAttributeValue>()?;
+    m.add_class::<PyPsviEvent>()?;
     m.add_function(wrap_pyfunction!(load, m)?)?;
     m.add_function(wrap_pyfunction!(load_string, m)?)?;
     Ok(())

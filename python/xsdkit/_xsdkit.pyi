@@ -4,7 +4,9 @@ Names here mirror `src/python.rs`. Keep them in step: `test_stubs.py` checks
 that every exported name exists at runtime.
 """
 
-from typing import Iterable, Literal, Sequence
+import datetime
+import decimal
+from typing import Any, Callable, Iterable, Literal, Sequence
 
 __version__: str
 
@@ -17,6 +19,26 @@ Use = Literal["required", "optional", "prohibited"]
 
 #: A name as Clark notation (``{ns}local``), a bare local name, or a pair.
 Name = str | tuple[str | None, str]
+
+#: An XSD value as its closest native Python type.
+#:
+#: Durations and gregorian fragments stay as their canonical lexical strings —
+#: ``xs:duration`` has no lossless Python counterpart, since months and seconds
+#: are not commensurable. ``xs:dayTimeDuration`` alone becomes a ``timedelta``.
+XsdValue = (
+    str
+    | bool
+    | int
+    | float
+    | decimal.Decimal
+    | bytes
+    | datetime.datetime
+    | datetime.date
+    | datetime.time
+    | datetime.timedelta
+    | list[Any]
+)
+EventKind = Literal["start", "text", "end"]
 
 class XsdError(Exception): ...
 
@@ -184,6 +206,9 @@ class Type:
     @property
     def content_model(self) -> ModelKind | None: ...
     def accepts(self, names: Iterable[Name], /) -> bool: ...
+    def validate(self, lexical: str, /) -> XsdValue:
+        """Raises ``ValueError`` with the reason when not valid."""
+    def is_valid(self, lexical: str, /) -> bool: ...
     @property
     def variety(self) -> Variety | None: ...
     @property
@@ -200,6 +225,54 @@ class Type:
     def doc(self) -> str | None: ...
     @property
     def appinfo(self) -> list[AppInfo]: ...
+
+class AttributeValue:
+    @property
+    def name(self) -> tuple[str | None, str]: ...
+    @property
+    def local_name(self) -> str: ...
+    @property
+    def declaration(self) -> Attribute | None: ...
+    @property
+    def value(self) -> XsdValue | None:
+        """The typed value, or ``None`` when it did not validate."""
+    @property
+    def lexical(self) -> str: ...
+
+class PsviEvent:
+    @property
+    def kind(self) -> EventKind: ...
+    @property
+    def name(self) -> tuple[str | None, str]: ...
+    @property
+    def local_name(self) -> str: ...
+    @property
+    def declaration(self) -> Element | None: ...
+    @property
+    def type(self) -> Type | None:
+        """The type in force, after any ``xsi:type`` override."""
+    @property
+    def type_from_instance(self) -> bool: ...
+    @property
+    def nil(self) -> bool: ...
+    @property
+    def attributes(self) -> list[AttributeValue]: ...
+    @property
+    def value(self) -> XsdValue | None:
+        """The typed value, on a ``"text"`` event."""
+    @property
+    def lexical(self) -> str | None: ...
+    @property
+    def line(self) -> int: ...
+
+class ValidationReport:
+    @property
+    def is_valid(self) -> bool: ...
+    @property
+    def diagnostics(self) -> list[Diagnostic]: ...
+    @property
+    def errors(self) -> list[Diagnostic]: ...
+    def __bool__(self) -> bool: ...
 
 class SchemaSet:
     @classmethod
@@ -245,6 +318,21 @@ class SchemaSet:
     def element(self, namespace: Name | None, local: str | None = ..., /) -> Element | None: ...
     def type(self, namespace: Name | None, local: str | None = ..., /) -> Type | None: ...
     def attribute(self, namespace: Name | None, local: str | None = ..., /) -> Attribute | None: ...
+    def validate(self, xml: str, *, uri: str = ...) -> ValidationReport:
+        """Validates a document. Never raises for an invalid one — that is an
+        answer, not an error."""
+    def read_typed(
+        self,
+        xml: str,
+        *,
+        on_event: Callable[[PsviEvent], None] | None = ...,
+        uri: str = ...,
+    ) -> tuple[list[PsviEvent] | None, ValidationReport]:
+        """Reads a document into typed PSVI events.
+
+        Returns the events as a list, or feeds them to ``on_event`` and
+        returns ``None`` in their place.
+        """
 
 def load(
     path: str,
