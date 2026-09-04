@@ -1,0 +1,132 @@
+# xsdkit
+
+[![License](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
+
+Parse W3C XML Schema (XSD) into a **queryable schema component model**.
+
+> **Status: early.** The component model, document loading and reference
+> resolution work and are tested against real schemas. Instance validation,
+> the units layer and the `xml2arrow` config generator are planned — see
+> [DESIGN.md](DESIGN.md).
+
+## Why
+
+XSD is three languages: schema *documents*, schema *components*, and
+validation *semantics* defined over those components. The specification
+defines every rule against the middle layer — and in Rust, nothing exposes
+it. `xsd-parser` builds a codegen-shaped intermediate that discards
+validation semantics; `uppsala` builds a model internally but exposes only
+`validate()`. Neither can answer *"what are the possible children of this
+element, and can they repeat?"*
+
+`xsdkit` builds that layer and hands it to you.
+
+## Usage
+
+```toml
+[dependencies]
+xsdkit = "0.1"
+```
+
+```rust
+use xsdkit::{SchemaSetBuilder, Term};
+
+let schemas = SchemaSetBuilder::new()
+    .search_path("schemas/")
+    .file("report.xsd")
+    .build()?;
+
+let report = schemas.element(Some("urn:example"), "report").unwrap();
+let ty = schemas[report].type_id;
+
+// Which children may appear, and may they repeat?
+if let Some(particle) = schemas[ty].as_complex().and_then(|c| c.content.particle()) {
+    for child in schemas.child_particles(particle) {
+        let p = &schemas[child];
+        if let Term::Element(e) = p.term {
+            println!(
+                "{}  repeating={}  optional={}",
+                schemas.display_name(schemas[e].name),
+                p.is_repeating(),
+                p.is_optional(),
+            );
+        }
+    }
+}
+```
+
+Inspect a schema from the command line:
+
+```bash
+cargo run --example inspect -- schemas/report.xsd --lax
+```
+
+## What works today
+
+- **The component model** — types, elements, attributes, particles, model
+  groups, wildcards, identity constraints, notations, annotations; all seven
+  symbol spaces kept separate.
+- **All 50 built-ins** as real components, so `xs:string` resolves exactly
+  like a user type. 19 primitives, the 1.1 additions, and the derivation
+  chains between them.
+- **Facets** with correct composition: patterns OR within a restriction step
+  and AND across steps; the innermost enumeration wins; `whiteSpace` applied
+  before lexical parsing.
+- **Composition** — `include`, `import`, and **chameleon includes**, where a
+  document with no `targetNamespace` is absorbed into its includer's. Circular
+  graphs terminate.
+- **Resolution** — references, attribute-group flattening (transitive),
+  substitution-group closure (transitive, skipping abstract heads),
+  `keyref` → `key`.
+- **Diagnostics** with stable codes, source spans and help text. Every error
+  is reported, not just the first.
+
+Not yet: content-model automata and UPA, instance validation, XSD 1.1
+assertions and conditional type assignment. `redefine`/`override` are read
+as plain includes, with a warning. Code generation is permanently out of
+scope — [`xsd-parser`](https://crates.io/crates/xsd-parser) covers it.
+
+## Diagnostics
+
+Building returns every diagnostic at once:
+
+```text
+error[XSD1201]: no type named `{urn:example}Missing`
+  --> schemas/report.xsd:14
+  help: check the spelling, or add an xs:import for its namespace
+```
+
+`Conformance::Lax` downgrades violations that still permit building
+components — real schemas ship with dangling imports often enough that the
+mode earns its keep.
+
+```rust
+use xsdkit::{SchemaSetBuilder, Conformance};
+
+let (schemas, diagnostics) = SchemaSetBuilder::new()
+    .conformance(Conformance::Lax)
+    .file("vendor/partial.xsd")
+    .build_with_warnings();
+```
+
+## Security
+
+Schemas arrive from elsewhere as often as documents do.
+
+- **No network by default.** `FileResolver` refuses `http(s)://`; supply your
+  own [`Resolver`] to opt in.
+- **No external entities.** Not a setting — `roxmltree` performs no I/O, so
+  they cannot be fetched. Internal DTD subsets *are* accepted, because real
+  schemas use them (the W3C's own among them), with entity-reference-loop
+  detection closing the billion-laughs vector.
+- **Bounded work.** A per-document node cap (`nodes_limit`), an
+  include-nesting cap, and cycle guards on every graph walk.
+
+## Design
+
+[DESIGN.md](DESIGN.md) reviews the XSD format and 17 implementations across
+8 languages, and lays out the staged plan this crate follows.
+
+## License
+
+MIT

@@ -1,0 +1,30 @@
+[package]
+name = "xsdkit"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.85"
+description = "Parse W3C XML Schema (XSD) into a queryable schema component model"
+license = "MIT"
+repository = "https://github.com/mluttikh/xsdkit"
+keywords = ["xsd", "xml", "schema", "parser", "validation"]
+categories = ["parser-implementations", "data-structures"]
+readme = "README.md"
+
+[dependencies]
+roxmltree = "0.20"
+fxhash = "0.2.1"
+indexmap = "2.14.0"
+
+[dev-dependencies]
+rstest = "0.25"
+
+[features]
+default = []
+# Reserved for later phases; see DESIGN.md §3.1.
+#   validate  = []   # streaming validator + PSVI          (P5)
+#   units     = []   # unit binding extraction + conversion (P4)
+#   xml2arrow = []   # config generator                     (P3)
+#   python    = []   # pyo3 bindings                        (P6)
+
+[profile.release]
+debug = true

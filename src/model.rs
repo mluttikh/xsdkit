@@ -1,0 +1,948 @@
+//! The schema component model — the product of this crate.
+//!
+//! XSD is three languages: schema *documents*, schema *components*, and
+//! validation *semantics* over those components. This module is the middle
+//! layer, which the specification defines all its semantics against. Every
+//! consumer — typed reading, unit extraction, config generation — is built on
+//! this and never reaches back into the document syntax.
+//!
+//! # Why arenas
+//!
+//! Schemas are cyclic graphs: a complex type owns a particle referencing an
+//! element declared with that same type. `Rc<RefCell<_>>` would leak and put
+//! borrow lifetimes in every signature. Instead every component lives in an
+//! [`Arena`] and is named by a 4-byte `Copy` index, which also makes the
+//! whole [`Schemas`] one `Send + Sync` value and keeps it serializable for a
+//! future compiled-schema cache.
+
+use crate::datatypes::{Builtin, FacetSet, Variety};
+use crate::diagnostics::Span;
+use crate::names::{Interner, Namespace, QName};
+use fxhash::FxHashMap;
+use std::ops::Index;
+
+/// A typed, append-only store of one kind of component.
+#[derive(Clone, Debug)]
+pub struct Arena<T> {
+    items: Vec<T>,
+}
+
+impl<T> Default for Arena<T> {
+    fn default() -> Self {
+        Self { items: Vec::new() }
+    }
+}
+
+impl<T> Arena<T> {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    pub fn len(&self) -> usize {
+        self.items.len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.items.is_empty()
+    }
+
+    pub fn iter(&self) -> impl Iterator<Item = &T> {
+        self.items.iter()
+    }
+
+    pub(crate) fn push(&mut self, item: T) -> u32 {
+        let id = self.items.len() as u32;
+        self.items.push(item);
+        id
+    }
+
+    pub(crate) fn get_mut(&mut self, i: u32) -> &mut T {
+        &mut self.items[i as usize]
+    }
+
+    pub(crate) fn get(&self, i: u32) -> &T {
+        &self.items[i as usize]
+    }
+}
+
+/// Declares an id newtype over an arena index.
+macro_rules! component_id {
+    ($(#[$m:meta])* $name:ident) => {
+        $(#[$m])*
+        #[derive(Copy, Clone, PartialEq, Eq, Hash, PartialOrd, Ord, Debug)]
+        pub struct $name(pub(crate) u32);
+
+        impl $name {
+            /// Stands in for a reference not yet resolved.
+            ///
+            /// Present only between loading and resolution; [`Schemas`] is
+            /// never handed out with one still in place. Not every component
+            /// kind is referenced by name, so some are never placeholders.
+            #[allow(dead_code)]
+            pub(crate) const PLACEHOLDER: Self = Self(u32::MAX);
+
+            #[allow(dead_code)]
+            pub(crate) fn is_placeholder(self) -> bool {
+                self.0 == u32::MAX
+            }
+
+            pub fn index(self) -> usize {
+                self.0 as usize
+            }
+        }
+    };
+}
+
+component_id!(
+    /// A simple or complex type definition.
+    TypeId
+);
+component_id!(
+    /// An element declaration, global or local.
+    ElementId
+);
+component_id!(
+    /// An attribute declaration, global or local.
+    AttributeId
+);
+component_id!(
+    /// A particle: an occurrence range around a term.
+    ParticleId
+);
+component_id!(
+    /// A named model group definition (`xs:group`).
+    GroupId
+);
+component_id!(
+    /// A named attribute group definition (`xs:attributeGroup`).
+    AttrGroupId
+);
+component_id!(
+    /// An identity constraint (`xs:unique`, `xs:key`, `xs:keyref`).
+    IdcId
+);
+component_id!(
+    /// A notation declaration.
+    NotationId
+);
+component_id!(
+    /// An annotation, holding documentation and `appinfo`.
+    AnnotationId
+);
+
+/// Where a declaration is visible.
+///
+/// Local declarations are scoped to the complex type containing them, so
+/// `{name, targetNamespace}` is **not** a key for them.
+#[derive(Copy, Clone, PartialEq, Eq, Debug)]
+pub enum Scope {
+    Global,
+    Local(TypeId),
+}
+
+/// A `default` or `fixed` value on a declaration.
+#[derive(Clone, PartialEq, Eq, Debug)]
+pub enum ValueConstraint {
+    Default(String),
+    Fixed(String),
+}
+
+impl ValueConstraint {
+    pub fn value(&self) -> &str {
+        match self {
+            ValueConstraint::Default(v) | ValueConstraint::Fixed(v) => v,
+        }
+    }
+
+    pub fn is_fixed(&self) -> bool {
+        matches!(self, ValueConstraint::Fixed(_))
+    }
+}
+
+/// The `block` / `final` / `blockDefault` / `finalDefault` sets.
+///
+/// Post-composition these are what .NET calls `BlockResolved` and
+/// `FinalResolved`; here there is only the resolved form, because
+/// [`Schemas`] never exists before composition.
+#[derive(Copy, Clone, Default, PartialEq, Eq, Debug)]
+pub struct DerivationSet {
+    pub extension: bool,
+    pub restriction: bool,
+    pub substitution: bool,
+    pub list: bool,
+    pub union: bool,
+}
+
+impl DerivationSet {
+    pub const ALL: Self = Self {
+        extension: true,
+        restriction: true,
+        substitution: true,
+        list: true,
+        union: true,
+    };
+
+    pub fn is_empty(self) -> bool {
+        self == Self::default()
+    }
+
+    /// Parses a `block`/`final` attribute value: `#all`, or a space-separated
+    /// list of keywords. Unknown keywords are ignored by the caller's rules.
+    pub fn parse(s: &str) -> Self {
+        let s = s.trim();
+        if s == "#all" {
+            return Self::ALL;
+        }
+        let mut out = Self::default();
+        for tok in s.split_whitespace() {
+            match tok {
+                "extension" => out.extension = true,
+                "restriction" => out.restriction = true,
+                "substitution" => out.substitution = true,
+                "list" => out.list = true,
+                "union" => out.union = true,
+                _ => {}
+            }
+        }
+        out
+    }
+}
+
+/// How a complex type is derived from its base.
+#[derive(Copy, Clone, PartialEq, Eq, Debug)]
+pub enum DerivationMethod {
+    Extension,
+    Restriction,
+}
+
+// ---------------------------------------------------------------------------
+// Declarations
+// ---------------------------------------------------------------------------
+
+#[derive(Clone, Debug)]
+pub struct ElementDecl {
+    pub name: QName,
+    pub type_id: TypeId,
+    pub scope: Scope,
+    pub nillable: bool,
+    pub is_abstract: bool,
+    /// Heads this element may substitute for. XSD 1.1 permits several.
+    pub substitution_group: Vec<ElementId>,
+    pub value_constraint: Option<ValueConstraint>,
+    pub block: DerivationSet,
+    pub final_: DerivationSet,
+    pub identity_constraints: Vec<IdcId>,
+    pub annotation: Option<AnnotationId>,
+    pub span: Span,
+}
+
+#[derive(Clone, Debug)]
+pub struct AttributeDecl {
+    pub name: QName,
+    pub type_id: TypeId,
+    pub scope: Scope,
+    pub value_constraint: Option<ValueConstraint>,
+    pub annotation: Option<AnnotationId>,
+    pub span: Span,
+}
+
+#[derive(Copy, Clone, PartialEq, Eq, Debug)]
+pub enum AttributeUseKind {
+    Optional,
+    Required,
+    Prohibited,
+}
+
+/// An attribute declaration as used by one complex type.
+#[derive(Clone, Debug)]
+pub struct AttributeUse {
+    pub attribute: AttributeId,
+    pub kind: AttributeUseKind,
+    /// Overrides the declaration's own constraint when present.
+    pub value_constraint: Option<ValueConstraint>,
+}
+
+impl AttributeUse {
+    pub fn is_required(&self) -> bool {
+        self.kind == AttributeUseKind::Required
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Types
+// ---------------------------------------------------------------------------
+
+#[derive(Clone, Debug)]
+pub enum TypeDefinition {
+    Simple(SimpleType),
+    Complex(ComplexType),
+}
+
+impl TypeDefinition {
+    pub fn name(&self) -> Option<QName> {
+        match self {
+            TypeDefinition::Simple(t) => t.name,
+            TypeDefinition::Complex(t) => t.name,
+        }
+    }
+
+    pub fn is_simple(&self) -> bool {
+        matches!(self, TypeDefinition::Simple(_))
+    }
+
+    pub fn as_simple(&self) -> Option<&SimpleType> {
+        match self {
+            TypeDefinition::Simple(t) => Some(t),
+            TypeDefinition::Complex(_) => None,
+        }
+    }
+
+    pub fn as_complex(&self) -> Option<&ComplexType> {
+        match self {
+            TypeDefinition::Complex(t) => Some(t),
+            TypeDefinition::Simple(_) => None,
+        }
+    }
+
+    pub fn base(&self) -> TypeId {
+        match self {
+            TypeDefinition::Simple(t) => t.base,
+            TypeDefinition::Complex(t) => t.base,
+        }
+    }
+
+    pub fn span(&self) -> &Span {
+        match self {
+            TypeDefinition::Simple(t) => &t.span,
+            TypeDefinition::Complex(t) => &t.span,
+        }
+    }
+}
+
+#[derive(Clone, Debug)]
+pub struct SimpleType {
+    /// Absent for an anonymous type declared inline.
+    pub name: Option<QName>,
+    pub base: TypeId,
+    pub variety: Variety,
+    /// Set for atomic varieties; absent for list and union.
+    pub primitive: Option<Builtin>,
+    /// The built-in this type *is*, when it is one.
+    pub builtin: Option<Builtin>,
+    /// The item type of a list variety.
+    pub item_type: Option<TypeId>,
+    /// The member types of a union variety, in declaration order — the order
+    /// in which they are tried.
+    pub member_types: Vec<TypeId>,
+    pub facets: FacetSet,
+    pub final_: DerivationSet,
+    pub annotation: Option<AnnotationId>,
+    pub span: Span,
+}
+
+#[derive(Clone, Debug)]
+pub struct ComplexType {
+    pub name: Option<QName>,
+    pub base: TypeId,
+    pub derivation: DerivationMethod,
+    pub content: ContentType,
+    pub attribute_uses: Vec<AttributeUse>,
+    /// Attribute group references, kept unexpanded until composition.
+    pub attribute_group_refs: Vec<AttrGroupId>,
+    pub attribute_wildcard: Option<Wildcard>,
+    pub is_abstract: bool,
+    pub block: DerivationSet,
+    pub final_: DerivationSet,
+    pub annotation: Option<AnnotationId>,
+    pub span: Span,
+}
+
+/// What a complex type may contain.
+#[derive(Copy, Clone, PartialEq, Eq, Debug)]
+pub enum ContentType {
+    /// No child elements and no character data.
+    Empty,
+    /// Character data validated against a simple type.
+    Simple(TypeId),
+    /// Child elements only.
+    ElementOnly(ParticleId),
+    /// Child elements interleaved with character data.
+    Mixed(ParticleId),
+}
+
+impl ContentType {
+    pub fn particle(self) -> Option<ParticleId> {
+        match self {
+            ContentType::ElementOnly(p) | ContentType::Mixed(p) => Some(p),
+            _ => None,
+        }
+    }
+
+    pub fn is_mixed(self) -> bool {
+        matches!(self, ContentType::Mixed(_))
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Particles and model groups
+// ---------------------------------------------------------------------------
+
+#[derive(Copy, Clone, PartialEq, Eq, Debug)]
+pub enum MaxOccurs {
+    Bounded(u32),
+    Unbounded,
+}
+
+impl MaxOccurs {
+    pub fn is_repeating(self) -> bool {
+        match self {
+            MaxOccurs::Unbounded => true,
+            MaxOccurs::Bounded(n) => n > 1,
+        }
+    }
+
+    pub fn as_u32(self) -> Option<u32> {
+        match self {
+            MaxOccurs::Bounded(n) => Some(n),
+            MaxOccurs::Unbounded => None,
+        }
+    }
+}
+
+#[derive(Clone, Debug)]
+pub struct Particle {
+    pub min_occurs: u32,
+    pub max_occurs: MaxOccurs,
+    pub term: Term,
+    pub span: Span,
+}
+
+impl Particle {
+    /// Whether this particle may match more than once.
+    ///
+    /// This is the primitive the future config generator's table/column split
+    /// is built on.
+    pub fn is_repeating(&self) -> bool {
+        self.max_occurs.is_repeating()
+    }
+
+    /// Whether this particle may match zero times, making its content
+    /// optional and hence nullable.
+    pub fn is_optional(&self) -> bool {
+        self.min_occurs == 0
+    }
+}
+
+#[derive(Clone, Debug)]
+pub enum Term {
+    Element(ElementId),
+    Wildcard(Wildcard),
+    /// An inline `xs:sequence`, `xs:choice` or `xs:all`.
+    Group(ModelGroup),
+    /// A reference to a named group definition. Kept distinct from `Group`
+    /// so provenance survives into later phases.
+    GroupRef(GroupId),
+}
+
+#[derive(Copy, Clone, PartialEq, Eq, Debug)]
+pub enum Compositor {
+    Sequence,
+    Choice,
+    All,
+}
+
+#[derive(Clone, Debug)]
+pub struct ModelGroup {
+    pub compositor: Compositor,
+    pub particles: Vec<ParticleId>,
+}
+
+#[derive(Clone, Debug)]
+pub struct ModelGroupDef {
+    pub name: QName,
+    pub group: ModelGroup,
+    pub annotation: Option<AnnotationId>,
+    pub span: Span,
+}
+
+#[derive(Clone, Debug)]
+pub struct AttributeGroupDef {
+    pub name: QName,
+    pub attribute_uses: Vec<AttributeUse>,
+    pub attribute_group_refs: Vec<AttrGroupId>,
+    pub attribute_wildcard: Option<Wildcard>,
+    pub annotation: Option<AnnotationId>,
+    pub span: Span,
+}
+
+// ---------------------------------------------------------------------------
+// Wildcards
+// ---------------------------------------------------------------------------
+
+#[derive(Copy, Clone, PartialEq, Eq, Debug)]
+pub enum ProcessContents {
+    Skip,
+    Lax,
+    Strict,
+}
+
+/// Which namespaces a wildcard admits.
+#[derive(Clone, PartialEq, Eq, Debug)]
+pub enum NamespaceConstraint {
+    /// `##any`.
+    Any,
+    /// `##other`, or XSD 1.1's `notNamespace` — anything but these.
+    /// `None` inside the list means "no namespace".
+    Not(Vec<Option<Namespace>>),
+    /// An explicit list. `None` means "no namespace".
+    Enumeration(Vec<Option<Namespace>>),
+}
+
+impl NamespaceConstraint {
+    pub fn admits(&self, ns: Option<Namespace>) -> bool {
+        match self {
+            NamespaceConstraint::Any => true,
+            NamespaceConstraint::Not(list) => !list.contains(&ns),
+            NamespaceConstraint::Enumeration(list) => list.contains(&ns),
+        }
+    }
+}
+
+#[derive(Clone, PartialEq, Eq, Debug)]
+pub struct Wildcard {
+    pub namespace: NamespaceConstraint,
+    pub process_contents: ProcessContents,
+    /// XSD 1.1 `notQName`, excluding specific names from an otherwise
+    /// admitted namespace.
+    pub not_qname: Vec<QName>,
+}
+
+// ---------------------------------------------------------------------------
+// Identity constraints, notations, annotations
+// ---------------------------------------------------------------------------
+
+#[derive(Copy, Clone, PartialEq, Eq, Debug)]
+pub enum IdcKind {
+    Unique,
+    Key,
+    KeyRef,
+}
+
+/// An `xs:unique`, `xs:key` or `xs:keyref`.
+///
+/// A `keyref` is a declared foreign key between two element sets, which is
+/// exactly the relational structure a future config generator needs for its
+/// `links:` entries.
+#[derive(Clone, Debug)]
+pub struct IdentityConstraint {
+    pub name: QName,
+    pub kind: IdcKind,
+    /// The restricted XPath subset selecting the constrained node set.
+    pub selector: String,
+    /// The restricted XPath subsets selecting the key fields.
+    pub fields: Vec<String>,
+    /// The key a `keyref` refers to.
+    pub refer: Option<IdcId>,
+    pub annotation: Option<AnnotationId>,
+    pub span: Span,
+}
+
+#[derive(Clone, Debug)]
+pub struct NotationDecl {
+    pub name: QName,
+    pub public_id: Option<String>,
+    pub system_id: Option<String>,
+    pub annotation: Option<AnnotationId>,
+    pub span: Span,
+}
+
+/// Machine-readable annotation content, kept verbatim.
+///
+/// This is the seam the units layer hangs on: unit conventions that put the
+/// unit in `appinfo` need the original XML, not a summary of it.
+#[derive(Clone, PartialEq, Eq, Debug)]
+pub struct AppInfo {
+    pub source: Option<String>,
+    /// The `appinfo` element's children, re-serialized.
+    pub xml: String,
+}
+
+#[derive(Clone, Default, PartialEq, Eq, Debug)]
+pub struct Annotation {
+    pub documentation: Vec<String>,
+    pub appinfo: Vec<AppInfo>,
+}
+
+impl Annotation {
+    pub fn is_empty(&self) -> bool {
+        self.documentation.is_empty() && self.appinfo.is_empty()
+    }
+
+    /// The documentation entries joined into one string.
+    pub fn doc(&self) -> String {
+        self.documentation.join("\n\n")
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Symbol tables
+// ---------------------------------------------------------------------------
+
+/// XSD's seven independent symbol spaces.
+///
+/// A name collides only within one space *and* one namespace, so `Foo` the
+/// type and `Foo` the element are unrelated components.
+#[derive(Copy, Clone, PartialEq, Eq, Hash, Debug)]
+pub enum SymbolSpace {
+    Type,
+    Element,
+    Attribute,
+    ModelGroup,
+    AttributeGroup,
+    Notation,
+    IdentityConstraint,
+}
+
+impl SymbolSpace {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            SymbolSpace::Type => "type",
+            SymbolSpace::Element => "element",
+            SymbolSpace::Attribute => "attribute",
+            SymbolSpace::ModelGroup => "model group",
+            SymbolSpace::AttributeGroup => "attribute group",
+            SymbolSpace::Notation => "notation",
+            SymbolSpace::IdentityConstraint => "identity constraint",
+        }
+    }
+}
+
+#[derive(Clone, Default, Debug)]
+pub struct SymbolTables {
+    pub types: FxHashMap<QName, TypeId>,
+    pub elements: FxHashMap<QName, ElementId>,
+    pub attributes: FxHashMap<QName, AttributeId>,
+    pub model_groups: FxHashMap<QName, GroupId>,
+    pub attribute_groups: FxHashMap<QName, AttrGroupId>,
+    pub notations: FxHashMap<QName, NotationId>,
+    pub identity_constraints: FxHashMap<QName, IdcId>,
+}
+
+/// Provenance for one loaded schema document.
+#[derive(Clone, Debug)]
+pub struct SourceDocument {
+    pub uri: String,
+    pub target_namespace: Option<Namespace>,
+    /// True when this document was absorbed into an includer's namespace by
+    /// a chameleon include.
+    pub chameleon: bool,
+}
+
+// ---------------------------------------------------------------------------
+// Schemas
+// ---------------------------------------------------------------------------
+
+/// A compiled set of schema components.
+///
+/// Produced only by [`crate::SchemaSetBuilder::build`], so it never exists in
+/// an unresolved state — "did you call `Compile()`?", the .NET footgun, is
+/// not representable here.
+#[derive(Clone, Debug)]
+pub struct Schemas {
+    pub(crate) types: Arena<TypeDefinition>,
+    pub(crate) elements: Arena<ElementDecl>,
+    pub(crate) attributes: Arena<AttributeDecl>,
+    pub(crate) particles: Arena<Particle>,
+    pub(crate) model_groups: Arena<ModelGroupDef>,
+    pub(crate) attribute_groups: Arena<AttributeGroupDef>,
+    pub(crate) identity_constraints: Arena<IdentityConstraint>,
+    pub(crate) notations: Arena<NotationDecl>,
+    pub(crate) annotations: Arena<Annotation>,
+
+    pub(crate) names: Interner,
+    pub(crate) globals: SymbolTables,
+    pub(crate) builtins: FxHashMap<Builtin, TypeId>,
+    /// Element id -> every element that may substitute for it, transitively.
+    pub(crate) substitution_closure: FxHashMap<ElementId, Vec<ElementId>>,
+    pub(crate) documents: Vec<SourceDocument>,
+}
+
+macro_rules! arena_index {
+    ($id:ty, $item:ty, $field:ident, $getter:ident, $iter:ident) => {
+        impl Index<$id> for Schemas {
+            type Output = $item;
+            fn index(&self, id: $id) -> &$item {
+                debug_assert!(!id.is_placeholder(), "unresolved reference reached Schemas");
+                self.$field.get(id.0)
+            }
+        }
+
+        impl Schemas {
+            #[doc = concat!("Looks a component up by id, returning `None` if out of range.")]
+            pub fn $getter(&self, id: $id) -> Option<&$item> {
+                if id.is_placeholder() || id.index() >= self.$field.len() {
+                    None
+                } else {
+                    Some(self.$field.get(id.0))
+                }
+            }
+
+            #[doc = concat!("Iterates every component of this kind with its id.")]
+            pub fn $iter(&self) -> impl Iterator<Item = ($id, &$item)> {
+                self.$field
+                    .iter()
+                    .enumerate()
+                    .map(|(i, t)| (<$id>::from_index(i), t))
+            }
+        }
+
+        impl $id {
+            pub(crate) fn from_index(i: usize) -> Self {
+                Self(i as u32)
+            }
+        }
+    };
+}
+
+arena_index!(TypeId, TypeDefinition, types, get_type, iter_types);
+arena_index!(ElementId, ElementDecl, elements, get_element, iter_elements);
+arena_index!(
+    AttributeId,
+    AttributeDecl,
+    attributes,
+    get_attribute,
+    iter_attributes
+);
+arena_index!(
+    ParticleId,
+    Particle,
+    particles,
+    get_particle,
+    iter_particles
+);
+arena_index!(
+    GroupId,
+    ModelGroupDef,
+    model_groups,
+    get_model_group,
+    iter_model_groups
+);
+arena_index!(
+    AttrGroupId,
+    AttributeGroupDef,
+    attribute_groups,
+    get_attribute_group,
+    iter_attribute_groups
+);
+arena_index!(
+    IdcId,
+    IdentityConstraint,
+    identity_constraints,
+    get_identity_constraint,
+    iter_identity_constraints
+);
+arena_index!(
+    NotationId,
+    NotationDecl,
+    notations,
+    get_notation,
+    iter_notations
+);
+arena_index!(
+    AnnotationId,
+    Annotation,
+    annotations,
+    get_annotation,
+    iter_annotations
+);
+
+impl Schemas {
+    /// The string interner, for turning [`QName`]s back into text.
+    pub fn names(&self) -> &Interner {
+        &self.names
+    }
+
+    /// The global symbol tables, one map per symbol space.
+    pub fn globals(&self) -> &SymbolTables {
+        &self.globals
+    }
+
+    /// The documents this schema set was built from.
+    pub fn documents(&self) -> &[SourceDocument] {
+        &self.documents
+    }
+
+    /// Builds a [`QName`] from a namespace URI and local name, for lookups.
+    ///
+    /// Returns `None` when either string was never interned, which means no
+    /// component in this schema set can carry that name.
+    pub fn qname(&self, ns: Option<&str>, local: &str) -> Option<QName> {
+        let local = self.names.lookup(local)?;
+        let ns = match ns {
+            None | Some("") => None,
+            Some(u) => Some(Namespace::from_symbol(self.names.lookup(u)?)),
+        };
+        Some(QName { ns, local })
+    }
+
+    /// Looks up a global element declaration.
+    pub fn element(&self, ns: Option<&str>, local: &str) -> Option<ElementId> {
+        self.globals.elements.get(&self.qname(ns, local)?).copied()
+    }
+
+    /// Looks up a global type definition.
+    pub fn type_(&self, ns: Option<&str>, local: &str) -> Option<TypeId> {
+        self.globals.types.get(&self.qname(ns, local)?).copied()
+    }
+
+    /// Looks up a global attribute declaration.
+    pub fn attribute(&self, ns: Option<&str>, local: &str) -> Option<AttributeId> {
+        self.globals
+            .attributes
+            .get(&self.qname(ns, local)?)
+            .copied()
+    }
+
+    /// The `TypeId` of a built-in datatype. Always present.
+    pub fn builtin(&self, b: Builtin) -> TypeId {
+        self.builtins[&b]
+    }
+
+    /// The built-in a type *is*, if it is one.
+    pub fn as_builtin(&self, id: TypeId) -> Option<Builtin> {
+        self[id].as_simple().and_then(|t| t.builtin)
+    }
+
+    /// Renders a name in James Clark notation, `{ns}local`.
+    pub fn display_name(&self, q: QName) -> String {
+        self.names.display(q)
+    }
+
+    /// Every element that may appear where `head` is permitted, `head`
+    /// included when it is not abstract.
+    ///
+    /// Substitution is transitive, so this is the closure, not the direct
+    /// members. Without it you cannot know which element names may appear at
+    /// a position in a GML, UBL or WITSML document.
+    pub fn substitution_closure(&self, head: ElementId) -> Vec<ElementId> {
+        let mut out = Vec::new();
+        if !self[head].is_abstract {
+            out.push(head);
+        }
+        if let Some(members) = self.substitution_closure.get(&head) {
+            out.extend(members.iter().copied());
+        }
+        out
+    }
+
+    /// Walks a type's base chain from the type itself up to `xs:anyType`.
+    pub fn base_chain(&self, mut id: TypeId) -> Vec<TypeId> {
+        let mut out = vec![id];
+        let mut guard = 0usize;
+        while let Some(def) = self.get_type(id) {
+            let base = def.base();
+            if base == id || base.is_placeholder() {
+                break;
+            }
+            out.push(base);
+            id = base;
+            guard += 1;
+            if guard > self.types.len() {
+                break; // a cycle survived resolution; stop rather than hang
+            }
+        }
+        out
+    }
+
+    /// Whether `derived` is `base`, or is derived from it.
+    pub fn derives_from(&self, derived: TypeId, base: TypeId) -> bool {
+        self.base_chain(derived).contains(&base)
+    }
+
+    /// Every attribute use on a complex type, with inherited attribute groups
+    /// already merged in.
+    pub fn attribute_uses(&self, id: TypeId) -> &[AttributeUse] {
+        match &self[id] {
+            TypeDefinition::Complex(t) => &t.attribute_uses,
+            TypeDefinition::Simple(_) => &[],
+        }
+    }
+
+    /// The direct child particles of a particle whose term is a group.
+    ///
+    /// Follows a `GroupRef` through to the named definition's model group.
+    pub fn child_particles(&self, id: ParticleId) -> Vec<ParticleId> {
+        match &self[id].term {
+            Term::Group(g) => g.particles.clone(),
+            Term::GroupRef(gid) => self[*gid].group.particles.clone(),
+            _ => Vec::new(),
+        }
+    }
+
+    /// Counts of every arena, for diagnostics and tests.
+    pub fn component_counts(&self) -> ComponentCounts {
+        ComponentCounts {
+            types: self.types.len(),
+            elements: self.elements.len(),
+            attributes: self.attributes.len(),
+            particles: self.particles.len(),
+            model_groups: self.model_groups.len(),
+            attribute_groups: self.attribute_groups.len(),
+            identity_constraints: self.identity_constraints.len(),
+            notations: self.notations.len(),
+            annotations: self.annotations.len(),
+        }
+    }
+}
+
+#[derive(Copy, Clone, PartialEq, Eq, Debug)]
+pub struct ComponentCounts {
+    pub types: usize,
+    pub elements: usize,
+    pub attributes: usize,
+    pub particles: usize,
+    pub model_groups: usize,
+    pub attribute_groups: usize,
+    pub identity_constraints: usize,
+    pub notations: usize,
+    pub annotations: usize,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn derivation_sets_parse() {
+        assert_eq!(DerivationSet::parse("#all"), DerivationSet::ALL);
+        let d = DerivationSet::parse("extension restriction");
+        assert!(d.extension && d.restriction && !d.substitution);
+        assert!(DerivationSet::parse("").is_empty());
+        assert!(DerivationSet::parse("nonsense").is_empty());
+    }
+
+    #[test]
+    fn max_occurs_repetition() {
+        assert!(!MaxOccurs::Bounded(1).is_repeating());
+        assert!(!MaxOccurs::Bounded(0).is_repeating());
+        assert!(MaxOccurs::Bounded(2).is_repeating());
+        assert!(MaxOccurs::Unbounded.is_repeating());
+        assert_eq!(MaxOccurs::Unbounded.as_u32(), None);
+    }
+
+    #[test]
+    fn namespace_constraints_admit_the_right_names() {
+        let any = NamespaceConstraint::Any;
+        assert!(any.admits(None));
+        let not_none = NamespaceConstraint::Not(vec![None]);
+        assert!(!not_none.admits(None));
+        let enumerated = NamespaceConstraint::Enumeration(vec![None]);
+        assert!(enumerated.admits(None));
+    }
+
+    #[test]
+    fn placeholders_are_recognisable() {
+        assert!(TypeId::PLACEHOLDER.is_placeholder());
+        assert!(!TypeId::from_index(0).is_placeholder());
+    }
+}
