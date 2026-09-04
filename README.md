@@ -1,5 +1,6 @@
 # xsdkit
 
+[![CI](https://github.com/mluttikh/xsdkit/actions/workflows/ci.yml/badge.svg)](https://github.com/mluttikh/xsdkit/actions/workflows/ci.yml)
 [![License](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 
 A **generic XSD reader**: parse W3C XML Schema into a queryable schema

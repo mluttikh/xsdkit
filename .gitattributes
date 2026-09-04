@@ -1,0 +1,5 @@
+# The fixture is a verbatim copy of a published W3C schema, and its diagnostics
+# carry line numbers into it. A checkout that rewrites LF to CRLF would not
+# shift those, but keeping the file byte-identical across platforms means a
+# failure on Windows is a real failure rather than a checkout artefact.
+tests/fixtures/** text eol=lf

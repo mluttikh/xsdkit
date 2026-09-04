@@ -141,6 +141,13 @@ out in the PR.
   first four bugs in this crate were found by loading it once.
 - The full suite runs in under a second — run it often.
 
+CI (`.github/workflows/ci.yml`) gates on four things: `cargo fmt --check`,
+`cargo clippy --all-targets -D warnings`, tests on Linux/macOS/Windows, and
+`cargo doc` with `RUSTDOCFLAGS=-D warnings` — broken intra-doc links are only
+warnings otherwise, and two had already crept in. A fourth job compiles on the
+declared `rust-version`, because nothing enforces that claim at publish time.
+Run all five locally before pushing; they take seconds.
+
 Adding a schema feature? Add: a synthetic test for the feature alone, a
 failure test for its malformed form, and a check that it survives the real
 fixture.
