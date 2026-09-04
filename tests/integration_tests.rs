@@ -1051,3 +1051,61 @@ fn inherited_attributes_accumulate_down_a_chain() {
         .collect();
     assert_eq!(names, ["a", "b", "c"]);
 }
+
+// ---------------------------------------------------------------------------
+// Schema version
+// ---------------------------------------------------------------------------
+
+/// `xs:schema/@version` is a bare `xs:token` with no processing role, so it is
+/// reported verbatim rather than parsed.
+#[test]
+fn the_schema_version_attribute_is_reported_verbatim() {
+    let s = SchemaSetBuilder::new()
+        .text(
+            format!(
+                r#"<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema"
+                              targetNamespace="{NS}" version="3.2.2">
+                     <xs:element name="a" type="xs:string"/>
+                   </xs:schema>"#
+            ),
+            "mem://main.xsd",
+        )
+        .build()
+        .unwrap();
+    assert_eq!(s.documents()[0].version.as_deref(), Some("3.2.2"));
+}
+
+#[test]
+fn an_absent_version_is_none_not_empty() {
+    let s = build(&schema(r#"<xs:element name="a" type="xs:string"/>"#));
+    assert_eq!(s.documents()[0].version, None);
+}
+
+/// The version identifying a *vocabulary* usually lives in the target
+/// namespace; `@version` carries the patch level underneath it. Both are
+/// reachable, and they routinely disagree — GML's namespace says 3.2 while its
+/// documents say 3.2.2.
+#[test]
+fn the_namespace_and_the_version_attribute_are_separate_facts() {
+    let s = SchemaSetBuilder::new()
+        .text(
+            r#"<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema"
+                          targetNamespace="http://example.com/gml/3.2" version="3.2.2">
+                 <xs:element name="a" type="xs:string"/>
+               </xs:schema>"#,
+            "mem://main.xsd",
+        )
+        .build()
+        .unwrap();
+    let d = &s.documents()[0];
+    let ns = s.names().resolve_ns(d.target_namespace.unwrap());
+    assert!(
+        ns.ends_with("/3.2"),
+        "the namespace carries the minor version"
+    );
+    assert_eq!(
+        d.version.as_deref(),
+        Some("3.2.2"),
+        "the attribute carries the patch"
+    );
+}

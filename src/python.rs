@@ -202,6 +202,7 @@ impl PySchemaSet {
                     .target_namespace
                     .map(|n| self.inner.names().resolve_ns(n).to_string()),
                 chameleon: d.chameleon,
+                version: d.version.clone(),
             })
             .collect()
     }
@@ -1214,6 +1215,9 @@ pub struct PyDocument {
     /// True when this document had no `targetNamespace` of its own and was
     /// absorbed into its includer's.
     pub chameleon: bool,
+    /// The `xs:schema` `version` attribute, verbatim. The specification gives
+    /// it no structure and no meaning, so it is reported, not interpreted.
+    pub version: Option<String>,
 }
 
 #[pymethods]

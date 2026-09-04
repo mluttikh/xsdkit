@@ -688,6 +688,18 @@ pub struct SourceDocument {
     /// True when this document was absorbed into an includer's namespace by
     /// a chameleon include.
     pub chameleon: bool,
+    /// The `version` attribute of `xs:schema`, verbatim.
+    ///
+    /// The specification declares this as a bare `xs:token` — no pattern, no
+    /// enumeration, no default, and no processing role, unlike the
+    /// `elementFormDefault` beside it. It means whatever its author meant, so
+    /// it is reported rather than interpreted.
+    ///
+    /// In practice the version that identifies a *vocabulary* lives in the
+    /// target namespace instead, and this attribute carries the patch level
+    /// underneath it: GML's namespace is `.../gml/3.2` while its documents
+    /// say `version="3.2.2"`.
+    pub version: Option<String>,
 }
 
 // ---------------------------------------------------------------------------

@@ -538,6 +538,7 @@ impl<'r> Loader<'r> {
             uri: uri.to_string(),
             target_namespace: target_ns,
             chameleon,
+            version: root.attribute("version").map(str::to_string),
         });
 
         self.depth += 1;

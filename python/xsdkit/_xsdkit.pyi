@@ -71,6 +71,10 @@ class Document:
     #: True when the document had no ``targetNamespace`` of its own and was
     #: absorbed into its includer's.
     chameleon: bool
+    #: The ``xs:schema`` ``version`` attribute, verbatim. The specification
+    #: declares it as a bare token with no processing role, so it is reported
+    #: rather than interpreted.
+    version: str | None
 
 class AppInfo:
     source: str | None
