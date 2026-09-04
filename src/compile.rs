@@ -315,6 +315,27 @@ fn prune_placeholders(l: &mut Loader<'_>) {
             e.type_id = TypeId::from_index(0); // xs:anyType, installed first
         }
     }
+
+    // A type whose *entire* content is a dangling reference. The loops above
+    // prune dangling particles out of their containers, but a content
+    // particle has no container to be pruned from — it hangs off
+    // `ComplexType::content` directly, so it survived and reached `Schemas`
+    // as a placeholder. Found by the W3C suite, on a schema whose chameleon
+    // include could not be resolved.
+    for i in 0..l.types.len() as u32 {
+        let drop = match l.types.get(i) {
+            TypeDefinition::Complex(c) => match c.content.particle() {
+                Some(p) => particle_is_dangling(l, p),
+                None => false,
+            },
+            TypeDefinition::Simple(_) => false,
+        };
+        if drop {
+            if let TypeDefinition::Complex(c) = l.types.get_mut(i) {
+                c.content = ContentType::Empty;
+            }
+        }
+    }
 }
 
 fn particle_is_dangling(l: &Loader<'_>, p: ParticleId) -> bool {

@@ -15,7 +15,7 @@ use crate::datatypes::{
 };
 use crate::diagnostics::{DiagCode, Diagnostic, Diagnostics, Span};
 use crate::model::*;
-use crate::names::{Interner, Namespace, QName, XML, XS};
+use crate::names::{Interner, Namespace, QName, XML, XS, XSI};
 use fxhash::{FxHashMap, FxHashSet};
 use std::path::{Path, PathBuf};
 
@@ -319,6 +319,7 @@ impl<'r> Loader<'r> {
         };
         l.install_builtins();
         l.install_xml_attributes();
+        l.install_xsi_attributes();
         l
     }
 
@@ -395,6 +396,37 @@ impl<'r> Loader<'r> {
                 }
                 TypeDefinition::Complex(t) => t.base = base,
             }
+        }
+    }
+
+    /// Declares the four attributes in the `xsi:` namespace.
+    ///
+    /// `xsi:type`, `xsi:nil` and the two schemaLocation hints are available
+    /// to every schema without declaration — a schema may reference them by
+    /// `ref` and real ones do.
+    fn install_xsi_attributes(&mut self) {
+        let xsi_ns = self.names.namespace(XSI);
+        let span = Span::new(XSI, 0);
+        for (local, ty) in [
+            ("type", Builtin::QName),
+            ("nil", Builtin::Boolean),
+            ("schemaLocation", Builtin::AnySimpleType),
+            ("noNamespaceSchemaLocation", Builtin::AnyUri),
+        ] {
+            let name = QName {
+                ns: Some(xsi_ns),
+                local: self.names.intern(local),
+            };
+            let id = AttributeId(self.attributes.push(AttributeDecl {
+                name,
+                type_id: self.builtins[&ty],
+                scope: Scope::Global,
+                value_constraint: None,
+                annotation: None,
+                span: span.clone(),
+            }));
+            self.globals.attributes.insert(name, id);
+            self.predeclared.insert(name);
         }
     }
 

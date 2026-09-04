@@ -1109,3 +1109,63 @@ fn the_namespace_and_the_version_attribute_are_separate_facts() {
         "the attribute carries the patch"
     );
 }
+
+// ---------------------------------------------------------------------------
+// Regressions found by the W3C test suite
+// ---------------------------------------------------------------------------
+
+/// A type whose *entire* content is a dangling reference used to panic:
+/// dangling particles were pruned out of their containers, but a content
+/// particle hangs off `ComplexType::content` with no container to be pruned
+/// from, so it reached `Schemas` as a placeholder.
+#[test]
+fn a_type_whose_whole_content_is_a_dangling_group_ref_does_not_panic() {
+    let (s, d) = SchemaSetBuilder::new()
+        .conformance(Conformance::Lax)
+        .text(
+            schema(
+                r#"<xs:complexType name="T">
+                     <xs:group ref="tns:Nonexistent"/>
+                   </xs:complexType>
+                   <xs:element name="e" type="tns:T"/>"#,
+            ),
+            "mem://main.xsd",
+        )
+        .build_with_warnings();
+    assert!(d.iter().any(|x| x.code == DiagCode::UnresolvedReference));
+    // The type survives with empty content rather than a placeholder.
+    let t = s.type_(Some(NS), "T").unwrap();
+    assert!(s.possible_children(t).is_empty());
+    // And the whole model stays walkable.
+    assert!(s.content_model(t).is_some());
+}
+
+/// The `xsi:` *attributes* are available to every schema without being
+/// declared. The `xsi` *prefix* is not: unlike `xml:`, which the Namespaces
+/// specification binds implicitly, `xsi` is an ordinary prefix a schema must
+/// declare — and real schemas do.
+#[test]
+fn the_xsi_attributes_are_predeclared() {
+    const XSI: &str = "http://www.w3.org/2001/XMLSchema-instance";
+    let xsd = format!(
+        r#"<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema"
+                      xmlns:xsi="{XSI}" targetNamespace="{NS}">
+             <xs:element name="v">
+               <xs:complexType><xs:simpleContent>
+                 <xs:extension base="xs:decimal">
+                   <xs:attribute ref="xsi:type"/>
+                 </xs:extension>
+               </xs:simpleContent></xs:complexType>
+             </xs:element>
+           </xs:schema>"#
+    );
+    let s = SchemaSetBuilder::new()
+        .text(xsd, "mem://main.xsd")
+        .build()
+        .unwrap_or_else(|d| panic!("{d}"));
+
+    assert!(s.attribute(Some(XSI), "type").is_some());
+    assert!(s.attribute(Some(XSI), "nil").is_some());
+    let ty = s[s.element(Some(NS), "v").unwrap()].type_id;
+    assert_eq!(s.attribute_uses(ty).len(), 1, "the ref resolved");
+}

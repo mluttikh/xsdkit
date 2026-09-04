@@ -182,6 +182,39 @@ stable. Component structs have public fields on purpose — this is a model to
 be read. Adding a field is breaking for struct-literal construction; call it
 out in the PR.
 
+## Conformance
+
+`tests/w3c_suite.rs` runs the **W3C XML Schema Test Suite** — 5,737 schema
+cases from NIST, Microsoft, IBM, Sun, Boeing and Saxonica. It is 231 MB and
+not vendored; point `XSDTESTS` at a clone of
+<https://github.com/w3c/xsdtests> and it runs, otherwise it skips.
+
+```bash
+git clone --depth 1 https://github.com/w3c/xsdtests /tmp/xsdtests
+XSDTESTS=/tmp/xsdtests cargo test --test w3c_suite -- --nocapture
+```
+
+Two numbers, and the gap between them is the honest description of this
+crate:
+
+| | |
+|---|---|
+| valid schemas accepted | **98.9%** — it reads real schemas |
+| invalid schemas rejected | **21.4%** — it does not enforce most validity constraints |
+
+That asymmetry is by construction, not neglect: the Schema Component
+Constraints and the Derivation Valid rules are unimplemented (see §7). A
+schema this crate accepts is not thereby a *valid* schema.
+
+The harness carries a floor assertion on acceptance. **Raise it as the number
+improves; never lower it silently** — a drop means a schema that used to load
+no longer does.
+
+It earns its keep. Its first run found a panic that 226 hand-written tests had
+not: a type whose whole content was a dangling group reference. Dangling
+particles were pruned from their containers, but a *content* particle hangs
+off `ComplexType::content` with nothing to be pruned from.
+
 ## Testing Conventions
 
 - `src/*/mod tests` — unit tests for pure logic (facets, interning, codes).
