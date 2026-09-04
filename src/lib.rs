@@ -47,6 +47,7 @@ pub(crate) mod compile;
 pub mod content;
 pub mod datatypes;
 pub mod diagnostics;
+pub mod encoding;
 pub mod load;
 pub mod model;
 pub mod names;
@@ -91,6 +92,7 @@ pub struct SchemaSetBuilder {
 enum Source {
     Uri(String),
     Text { text: String, uri: String },
+    Bytes { bytes: Vec<u8>, uri: String },
 }
 
 impl std::fmt::Debug for dyn Resolver {
@@ -153,13 +155,26 @@ impl SchemaSetBuilder {
         self
     }
 
-    /// Queues a schema document already in memory.
+    /// Queues a schema document already in memory, as text.
     ///
     /// `uri` is used for diagnostics and to resolve relative
     /// `schemaLocation`s inside it.
     pub fn text(mut self, xsd: impl Into<String>, uri: impl Into<String>) -> Self {
         self.sources.push(Source::Text {
             text: xsd.into(),
+            uri: uri.into(),
+        });
+        self
+    }
+
+    /// Queues a schema document already in memory, as raw bytes.
+    ///
+    /// Prefer this over [`Self::text`] whenever the encoding is not known to
+    /// be UTF-8: the bytes go through the same detection as a resolved file —
+    /// byte-order mark, then the XML declaration, then UTF-8.
+    pub fn bytes(mut self, xsd: impl Into<Vec<u8>>, uri: impl Into<String>) -> Self {
+        self.sources.push(Source::Bytes {
+            bytes: xsd.into(),
             uri: uri.into(),
         });
         self
@@ -198,6 +213,7 @@ impl SchemaSetBuilder {
             match s {
                 Source::Uri(u) => loader.load_uri(u, None),
                 Source::Text { text, uri } => loader.load_text(text, uri, None),
+                Source::Bytes { bytes, uri } => loader.load_bytes(bytes, uri, None),
             }
         }
         compile::compile(loader, self.mode)

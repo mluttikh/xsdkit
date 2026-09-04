@@ -87,6 +87,10 @@ pub enum DiagCode {
     MissingAttribute,
     /// An attribute's value does not match its expected form.
     InvalidAttributeValue,
+    /// The document declares an encoding this build cannot decode.
+    UnsupportedEncoding,
+    /// The document's bytes are not valid in the encoding it claims.
+    MalformedEncoding,
 
     // 1100-1199 — composition
     /// `schemaLocation` could not be resolved to a document.
@@ -127,6 +131,8 @@ impl DiagCode {
             DiagCode::UnknownSchemaElement => "XSD1003",
             DiagCode::MissingAttribute => "XSD1004",
             DiagCode::InvalidAttributeValue => "XSD1005",
+            DiagCode::UnsupportedEncoding => "XSD1006",
+            DiagCode::MalformedEncoding => "XSD1007",
 
             DiagCode::UnresolvedSchemaLocation => "XSD1101",
             DiagCode::IncludeNamespaceMismatch => "XSD1102",
@@ -292,6 +298,8 @@ mod tests {
             DiagCode::UnknownSchemaElement,
             DiagCode::MissingAttribute,
             DiagCode::InvalidAttributeValue,
+            DiagCode::UnsupportedEncoding,
+            DiagCode::MalformedEncoding,
             DiagCode::UnresolvedSchemaLocation,
             DiagCode::IncludeNamespaceMismatch,
             DiagCode::ImportNamespaceMismatch,

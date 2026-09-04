@@ -14,9 +14,11 @@ readme = "README.md"
 roxmltree = "0.20"
 fxhash = "0.2.1"
 indexmap = "2.14.0"
+encoding_rs = "0.8.35"
 
 [dev-dependencies]
 rstest = "0.25"
+encoding_rs = "0.8.35"
 
 [features]
 default = []

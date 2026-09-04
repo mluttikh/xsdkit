@@ -23,11 +23,19 @@ use std::path::{Path, PathBuf};
 ///
 /// Implement this to load schemas from a jar, a database, an in-memory map,
 /// or the network — the default never leaves the filesystem.
+///
+/// # Why bytes, not text
+///
+/// A schema may declare any encoding, and getting the detection right means
+/// a byte-order mark, then the XML declaration, then UTF-8. Returning
+/// `String` would make every implementor redo that, and get it wrong in a
+/// different way each time. Hand back the bytes; [`crate::encoding`] decodes
+/// them once, in one place.
 pub trait Resolver {
     /// Resolves `location`, relative to `base` when `base` is known.
     ///
-    /// Returns the absolute URI it resolved to and the document text.
-    fn resolve(&self, location: &str, base: Option<&str>) -> Result<(String, String), String>;
+    /// Returns the absolute URI it resolved to and the document's raw bytes.
+    fn resolve(&self, location: &str, base: Option<&str>) -> Result<(String, Vec<u8>), String>;
 }
 
 /// Loads schema documents from the local filesystem.
@@ -53,7 +61,7 @@ fn strip_file_scheme(s: &str) -> &str {
 }
 
 impl Resolver for FileResolver {
-    fn resolve(&self, location: &str, base: Option<&str>) -> Result<(String, String), String> {
+    fn resolve(&self, location: &str, base: Option<&str>) -> Result<(String, Vec<u8>), String> {
         if location.starts_with("http://") || location.starts_with("https://") {
             return Err(format!(
                 "refusing to fetch `{location}` over the network; \
@@ -81,10 +89,9 @@ impl Resolver for FileResolver {
 
         for c in &candidates {
             if c.is_file() {
-                let text =
-                    std::fs::read_to_string(c).map_err(|e| format!("{}: {e}", c.display()))?;
+                let bytes = std::fs::read(c).map_err(|e| format!("{}: {e}", c.display()))?;
                 let abs = c.canonicalize().unwrap_or_else(|_| c.clone());
-                return Ok((abs.display().to_string(), text));
+                return Ok((abs.display().to_string(), bytes));
             }
         }
         Err(format!(
@@ -381,11 +388,22 @@ impl<'r> Loader<'r> {
 
     pub(crate) fn load_uri(&mut self, location: &str, base: Option<&str>) {
         match self.resolver.resolve(location, base) {
-            Ok((uri, text)) => self.load_text(&text, &uri, None),
+            Ok((uri, bytes)) => self.load_bytes(&bytes, &uri, None),
             Err(e) => self.diags.push(
                 Diagnostic::error(DiagCode::UnresolvedSchemaLocation, e)
                     .with_help("add a search path, or supply a custom Resolver"),
             ),
+        }
+    }
+
+    /// Decodes a document and loads it.
+    ///
+    /// An encoding failure is reported as an encoding failure, not as a
+    /// missing file — the file was found and read perfectly well.
+    pub(crate) fn load_bytes(&mut self, bytes: &[u8], uri: &str, coerce_ns: Option<Namespace>) {
+        match crate::encoding::decode_document(bytes, uri) {
+            Ok(d) => self.load_text(&d.text, uri, coerce_ns),
+            Err(diag) => self.diags.push(diag),
         }
     }
 
@@ -542,7 +560,7 @@ impl<'r> Loader<'r> {
         match self.resolver.resolve(loc, Some(&ctx.uri)) {
             // The includer's namespace is passed down so a document with no
             // targetNamespace of its own is absorbed into it.
-            Ok((uri, text)) => self.load_text(&text, &uri, ctx.target_ns),
+            Ok((uri, bytes)) => self.load_bytes(&bytes, &uri, ctx.target_ns),
             Err(e) => self.push_resolution_failure(e, doc, node, ctx),
         }
     }
@@ -554,7 +572,7 @@ impl<'r> Loader<'r> {
             return;
         };
         match self.resolver.resolve(loc, Some(&ctx.uri)) {
-            Ok((uri, text)) => self.load_text(&text, &uri, None),
+            Ok((uri, bytes)) => self.load_bytes(&bytes, &uri, None),
             Err(e) => self.push_resolution_failure(e, doc, node, ctx),
         }
     }

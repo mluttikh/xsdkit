@@ -19,10 +19,10 @@ impl MapResolver {
 }
 
 impl Resolver for MapResolver {
-    fn resolve(&self, location: &str, _base: Option<&str>) -> Result<(String, String), String> {
+    fn resolve(&self, location: &str, _base: Option<&str>) -> Result<(String, Vec<u8>), String> {
         self.0
             .get(location)
-            .map(|t| (location.to_string(), t.clone()))
+            .map(|t| (location.to_string(), t.clone().into_bytes()))
             .ok_or_else(|| format!("not in map: {location}"))
     }
 }
@@ -814,4 +814,151 @@ fn the_default_resolver_refuses_the_network() {
         .find(|e| e.code == DiagCode::UnresolvedSchemaLocation)
         .unwrap();
     assert!(e.message.contains("network"), "{}", e.message);
+}
+
+// ---------------------------------------------------------------------------
+// Document encodings
+// ---------------------------------------------------------------------------
+
+fn latin1(s: &str) -> Vec<u8> {
+    encoding_rs::WINDOWS_1252.encode(s).0.into_owned()
+}
+
+fn utf16le(s: &str) -> Vec<u8> {
+    let mut out = vec![0xFF, 0xFE];
+    for u in s.encode_utf16() {
+        out.extend_from_slice(&u.to_le_bytes());
+    }
+    out
+}
+
+/// The original repro: a schema that is legal, complete, and not UTF-8.
+#[test]
+fn a_latin1_schema_loads() {
+    let xsd = format!(
+        r#"<?xml version="1.0" encoding="ISO-8859-1"?>
+           <xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema" targetNamespace="{NS}">
+             <xs:element name="messgroesse" type="xs:double">
+               <xs:annotation><xs:documentation>Größe in Metern</xs:documentation></xs:annotation>
+             </xs:element>
+           </xs:schema>"#
+    );
+    let s = SchemaSetBuilder::new()
+        .bytes(latin1(&xsd), "mem://latin1.xsd")
+        .build()
+        .unwrap_or_else(|d| panic!("a Latin-1 schema must load:\n{d}"));
+
+    let e = s.element(Some(NS), "messgroesse").expect("element");
+    let ann = s
+        .get_annotation(s[e].annotation.expect("annotation"))
+        .unwrap();
+    assert_eq!(
+        ann.doc(),
+        "Größe in Metern",
+        "non-ASCII text must survive decoding"
+    );
+}
+
+#[test]
+fn a_utf16_schema_loads() {
+    let xsd = format!(
+        r#"<?xml version="1.0" encoding="UTF-16"?>
+           <xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema" targetNamespace="{NS}">
+             <xs:element name="temperatur" type="xs:double"/>
+           </xs:schema>"#
+    );
+    let s = SchemaSetBuilder::new()
+        .bytes(utf16le(&xsd), "mem://utf16.xsd")
+        .build()
+        .unwrap_or_else(|d| panic!("{d}"));
+    assert!(s.element(Some(NS), "temperatur").is_some());
+}
+
+#[test]
+fn a_utf8_bom_does_not_break_the_parse() {
+    let mut b = vec![0xEF, 0xBB, 0xBF];
+    b.extend_from_slice(schema(r#"<xs:element name="a" type="xs:string"/>"#).as_bytes());
+    let s = SchemaSetBuilder::new()
+        .bytes(b, "mem://bom.xsd")
+        .build()
+        .unwrap_or_else(|d| panic!("{d}"));
+    assert!(s.element(Some(NS), "a").is_some());
+}
+
+/// The failure this fix exists for: an encoding problem used to surface as a
+/// missing file, with help about search paths.
+#[test]
+fn an_encoding_failure_blames_the_encoding() {
+    let xsd = format!(
+        r#"<?xml version="1.0" encoding="Klingon-1"?>
+           <xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema" targetNamespace="{NS}"/>"#
+    );
+    let d = SchemaSetBuilder::new()
+        .bytes(xsd.into_bytes(), "mem://bad.xsd")
+        .build()
+        .expect_err("an unknown encoding must not build");
+    assert!(
+        d.errors().any(|e| e.code == DiagCode::UnsupportedEncoding),
+        "{d}"
+    );
+    assert!(
+        !d.errors()
+            .any(|e| e.code == DiagCode::UnresolvedSchemaLocation),
+        "the file was found and read; do not blame its location:\n{d}"
+    );
+}
+
+#[test]
+fn bytes_that_contradict_their_declaration_are_reported() {
+    let mut b = br#"<?xml version="1.0" encoding="UTF-8"?><xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema"><!-- "#.to_vec();
+    b.push(0xE9); // valid Latin-1, invalid UTF-8
+    b.extend_from_slice(b" --></xs:schema>");
+    let d = SchemaSetBuilder::new()
+        .bytes(b, "mem://mismatch.xsd")
+        .build()
+        .expect_err("mismatched bytes must not build");
+    assert!(
+        d.errors().any(|e| e.code == DiagCode::MalformedEncoding),
+        "{d}"
+    );
+}
+
+/// Encoding detection has to work through composition too, not just at the
+/// entry point — an included document has its own declaration.
+#[test]
+fn an_included_document_is_decoded_on_its_own_terms() {
+    struct Bytes(FxHashMap<String, Vec<u8>>);
+    impl Resolver for Bytes {
+        fn resolve(
+            &self,
+            location: &str,
+            _base: Option<&str>,
+        ) -> Result<(String, Vec<u8>), String> {
+            self.0
+                .get(location)
+                .map(|b| (location.to_string(), b.clone()))
+                .ok_or_else(|| format!("not in map: {location}"))
+        }
+    }
+
+    let part = format!(
+        r#"<?xml version="1.0" encoding="ISO-8859-1"?>
+           <xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema" targetNamespace="{NS}">
+             <xs:simpleType name="Größe"><xs:restriction base="xs:string"/></xs:simpleType>
+           </xs:schema>"#
+    );
+    let mut map = FxHashMap::default();
+    map.insert("part.xsd".to_string(), latin1(&part));
+
+    let main = schema(r#"<xs:include schemaLocation="part.xsd"/>"#);
+    let s = SchemaSetBuilder::new()
+        .resolver(Bytes(map))
+        .text(main, "mem://main.xsd")
+        .build()
+        .unwrap_or_else(|d| panic!("{d}"));
+
+    assert!(
+        s.type_(Some(NS), "Größe").is_some(),
+        "the included document's own encoding declaration must be honoured"
+    );
 }
