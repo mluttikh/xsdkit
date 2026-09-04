@@ -508,7 +508,7 @@ fn build_substitution_closure(l: &Loader<'_>) -> FxHashMap<ElementId, Vec<Elemen
     }
 
     let mut out: FxHashMap<ElementId, Vec<ElementId>> = FxHashMap::default();
-    for (&head, _) in direct.iter() {
+    for &head in direct.keys() {
         let mut seen = FxHashSet::default();
         let mut stack = vec![head];
         let mut members = Vec::new();

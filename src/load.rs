@@ -1319,24 +1319,24 @@ impl<'r> Loader<'r> {
                 }
                 None => Term::Element(self.read_element_decl(doc, node, ctx, scope, false)),
             },
-            "group" => match node.attribute("ref") {
-                Some(r) => {
-                    let q = self.attr_qname(node, r, ctx, &span)?;
-                    let pid = ParticleId(self.particles.push(Particle {
-                        min_occurs: min,
-                        max_occurs: max,
-                        term: Term::GroupRef(GroupId::PLACEHOLDER),
-                        span: span.clone(),
-                    }));
-                    self.fixups.push(Fixup::ParticleGroupRef {
-                        particle: pid,
-                        name: q,
-                        span,
-                    });
-                    return Some(pid);
-                }
-                None => return None,
-            },
+            "group" => {
+                // A `<xs:group>` particle is always a reference; an inline
+                // group would have been `sequence`/`choice`/`all`.
+                let r = node.attribute("ref")?;
+                let q = self.attr_qname(node, r, ctx, &span)?;
+                let pid = ParticleId(self.particles.push(Particle {
+                    min_occurs: min,
+                    max_occurs: max,
+                    term: Term::GroupRef(GroupId::PLACEHOLDER),
+                    span: span.clone(),
+                }));
+                self.fixups.push(Fixup::ParticleGroupRef {
+                    particle: pid,
+                    name: q,
+                    span,
+                });
+                return Some(pid);
+            }
             "any" => Term::Wildcard(self.read_wildcard(node, ctx)),
             "sequence" | "choice" | "all" => {
                 let compositor = match node.tag_name().name() {
