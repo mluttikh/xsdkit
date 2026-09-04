@@ -26,8 +26,13 @@ contract, not an accident.
 - **Not in this crate:** the `xml2arrow` YAML generator is a **separate
   package** (`xsd2arrow`). Never add an `arrow` or `xml2arrow` dependency
   here — someone with an XSD problem and no interest in Arrow must still want
-  this crate. Unit *conversion* arithmetic is likewise out; only unit
-  *extraction* (what the schema declares) is introspection and belongs here.
+  this crate.
+- **Units are out, extraction included.** No standard says where a unit lives
+  in an XSD, so any built-in detection is a heuristic — right most of the
+  time, silently wrong the rest, and a wrong unit is worse than no unit. The
+  crate exposes attribute uses, `fixed`/`default` values, enumerations and
+  `appinfo`; `examples/units.rs` shows the fifteen lines that turn those into
+  one schema family's convention. Do not add a `units` module.
 - **Design rationale:** `DESIGN.md`. Read Part I before touching the model —
   most XSD bugs come from not knowing the spec, not from bad Rust.
 
@@ -196,10 +201,10 @@ fixture.
 
 ## Planned, not present
 
-Deliberately out of scope until their phase (see `DESIGN.md` §3.14): instance
-validation and PSVI (P4, next), unit binding extraction (P5), XSD 1.1
-assertions and conditional type assignment (P6). The `xsd2arrow` package (P7)
-lives in its own repository.
+Deliberately out of scope until their phase (see `DESIGN.md` §3.14): XSD 1.1
+assertions and conditional type assignment (P5, next). The `xsd2arrow`
+package (P6) lives in its own repository. Units were a planned phase and were
+**cut on evidence** — see `DESIGN.md` §3.7.
 
 Three seams already exist and must not be removed:
 - `Annotation::appinfo` keeps `appinfo` XML **verbatim** — the units layer

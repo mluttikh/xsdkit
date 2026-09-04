@@ -36,7 +36,7 @@
 //! `import` (chameleon includes included), reference resolution, attribute
 //! group flattening and substitution-group closure.
 //!
-//! Not yet: XSD 1.1
+//! Not yet: XSD 1.1 assertions and conditional type assignment.
 //! assertions and conditional type assignment, and `redefine`/`override`
 //! (currently read as plain includes, with a warning).
 

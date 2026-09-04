@@ -362,9 +362,7 @@ the `xml2arrow` generator are made of.
    processing happens in Python, and `xmlschema` is the only complete option
    there.
 3. Schema-driven typed reading of XML documents (streaming PSVI).
-4. Unit *binding extraction*: what unit does the schema declare for this
-   value, and where does it come from.
-5. XSD 1.1.
+4. XSD 1.1.
 
 **Out of scope — code generation.** `xsd-parser` covers it, it is the single
 largest effort sink in this space, and it is orthogonal to everything above.
@@ -567,139 +565,55 @@ Three honest limitations, stated up front rather than discovered later:
 | `xs:assert` | ❌ needs the element's whole subtree | requires a buffering mode; document it |
 | `xs:key` / `keyref` | ❌ document-scope state | optional, with a memory cap |
 
-### 3.7 The units layer
+### 3.7 Units — why there is no units layer
 
-#### There is no standard, and that is a finding, not a gap
+**Cut, on evidence.** Earlier drafts of this plan had a units layer with
+per-vendor profiles. Investigating it produced the opposite conclusion.
 
-The obvious first question — *which standard do we implement?* — has a
-definite answer: **none, because XSD deliberately declined to have one.**
+There is no standard for *where* a unit lives in an XSD. Units were put to the
+XML Schema Working Group in 1999 as an optional facet on scalar datatypes and
+not adopted; UnitsML has been an OASIS Committee Specification Draft since
+2011 and is in any case a language for describing units, not for annotating a
+schema. What *is* standardised is the vocabulary written in the slot — UCUM
+for GML and HL7, UN/CEFACT Rec. 20 for UBL and e-invoicing — never the slot.
 
-- **It was proposed and rejected.** Olken and McCarthy put measurement units
-  to the XML Schema Working Group in 1999, as an optional *facet* on scalar
-  datatypes. Their own framing was "the question is not whether the
-  XML-Schema Working Group will include measurement units as part of its
-  recommendation, but whether we do so in a systematic, extensible way or in
-  a less consistent, ad-hoc way." XSD adopted `dateTime` and `duration` and
-  left units out. Ad-hoc won.
-- **UnitsML never landed.** The OASIS technical committee formed in July 2003;
-  Committee Specification Draft 04 was approved in December 2011 and it has
-  not reached OASIS Standard since. It is also a markup language for
-  *describing units themselves*, not a convention for annotating a schema.
+Measured over nine shipping schemas (GML 3.2, OGC O&M 2.0, WaterML 2.0,
+CityGML 2.0, SensorML, SWE Common, UBL 2.1) there are five unit-bearing
+attribute declarations, all `use="required"` with a free value, and **none
+uses `fixed`**. Interchange standards leave the unit open on purpose: pinning
+it would force every producer to convert before serialising. `fixed` is a
+closed-schema decision.
 
-What **is** standardised is the *vocabulary* — the code you write in the slot
-— not the slot:
+#### The decisive argument
 
-| Registry | Who mandates it |
-|---|---|
-| **UN/CEFACT Rec. 20/21** | UBL, CII, Peppol, XRechnung, EN 16931 e-invoicing |
-| **UCUM** | HL7 FHIR, DICOM, LOINC, ISO 11240 — and GML, whose `uom` is "expected to be a unit symbol appearing in UCUM" when it is not a URI |
-| **QUDT** | an RDF ontology, not an XSD binding |
-| **VOUnits** | astronomy only |
+Everything a unit reader needs is already public API, and there are only three
+shapes to distinguish:
 
-#### What real schemas actually do
+| Shape | How it is recognised | Compiles to a constant? |
+|---|---|---|
+| **Fixed** | the attribute use has a `fixed` value | **Yes** — the only one that can |
+| **Enumerated** | its type has an `enumeration` facet | No — the document chooses |
+| **Per-instance** | neither | No |
 
-Measured, not read: `xsdkit` was pointed at GML 3.2, UBL 2.1 and the W3C
-schema-for-schemas. All loaded with zero error diagnostics.
+Fifteen lines of consumer code cover all three, and `examples/units.rs` is
+that code, run against real GML and a synthetic fixed-unit schema. A layer
+inside `xsdkit` would add a *heuristic* — "an attribute named `uom`ish on
+simple content over a numeric base" — that is right most of the time and
+silently wrong the rest. For a schema reader that is the worst available
+outcome: a wrong unit is worse than no unit, because nothing downstream can
+tell.
 
-| Schema | Slot | Type | Use |
-|---|---|---|---|
-| GML 3.2 `measures.xsd` | `@uom` | `gml:UomIdentifier` — a URI *or* a UCUM symbol | required |
-| UBL 2.1 | `@unitCode` | `xs:normalizedString`, values from UN/CEFACT Rec. 20 | required |
-| WITSML/Energistics | `@uom` | an enumeration per quantity class, plus a dictionary | required |
+So `xsdkit` exposes the facts and stops: attribute uses folded down the
+derivation chain, `fixed` and `default` values, enumeration facets, `appinfo`
+kept verbatim, and schema-supplied attribute values in the PSVI flagged
+`from_schema`. Interpreting them is a per-schema-family decision, and it
+belongs with whoever knows the schema family.
 
-**The survey found a bug**, which is the real argument for doing it. GML's
-measure family is built from *vacuous* extensions — `gml:LengthType` is
-literally `<extension base="gml:MeasureType"/>` — and `attribute_uses` did not
-inherit through derivation, so all twenty GML measure types reported no `uom`
-at all. Fixed before this section was written.
+#### What this leaves for consumers
 
-#### Consequence for the design
-
-Profiles were the right instinct, for a better reason than "several
-conventions exist": with no standard to implement, a pluggable extraction
-layer is not a convenience, it is the only correct architecture. But the
-survey narrows it considerably.
-
-**Detect structurally, not by vendor.** A measure type has a recognisable
-*shape*: simple content over a numeric base, carrying an attribute. That one
-rule finds GML, UBL, WITSML and in-house schemas alike, with no per-vendor
-code. Names (`uom`, `unitCode`, `unit`, `units`) are then only a hint for
-*which* attribute is the unit when a type has several — a tie-breaker, not
-the detector.
-
-**Three binding shapes, not six.** The five "conventions" collapse once the
-question is "what does the reader have to do to learn the unit":
-
-```rust
-pub enum UnitSource {
-    /// A schema-`fixed` attribute, or a constant in `appinfo`. Known without
-    /// reading any document — the only shape that compiles to a constant.
-    Fixed(UnitRef),
-    /// A `uom`/`unitCode` attribute carrying the unit per value.
-    Attribute { name: QName },
-    /// A key or URI into an external dictionary (WITSML `uomDict`,
-    /// `gml:UnitDefinition`).
-    Dictionary { key: QName, dict: DictId },
-}
-```
-
-**Two vocabularies are worth shipping**, since between them they cover the
-schemas that exist: UCUM and UN/CEFACT Recommendation 20. Both are code lists,
-not algorithms; the arithmetic still lives outside `xsdkit` (§3.0b).
-
-**State the limit plainly.** `Attribute` bindings vary per value, so they
-cannot compile to a constant `scale`/`offset`. Only `Fixed` can. That is a
-property of the schemas, not of this implementation, and it is the same
-finding already recorded for `xml2arrow` in §3.9.
-
-#### How common is `fixed`, and how is it written?
-
-Measured over nine shipping schemas — GML 3.2 (`measures`, `units`,
-`basicTypes`), OGC O&M 2.0, WaterML 2.0, CityGML 2.0, SensorML, SWE Common,
-and UBL 2.1 — there are five unit-bearing attribute declarations and
-**none of them uses `fixed`**. All five are `use="required"` with a free
-value.
-
-That is not an oversight either. An interchange standard exists to carry data
-from many producers; pinning the unit would force every one of them to convert
-before serialising. `fixed` is a **closed-schema** decision — right when you
-own both ends and the unit is a modelling choice rather than data.
-
-It is also the *only* shape that compiles to a constant `scale`/`offset`, so
-it stays the highest-value case to detect even though it is the rarer one.
-
-Writing it has one trap. A base measure type plus per-quantity subtypes cannot
-pin the unit by **extension**: extension merges the base's attribute uses with
-its own, and two uses may not share a name. It must be a **restriction**, and
-the restriction may not widen — if the base says `use="required"`, so must the
-derived:
-
-```xml
-<xs:complexType name="LengthMetres">
-  <xs:simpleContent>
-    <xs:restriction base="tns:MeasureType">
-      <xs:attribute name="uom" type="xs:string" use="required" fixed="m"/>
-    </xs:restriction>
-  </xs:simpleContent>
-</xs:complexType>
-```
-
-Declaring it fresh needs no restriction, because `xs:double` has no `unit`
-attribute to clash with:
-
-```xml
-<xs:complexType name="Metres">
-  <xs:simpleContent>
-    <xs:extension base="xs:double">
-      <xs:attribute name="unit" type="xs:string" fixed="m"/>
-    </xs:extension>
-  </xs:simpleContent>
-</xs:complexType>
-```
-
-`xsdkit` currently accepts both the illegal extension and the widening
-restriction: the Derivation Valid constraints are not implemented. Recorded in
-`AGENTS.md` rather than fixed piecemeal.
+`xsd2arrow` (§3.8) is the first such consumer. Its unit handling becomes a
+config option — "this schema puts units in `@uom`" — rather than a guess, and
+its `scale`/`offset` emission covers the `Fixed` shape exactly.
 
 ### 3.8 `xsd2arrow` — the downstream config generator
 
@@ -954,9 +868,9 @@ streaming reads (`schemas.read_typed("doc.xml")`, P4), unit bindings
 | ~~**P2**~~ | ~~`compile`: derivation, substitution closure, content automata, UPA~~ | **done** — 55 automata, 0 UPA findings on a valid schema |
 | **P3** | **Python bindings** — the component model, Pythonic, on PyPI. Plus the `Resolver` encoding fix (below), which is breaking and must land before the API is wrapped. | wheels on 3.9–3.14; the fixture queried from Python; a Latin-1 schema loads |
 | **P4** | `validate`: streaming validator + PSVI + `TypedReader`, exposed in Python as it lands | W3C instance tests; differential vs. `xmlschema` |
-| **P5** | `units`: extraction profiles and dictionaries (GML, Energistics, appinfo, fixed-attribute) | fixed *and* per-instance bindings recovered from a real WITSML schema |
-| **P6** | XSD 1.1: assertions, conditional type assignment, `openContent`, `override` | W3C 1.1 tests |
-| **P7** | **`xsd2arrow`** — separate package, generates `xml2arrow` YAML | round-trip on `xml2arrow`'s own corpus + a real WITSML file |
+| ~~**P5**~~ | ~~`units`: extraction profiles~~ | **cut** — no standard to implement, and the public API already suffices (§3.7) |
+| **P5** | XSD 1.1: assertions, conditional type assignment, `openContent`, `override` | W3C 1.1 tests |
+| **P6** | **`xsd2arrow`** — separate package, generates `xml2arrow` YAML | round-trip on `xml2arrow`'s own corpus + a real WITSML file |
 
 **Why Python at P3.** Binding early is cheaper than binding late: it forces
 the Rust API to be ergonomic while it is still cheap to change, and each
@@ -971,10 +885,11 @@ from `xsdkit` — `possible_children`, `child_repeats`, `child_is_optional`,
 unit bindings — is built by P5, so it can start any time after that without
 blocking anything.
 
-**Why units before XSD 1.1.** Units were one of the two original motivating
-features, and the profiles are a few hundred lines. XSD 1.1 needs an XPath
-2.0 engine, is the largest remaining item by a wide margin, and matters only
-for schemas that actually use 1.1 — which most shipping schemas do not.
+**Why units are gone.** They were one of the two original motivating
+features, so cutting the phase took evidence rather than taste: no standard
+exists to implement, real interchange schemas leave units free, and the three
+binding shapes are already reachable through the public API in fifteen lines
+(§3.7). What remains is a worked example, not a subsystem.
 
 ### 3.15 Decisions worth making explicitly
 
