@@ -29,7 +29,7 @@ xsdkit = "0.1"
 ```
 
 ```rust
-use xsdkit::{SchemaSetBuilder, Term};
+use xsdkit::SchemaSetBuilder;
 
 let schemas = SchemaSetBuilder::new()
     .search_path("schemas/")
@@ -39,20 +39,21 @@ let schemas = SchemaSetBuilder::new()
 let report = schemas.element(Some("urn:example"), "report").unwrap();
 let ty = schemas[report].type_id;
 
-// Which children may appear, and may they repeat?
-if let Some(particle) = schemas[ty].as_complex().and_then(|c| c.content.particle()) {
-    for child in schemas.child_particles(particle) {
-        let p = &schemas[child];
-        if let Term::Element(e) = p.term {
-            println!(
-                "{}  repeating={}  optional={}",
-                schemas.display_name(schemas[e].name),
-                p.is_repeating(),
-                p.is_optional(),
-            );
-        }
-    }
+// Which children may appear, may they repeat, may they be absent?
+// Answered from the compiled automaton, with substitution groups expanded
+// and inherited content included.
+for child in schemas.possible_children(ty) {
+    println!(
+        "{}  repeating={}  optional={}",
+        schemas.display_name(schemas[child].name),
+        schemas.child_repeats(ty, child),
+        schemas.child_is_optional(ty, child),
+    );
 }
+
+// Does a sequence of children satisfy the content model?
+let mut m = schemas.match_content(ty).unwrap();
+let ok = m.step(schemas.qname(Some("urn:example"), "title").unwrap()) && m.accepts_end();
 ```
 
 Inspect a schema from the command line:
@@ -78,10 +79,14 @@ cargo run --example inspect -- schemas/report.xsd --lax
 - **Resolution** — references, attribute-group flattening (transitive),
   substitution-group closure (transitive, skipping abstract heads),
   `keyref` → `key`.
+- **Content models** compiled to Glushkov position automata, with
+  **Unique Particle Attribution** checking falling out of the same structure.
+  Extension appends to the base's content; restriction replaces it.
+  `xs:all` gets per-member counters rather than `n!` regex paths.
 - **Diagnostics** with stable codes, source spans and help text. Every error
   is reported, not just the first.
 
-Not yet: content-model automata and UPA, instance validation, XSD 1.1
+Not yet: instance validation, XSD 1.1
 assertions and conditional type assignment. `redefine`/`override` are read
 as plain includes, with a warning. Code generation is permanently out of
 scope — [`xsd-parser`](https://crates.io/crates/xsd-parser) covers it.

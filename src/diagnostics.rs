@@ -113,6 +113,9 @@ pub enum DiagCode {
     InvalidOccurrence,
     /// An element declaration has both a `type` attribute and inline content.
     ConflictingTypeDefinition,
+    /// A content model breaches Unique Particle Attribution: one element
+    /// could be matched by two different particles.
+    AmbiguousContentModel,
 }
 
 impl DiagCode {
@@ -137,6 +140,7 @@ impl DiagCode {
             DiagCode::ConflictingSimpleTypeVariety => "XSD1301",
             DiagCode::InvalidOccurrence => "XSD1302",
             DiagCode::ConflictingTypeDefinition => "XSD1303",
+            DiagCode::AmbiguousContentModel => "XSD1304",
         }
     }
 }
@@ -298,6 +302,7 @@ mod tests {
             DiagCode::ConflictingSimpleTypeVariety,
             DiagCode::InvalidOccurrence,
             DiagCode::ConflictingTypeDefinition,
+            DiagCode::AmbiguousContentModel,
         ];
         let mut seen = std::collections::HashSet::new();
         for c in all {

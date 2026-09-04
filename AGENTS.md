@@ -28,7 +28,7 @@
 
 ## Architecture & Data Flow
 
-Three phases, in strict order:
+Four phases, in strict order:
 
 1. **Load** (`load.rs`) — `roxmltree` reads each document into components.
    References are **not** resolved here: a `ref`/`base`/`type` becomes a
@@ -39,7 +39,10 @@ Three phases, in strict order:
    `resolve_simple_content` → `check_cycles` → `build_substitution_closure`.
    Order is load-bearing; attribute groups cannot flatten before their
    references resolve.
-3. **Query** (`model.rs`) — `Schemas`, immutable, `Send + Sync`.
+3. **Content** (`content.rs`) — every complex type's particle tree compiles
+   to a Glushkov position automaton. Runs against the *assembled* `Schemas`
+   so it can expand substitution groups while building.
+4. **Query** (`model.rs`, `content.rs`) — `Schemas`, immutable, `Send + Sync`.
 
 `SchemaSetBuilder` and `Schemas` are separate types so an unresolved
 `Schemas` is not representable — .NET needs an `IsCompiled` flag because C#
@@ -65,7 +68,33 @@ cannot express this.
 - Errors and warnings are both collected; `Conformance::Lax` downgrades
   violations that still permit building components.
 
-### 3. Behavioral contracts (pinned by tests — do not "fix" these)
+### 3. Content models
+- **UPA is automaton determinism.** A content model is 1-unambiguous exactly
+  when no state has two out-transitions with overlapping labels. Do not write
+  a separate UPA checker; extend the overlap test instead.
+- **Occurrence ranges are unrolled, not counted.** `a{2,4}` becomes three
+  positions. This keeps the automaton ordinary — no counter machinery — and
+  it is what makes `a{2,2}, a` correctly *not* a UPA breach, where collapsing
+  bounds to `+` would report a false positive.
+- **Two budgets, for two different blowups.** `MAX_UNROLL` (64 copies) bounds
+  the *quadratic* cost of unrolling; `MAX_POSITIONS` (4096) bounds total model
+  size and is deliberately far looser, because a flat sequence of hundreds of
+  distinct elements is ordinary. Past either, the range is widened to
+  unbounded and `approximated` is set, which downgrades UPA findings on that
+  model to warnings. Widening only ever *adds* reachable positions, so an
+  approximated model accepts a superset — false positives, never false
+  negatives.
+- **Extension appends, restriction replaces.** `effective_particles` walks
+  the base chain and stops at the first restriction step. Building from a
+  type's own particle alone silently loses every inherited child; a real
+  schema catches this immediately (`xs:keyref` adds only an attribute).
+- **`xs:all` gets counters, not an automaton.** Interleaving `n` members is
+  `n!` paths as a regex; per-member counts are smaller and are what the spec
+  actually describes.
+- The matcher simulates an NFA rather than determinising, so a model that
+  breaches UPA still matches — which is what `Conformance::Lax` needs.
+
+### 4. Behavioral contracts (pinned by tests — do not "fix" these)
 - **`whiteSpace` applies before lexical parsing.** It is the only difference
   between `xs:string` and `xs:token`, and why `<v> 42 </v>` parses as
   `xs:int`.
@@ -86,7 +115,7 @@ cannot express this.
   because `roxmltree` performs no I/O. Do not "harden" this by rejecting
   DTDs — it would reject the W3C's own schema.
 
-### 4. Security
+### 5. Security
 - Network fetching is **opt-in**: `FileResolver` refuses `http(s)://`.
 - Every graph walk needs a bound: `MAX_DEPTH` for includes, `nodes_limit` per
   document, cycle guards in `base_chain` and `check_cycles`.
@@ -115,15 +144,18 @@ fixture.
 
 ## Planned, not present
 
-Deliberately out of scope until their phase (see `DESIGN.md` §3.14):
-content-model automata and UPA (P2), the `xml2arrow` config generator (P3),
-the units layer (P4), instance validation and PSVI (P5), Python bindings
-(P6), XSD 1.1 assertions and conditional type assignment (P7).
+Deliberately out of scope until their phase (see `DESIGN.md` §3.14): the
+`xml2arrow` config generator (P3), the units layer (P4), instance validation
+and PSVI (P5), Python bindings (P6), XSD 1.1 assertions and conditional type
+assignment (P7).
 
-Two seams already exist and must not be removed:
+Three seams already exist and must not be removed:
 - `Annotation::appinfo` keeps `appinfo` XML **verbatim** — the units layer
   cannot recover a unit from a summary.
-- `Particle::is_repeating` / `is_optional` are the primitives the config
-  generator's table/column and nullability decisions are built on.
+- `Schemas::possible_children` / `child_repeats` / `child_is_optional` answer
+  the config generator's table-versus-column and nullability questions from
+  the automaton, not from a guess over the particle tree.
+- `ContentMatcher` is the validator's core loop; P5 adds typed values and
+  attributes around it rather than replacing it.
 
 Code generation is **permanently out of scope**. `xsd-parser` covers it.

@@ -469,9 +469,24 @@ pub enum Value {
 Compile every complex type's particle tree to a **Glushkov (position)
 automaton**, with two extensions:
 
-1. **Counting states instead of unrolling.** `minOccurs=1 maxOccurs=5000`
-   becomes one state plus a counter, not 5000 states. This is the difference
-   between loading AUTOSAR and OOMing on it.
+1. **Bounded unrolling instead of counting states.** *Revised during
+   implementation.* The original plan was a counting automaton — one state
+   plus a counter for `minOccurs=1 maxOccurs=5000`. Plain unrolling turned
+   out to be the better trade: it keeps the automaton ordinary, with no
+   counter machinery anywhere in the matcher, and it makes UPA *more*
+   accurate — `a{2,2}, a` is correctly not a breach, where collapsing bounds
+   to `+` reports a false positive.
+
+   The cost is bounded by two separate caps, because there are two different
+   blowups. `MAX_UNROLL` (64 copies) bounds the **quadratic** cost of
+   unrolling: `a{1,n}` leaves every optional copy in the `last` set, so each
+   further copy costs `O(n)` edges. `MAX_POSITIONS` (4096) bounds total model
+   size and is deliberately much looser, since a flat sequence of hundreds of
+   distinct elements is ordinary and must not be truncated. Past either cap
+   the range is widened to unbounded and the model is marked `approximated`,
+   which downgrades its UPA findings to warnings. Widening only ever adds
+   reachable positions, so an approximated model accepts a superset — false
+   positives, never false negatives.
 2. **Predicate-labelled transitions.** A wildcard's label is a namespace-set
    predicate (with 1.1's `notQName`/`notNamespace`), so 1.1's "element particle
    beats wildcard" is a transition-priority rule rather than a special case.
@@ -482,10 +497,17 @@ automaton**, with two extensions:
 two outgoing transitions with overlapping labels. Report it as a diagnostic
 with both particles' source spans; downgrade to a warning in `Lax` mode.
 
-The automaton is also what answers the two questions the config generator
-needs: *which element names can appear here* (transition labels ∪ substitution
-closure) and *can this element repeat* (is there a cycle through its state, or
-`maxOccurs > 1`).
+The automaton is also what answers the three questions the config generator
+needs, and they are already exposed: `possible_children` (transition labels ∪
+substitution closure), `child_repeats` (a cycle through the position, or
+`maxOccurs > 1`), and `child_is_optional` (an accepting path that avoids the
+position).
+
+One rule discovered while implementing: **a type's content model is not its
+own particle.** Extension appends to the base's, restriction replaces it. A
+type that extends a base and adds only an attribute has an empty particle of
+its own and every one of its base's children — `xs:keyref` is exactly that
+shape, so a real schema catches the mistake immediately.
 
 ### 3.6 Streaming typed reading (PSVI)
 

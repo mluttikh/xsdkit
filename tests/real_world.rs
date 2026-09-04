@@ -203,3 +203,86 @@ fn a_compiled_schema_is_send_and_sync() {
     let handle = std::thread::spawn(move || s.globals().types.len());
     assert!(handle.join().unwrap() > 50);
 }
+
+// ---------------------------------------------------------------------------
+// Content models
+// ---------------------------------------------------------------------------
+
+/// A valid schema must produce no UPA findings. The W3C's own is the
+/// strongest available check that the automaton construction is not
+/// manufacturing ambiguity.
+#[test]
+fn a_valid_schema_has_no_upa_violations() {
+    let (_, d) = schema_for_schemas();
+    let upa: Vec<_> = d
+        .iter()
+        .filter(|x| x.code == DiagCode::AmbiguousContentModel)
+        .collect();
+    assert!(
+        upa.is_empty(),
+        "the schema-for-schemas is valid; found:\n{d}"
+    );
+}
+
+#[test]
+fn content_models_compile_without_approximation() {
+    let (s, _) = schema_for_schemas();
+    let stats = s.content_stats();
+    assert!(stats.automata > 20, "{stats:?}");
+    assert!(stats.positions > 100, "{stats:?}");
+    assert_eq!(
+        stats.approximated, 0,
+        "no occurrence range here is large enough to need widening"
+    );
+}
+
+/// `xs:keybase` is `(xs:selector, xs:field+)` — both required, `field`
+/// repeating. Optionality and repetition must not come back as blanket
+/// answers.
+#[test]
+fn required_and_repeating_children_are_told_apart() {
+    let (s, _) = schema_for_schemas();
+    let keybase = s.type_(Some(XS), "keybase").expect("xs:keybase");
+
+    let child = |n: &str| {
+        s.possible_children(keybase)
+            .into_iter()
+            .find(|e| s.names().resolve(s[*e].name.local) == n)
+            .unwrap_or_else(|| panic!("xs:keybase should admit {n}"))
+    };
+    let selector = child("selector");
+    let field = child("field");
+
+    assert!(
+        !s.child_is_optional(keybase, selector),
+        "selector is required"
+    );
+    assert!(
+        !s.child_is_optional(keybase, field),
+        "field has minOccurs=1"
+    );
+    assert!(!s.child_repeats(keybase, selector), "selector occurs once");
+    assert!(
+        s.child_repeats(keybase, field),
+        "field is maxOccurs=unbounded"
+    );
+}
+
+/// `xs:keyref` extends `xs:keybase` and adds only an attribute, so its own
+/// particle is empty. Its children come entirely from the base.
+#[test]
+fn an_extension_exposes_its_bases_children_in_a_real_schema() {
+    let (s, _) = schema_for_schemas();
+    let keyref = s.element(Some(XS), "keyref").expect("xs:keyref");
+    let ty = s[keyref].type_id;
+
+    let names: Vec<_> = s
+        .possible_children(ty)
+        .into_iter()
+        .map(|e| s.names().resolve(s[e].name.local).to_string())
+        .collect();
+    assert!(
+        names.iter().any(|n| n == "selector") && names.iter().any(|n| n == "field"),
+        "keyref must inherit keybase's content, got {names:?}"
+    );
+}

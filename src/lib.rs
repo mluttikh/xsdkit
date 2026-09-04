@@ -44,12 +44,17 @@
 #![warn(missing_debug_implementations)]
 
 pub(crate) mod compile;
+pub mod content;
 pub mod datatypes;
 pub mod diagnostics;
 pub mod load;
 pub mod model;
 pub mod names;
 
+pub use content::{
+    AllGroup, AllMember, ContentAutomaton, ContentMatcher, ContentModel, ContentStats, Label,
+    MAX_POSITIONS, Position,
+};
 pub use diagnostics::{DiagCode, Diagnostic, Diagnostics, Severity, Span};
 pub use load::{Conformance, DEFAULT_NODES_LIMIT, FileResolver, Resolver};
 pub use model::{

@@ -57,20 +57,43 @@ fn main() {
     println!("\nglobal elements     {}", g.elements.len());
     println!("global types        {}", g.types.len());
 
-    // The two questions the future config generator is built on.
-    let mut repeating = 0usize;
-    let mut optional = 0usize;
-    for (_, p) in schemas.iter_particles() {
-        if p.is_repeating() {
-            repeating += 1;
-        }
-        if p.is_optional() {
-            optional += 1;
-        }
-        let _ = &p.term;
+    let cs = schemas.content_stats();
+    println!("\ncontent models      {}", cs.models);
+    println!(
+        "  automata          {}  ({} positions)",
+        cs.automata, cs.positions
+    );
+    println!("  xs:all groups     {}", cs.all_groups);
+    println!("  empty             {}", cs.empty);
+    if cs.approximated > 0 {
+        println!(
+            "  approximated      {}  (occurrence ranges widened)",
+            cs.approximated
+        );
     }
-    println!("\nrepeating particles {repeating}  (candidate tables)");
-    println!("optional particles  {optional}  (candidate nullable columns)");
+
+    // The two questions the future config generator is built on, answered
+    // from the automata rather than guessed from the particle tree.
+    let mut tables = 0usize;
+    let mut nullable = 0usize;
+    let mut columns = 0usize;
+    for (tid, def) in schemas.iter_types() {
+        if def.as_complex().is_none() {
+            continue;
+        }
+        for child in schemas.possible_children(tid) {
+            columns += 1;
+            if schemas.child_repeats(tid, child) {
+                tables += 1;
+            }
+            if schemas.child_is_optional(tid, child) {
+                nullable += 1;
+            }
+        }
+    }
+    println!("\nparent/child pairs  {columns}");
+    println!("  repeating         {tables}  (candidate tables)");
+    println!("  optional          {nullable}  (candidate nullable columns)");
 
     let heads: Vec<_> = schemas
         .iter_elements()

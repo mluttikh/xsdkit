@@ -9,6 +9,9 @@
 //! 3. `resolve_simple_content` points simple-content types at their base.
 //! 4. `check_cycles` rejects derivation and group chains that loop.
 //! 5. `build_substitution_closure` precomputes transitive substitution.
+//! 6. [`crate::content`] compiles every content model and checks UPA. It runs
+//!    against the finished `Schemas`, so it can expand substitution groups
+//!    while building.
 
 use crate::diagnostics::{DiagCode, Diagnostic, Diagnostics, Severity, Span};
 use crate::load::{AttrOwner, Conformance, Fixup, Loader};
@@ -41,7 +44,7 @@ pub(crate) fn compile(mut loader: Loader<'_>, mode: Conformance) -> (Schemas, Di
         ..
     } = loader;
 
-    let schemas = Schemas {
+    let mut schemas = Schemas {
         types,
         elements,
         attributes,
@@ -55,8 +58,16 @@ pub(crate) fn compile(mut loader: Loader<'_>, mode: Conformance) -> (Schemas, Di
         globals,
         builtins,
         substitution_closure,
+        content_models: Vec::new(),
         documents,
     };
+
+    // Step 6 needs the query API, so it runs on the assembled value.
+    let (models, content_diags) = crate::content::build_all(&schemas, mode);
+    schemas.content_models = models;
+    let mut diags = diags;
+    diags.extend(content_diags);
+
     (schemas, diags)
 }
 
