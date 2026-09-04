@@ -6,13 +6,16 @@
 
 ## Project Overview
 
-- **Crate:** `xsdkit` parses W3C XML Schema into a queryable **schema
-  component model**. A Python extension and a CLI (`xsd2arrow`) come later.
+- **Crate:** `xsdkit` is a **generic XSD reader** — it parses W3C XML Schema
+  into a queryable **schema component model**. Python bindings are the next
+  phase and are first-class, not an afterthought.
 - **Stack:** Rust (edition 2024), `roxmltree` (schema documents),
   `fxhash`, later `pyo3`.
-- **Consumer:** the sibling crate
-  [`xml2arrow`](https://github.com/mluttikh/xml2arrow); a config generator
-  for it is a planned feature, not a current one.
+- **Not in this crate:** the `xml2arrow` YAML generator is a **separate
+  package** (`xsd2arrow`). Never add an `arrow` or `xml2arrow` dependency
+  here — someone with an XSD problem and no interest in Arrow must still want
+  this crate. Unit *conversion* arithmetic is likewise out; only unit
+  *extraction* (what the schema declares) is introspection and belongs here.
 - **Design rationale:** `DESIGN.md`. Read Part I before touching the model —
   most XSD bugs come from not knowing the spec, not from bad Rust.
 
@@ -144,10 +147,10 @@ fixture.
 
 ## Planned, not present
 
-Deliberately out of scope until their phase (see `DESIGN.md` §3.14): the
-`xml2arrow` config generator (P3), the units layer (P4), instance validation
-and PSVI (P5), Python bindings (P6), XSD 1.1 assertions and conditional type
-assignment (P7).
+Deliberately out of scope until their phase (see `DESIGN.md` §3.14): Python
+bindings (P3, next), instance validation and PSVI (P4), unit binding
+extraction (P5), XSD 1.1 assertions and conditional type assignment (P6).
+The `xsd2arrow` package (P7) lives in its own repository.
 
 Three seams already exist and must not be removed:
 - `Annotation::appinfo` keeps `appinfo` XML **verbatim** — the units layer
@@ -155,7 +158,12 @@ Three seams already exist and must not be removed:
 - `Schemas::possible_children` / `child_repeats` / `child_is_optional` answer
   the config generator's table-versus-column and nullability questions from
   the automaton, not from a guess over the particle tree.
-- `ContentMatcher` is the validator's core loop; P5 adds typed values and
+- `ContentMatcher` is the validator's core loop; P4 adds typed values and
   attributes around it rather than replacing it.
+
+When touching the public API, remember P3 is imminent: every type here is
+about to be wrapped in a `#[pyclass]` holding `(Arc<Schemas>, Id)`. Keep
+accessors cheap and id-shaped, and keep `Schemas: Send + Sync` so the GIL can
+be released around `build()`.
 
 Code generation is **permanently out of scope**. `xsd-parser` covers it.

@@ -3,7 +3,7 @@ name = "xsdkit"
 version = "0.1.0"
 edition = "2024"
 rust-version = "1.85"
-description = "Parse W3C XML Schema (XSD) into a queryable schema component model"
+description = "A generic XSD reader: parse W3C XML Schema into a queryable schema component model"
 license = "MIT"
 repository = "https://github.com/mluttikh/xsdkit"
 keywords = ["xsd", "xml", "schema", "parser", "validation"]
@@ -20,11 +20,14 @@ rstest = "0.25"
 
 [features]
 default = []
-# Reserved for later phases; see DESIGN.md §3.1.
-#   validate  = []   # streaming validator + PSVI          (P5)
-#   units     = []   # unit binding extraction + conversion (P4)
-#   xml2arrow = []   # config generator                     (P3)
-#   python    = []   # pyo3 bindings                        (P6)
+# Reserved for later phases; see DESIGN.md §3.14.
+#   python   = []   # pyo3 bindings                    (P3, next)
+#   validate = []   # streaming validator + PSVI       (P4)
+#   units    = []   # unit binding extraction          (P5)
+#
+# The xml2arrow config generator is deliberately NOT a feature here: it is a
+# separate package (`xsd2arrow`), so that reading a schema never drags in
+# `arrow`. See DESIGN.md §3.0b.
 
 [profile.release]
 debug = true

@@ -2,12 +2,13 @@
 
 [![License](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 
-Parse W3C XML Schema (XSD) into a **queryable schema component model**.
+A **generic XSD reader**: parse W3C XML Schema into a queryable schema
+component model, in Rust and (soon) Python.
 
-> **Status: early.** The component model, document loading and reference
-> resolution work and are tested against real schemas. Instance validation,
-> the units layer and the `xml2arrow` config generator are planned — see
-> [DESIGN.md](DESIGN.md).
+> **Status: early.** The component model, document loading, reference
+> resolution and content-model compilation work, and are tested against real
+> schemas. Python bindings are next, then instance validation and the units
+> layer — see [DESIGN.md](DESIGN.md) §3.14.
 
 ## Why
 
@@ -19,7 +20,14 @@ validation semantics; `uppsala` builds a model internally but exposes only
 `validate()`. Neither can answer *"what are the possible children of this
 element, and can they repeat?"*
 
-`xsdkit` builds that layer and hands it to you.
+`xsdkit` builds that layer and hands it to you. Python is no better served:
+`xmlschema` is complete and the only real option, and by its own benchmarks
+runs 40–75× slower than lxml.
+
+It is deliberately a *reader*, not a toolchain. Code generation is
+[`xsd-parser`](https://crates.io/crates/xsd-parser)'"'"'s job. Generating
+`xml2arrow` YAML is `xsd2arrow`'"'"'s — a separate package, so that reading a
+schema never pulls in `arrow`.
 
 ## Usage
 
@@ -86,10 +94,20 @@ cargo run --example inspect -- schemas/report.xsd --lax
 - **Diagnostics** with stable codes, source spans and help text. Every error
   is reported, not just the first.
 
-Not yet: instance validation, XSD 1.1
-assertions and conditional type assignment. `redefine`/`override` are read
-as plain includes, with a warning. Code generation is permanently out of
-scope — [`xsd-parser`](https://crates.io/crates/xsd-parser) covers it.
+## Roadmap
+
+| | | |
+|---|---|---|
+| ✅ | Component model, loading, composition | done |
+| ✅ | Content automata, UPA | done |
+| → | **Python bindings** | next |
+| | Instance validation, typed reading (PSVI) | |
+| | Unit binding extraction (GML, Energistics, `appinfo`) | |
+| | XSD 1.1 | |
+| | `xsd2arrow`, a separate package | |
+
+`redefine`/`override` are currently read as plain includes, with a warning.
+Code generation is permanently out of scope.
 
 ## Diagnostics
 
