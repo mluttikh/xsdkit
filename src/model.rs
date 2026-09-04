@@ -350,6 +350,9 @@ pub struct ComplexType {
     /// Attribute group references, kept unexpanded until composition.
     pub attribute_group_refs: Vec<AttrGroupId>,
     pub attribute_wildcard: Option<Wildcard>,
+    /// XSD 1.1 open content, from `xs:openContent` here or
+    /// `xs:defaultOpenContent` on the schema.
+    pub open_content: Option<OpenContent>,
     pub is_abstract: bool,
     pub block: DerivationSet,
     pub final_: DerivationSet,
@@ -511,6 +514,50 @@ impl NamespaceConstraint {
             NamespaceConstraint::Enumeration(list) => list.contains(&ns),
         }
     }
+
+    /// Whether this constraint admits a namespace URI the schema may never
+    /// have seen.
+    ///
+    /// A wildcard exists precisely to admit names the schema does not
+    /// declare, so it cannot be answered with interned ids alone: a URI that
+    /// was never interned is not `None` — `None` means *no* namespace — it is
+    /// simply not any of the ones enumerated.
+    pub fn admits_uri(&self, names: &Interner, uri: Option<&str>) -> bool {
+        let resolved = match uri {
+            None | Some("") => Some(None),
+            Some(u) => names.lookup(u).map(|sym| Some(Namespace::from_symbol(sym))),
+        };
+        match (self, resolved) {
+            (NamespaceConstraint::Any, _) => true,
+            (_, Some(ns)) => self.admits(ns),
+            // The URI is real but unknown to this schema, so it cannot be one
+            // of the enumerated or excluded ones.
+            (NamespaceConstraint::Not(_), None) => true,
+            (NamespaceConstraint::Enumeration(_), None) => false,
+        }
+    }
+}
+
+/// Where an XSD 1.1 `xs:openContent` wildcard may appear.
+#[derive(Copy, Clone, PartialEq, Eq, Debug)]
+pub enum OpenContentMode {
+    /// Between any two particles, and at either end.
+    Interleave,
+    /// Only after the declared content is complete.
+    Suffix,
+}
+
+/// XSD 1.1 open content: a wildcard admitted alongside a declared content
+/// model rather than as part of it.
+///
+/// Kept beside the model rather than compiled into the automaton, because
+/// interleaved open content is the *shuffle* of the declared language with
+/// the wildcard's — which a position automaton cannot express, but a matcher
+/// can decide in one extra check.
+#[derive(Clone, PartialEq, Eq, Debug)]
+pub struct OpenContent {
+    pub mode: OpenContentMode,
+    pub wildcard: Wildcard,
 }
 
 #[derive(Clone, PartialEq, Eq, Debug)]
@@ -670,7 +717,7 @@ pub struct Schemas {
     /// Element id -> every element that may substitute for it, transitively.
     pub(crate) substitution_closure: FxHashMap<ElementId, Vec<ElementId>>,
     /// Compiled content models, indexed by `TypeId`. `None` for simple types.
-    pub(crate) content_models: Vec<Option<crate::content::ContentModel>>,
+    pub(crate) content_models: Vec<Option<crate::content::Content>>,
     pub(crate) documents: Vec<SourceDocument>,
 }
 

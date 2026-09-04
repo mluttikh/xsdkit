@@ -28,6 +28,7 @@ pub(crate) fn compile(mut loader: Loader<'_>, mode: Conformance) -> (Schemas, Di
     resolve_simple_content(&mut loader);
     check_cycles(&mut loader);
     let substitution_closure = build_substitution_closure(&loader);
+    let version = loader.version();
 
     let Loader {
         types,
@@ -66,7 +67,7 @@ pub(crate) fn compile(mut loader: Loader<'_>, mode: Conformance) -> (Schemas, Di
     };
 
     // Step 6 needs the query API, so it runs on the assembled value.
-    let (models, content_diags) = crate::content::build_all(&schemas, mode);
+    let (models, content_diags) = crate::content::build_all(&schemas, mode, version);
     schemas.content_models = models;
     let mut diags = diags;
     diags.extend(content_diags);

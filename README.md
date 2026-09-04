@@ -146,6 +146,9 @@ cargo run --example inspect -- schemas/report.xsd --lax
   **Unique Particle Attribution** checking falling out of the same structure.
   Extension appends to the base's content; restriction replaces it.
   `xs:all` gets per-member counters rather than `n!` regex paths.
+- **XSD 1.1**, opt-in via `Version::Xsd11`: `openContent`,
+  `defaultOpenContent`, `defaultAttributes`, and the relaxed UPA rule where an
+  element particle beats a competing wildcard.
 - **Diagnostics** with stable codes, source spans and help text. Every error
   is reported, not just the first.
 
@@ -158,7 +161,8 @@ cargo run --example inspect -- schemas/report.xsd --lax
 | ✅ | Python bindings, type stubs, encoding detection | done |
 | ✅ | Instance validation, typed reading (PSVI) | done |
 | ✅ | `redefine` / `override` | done |
-| → | **XSD 1.1: assertions, CTA, openContent** | next |
+| ✅ | XSD 1.1 open content, default attributes, relaxed UPA | done |
+| → | **XSD 1.1 assertions and conditional type assignment** | next |
 | | `xsd2arrow`, a separate package | |
 
 Code generation is permanently out of scope.

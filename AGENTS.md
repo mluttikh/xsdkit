@@ -121,6 +121,25 @@ cannot express this.
   actually describes.
 - The matcher simulates an NFA rather than determinising, so a model that
   breaches UPA still matches — which is what `Conformance::Lax` needs.
+- **A failed step must not move the matcher.** Open content can accept a child
+  the declared model rejects, so `step_automaton` leaves `active` alone when
+  no position matches. Assigning an empty `active` and *then* trying open
+  content loses the position the next child needs — the model accepted the
+  wildcard and then rejected everything after it.
+- **A wildcard must match names the schema never interned.** That is what
+  wildcards are *for*, so matching cannot go through `QName` alone: an
+  un-interned URI is not `None` (which means *no* namespace), it is simply
+  not one of the enumerated ones. `NamespaceConstraint::admits_uri` and
+  `ContentMatcher::step_foreign` are that path; the validator takes it
+  whenever `Schemas::qname` returns `None`.
+- **XSD 1.1 is opt-in** via `Version::Xsd11`, and it *relaxes* rules as well
+  as adding syntax — an element competing with a wildcard is a UPA breach in
+  1.0 and legal in 1.1. Default is 1.0: the stricter reading, and what most
+  shipping schemas are.
+- **Open content lives beside the model, not in the automaton.** Interleaved
+  open content is the shuffle of the declared language with the wildcard's,
+  which a position automaton cannot express — but the matcher decides it in
+  one extra check.
 
 ### 4. Behavioral contracts (pinned by tests — do not "fix" these)
 - **`whiteSpace` applies before lexical parsing.** It is the only difference

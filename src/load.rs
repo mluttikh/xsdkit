@@ -111,6 +111,23 @@ impl Resolver for FileResolver {
     }
 }
 
+/// Which version of XSD to process as.
+///
+/// The two differ in more than added syntax: 1.1 also *relaxes* rules 1.0
+/// enforces, most visibly Unique Particle Attribution, where an element
+/// particle competing with a wildcard is an error in 1.0 and legal in 1.1.
+/// A schema cannot be checked without knowing which is meant.
+#[derive(Copy, Clone, PartialEq, Eq, Debug, Default)]
+pub enum Version {
+    /// XSD 1.0. The default: it is what most shipping schemas are, and it is
+    /// the stricter reading, so a 1.0-clean schema is also 1.1-clean.
+    #[default]
+    Xsd10,
+    /// XSD 1.1 — `openContent`, `defaultAttributes`, conditional type
+    /// assignment, assertions, and the relaxed UPA rule.
+    Xsd11,
+}
+
 /// How strictly to treat schemas that break the specification.
 #[derive(Copy, Clone, PartialEq, Eq, Debug, Default)]
 pub enum Conformance {
@@ -216,6 +233,15 @@ struct DocCtx {
     attribute_form_qualified: bool,
     block_default: DerivationSet,
     final_default: DerivationSet,
+    /// `xs:defaultAttributes` — an attribute group applied to every complex
+    /// type in this document (1.1).
+    default_attributes: Option<QName>,
+    /// `xs:defaultOpenContent` — open content applied to every complex type
+    /// in this document that does not state its own (1.1).
+    default_open_content: Option<OpenContent>,
+    /// Whether the default open content also reaches types with empty
+    /// content.
+    default_open_applies_to_empty: bool,
 }
 
 /// Accumulates components while documents are read.
@@ -245,6 +271,8 @@ pub(crate) struct Loader<'r> {
     seen: FxHashSet<(String, Option<Namespace>)>,
     depth: usize,
     nodes_limit: u32,
+    /// Which XSD version to process as; see [`Version`].
+    version: Version,
     /// Names this crate installed itself: the built-in types and the `xml:`
     /// attributes. A document redeclaring one is not a duplicate-global
     /// error — the schema-for-schemas declares all 50 built-ins.
@@ -285,6 +313,7 @@ impl<'r> Loader<'r> {
             seen: FxHashSet::default(),
             depth: 0,
             nodes_limit: DEFAULT_NODES_LIMIT,
+            version: Version::default(),
             predeclared: FxHashSet::default(),
             in_redefine: false,
         };
@@ -321,6 +350,7 @@ impl<'r> Loader<'r> {
                         process_contents: ProcessContents::Lax,
                         not_qname: Vec::new(),
                     }),
+                    open_content: None,
                     is_abstract: false,
                     block: DerivationSet::default(),
                     final_: DerivationSet::default(),
@@ -402,6 +432,14 @@ impl<'r> Loader<'r> {
 
     pub(crate) fn set_nodes_limit(&mut self, limit: u32) {
         self.nodes_limit = limit;
+    }
+
+    pub(crate) fn set_version(&mut self, v: Version) {
+        self.version = v;
+    }
+
+    pub(crate) fn version(&self) -> Version {
+        self.version
     }
 
     pub(crate) fn load_uri(&mut self, location: &str, base: Option<&str>) {
@@ -490,7 +528,11 @@ impl<'r> Loader<'r> {
             attribute_form_qualified: root.attribute("attributeFormDefault") == Some("qualified"),
             block_default: DerivationSet::parse(root.attribute("blockDefault").unwrap_or("")),
             final_default: DerivationSet::parse(root.attribute("finalDefault").unwrap_or("")),
+            default_attributes: None,
+            default_open_content: None,
+            default_open_applies_to_empty: false,
         };
+        let ctx = self.read_document_defaults(&doc, root, ctx);
 
         self.documents.push(SourceDocument {
             uri: uri.to_string(),
@@ -569,6 +611,67 @@ impl<'r> Loader<'r> {
             Ok((uri, bytes)) => self.load_bytes(&bytes, &uri, ctx.target_ns),
             Err(e) => self.push_resolution_failure(e, doc, node, ctx),
         }
+    }
+
+    /// Reads the document-level XSD 1.1 defaults: `xs:defaultAttributes` and
+    /// `xs:defaultOpenContent`.
+    ///
+    /// Both are declared once on `xs:schema` and apply to every complex type
+    /// in that document, which is why they live on the per-document context
+    /// rather than being looked up per type.
+    fn read_document_defaults(
+        &mut self,
+        doc: &roxmltree::Document,
+        root: roxmltree::Node,
+        mut ctx: DocCtx,
+    ) -> DocCtx {
+        if let Some(v) = root.attribute("defaultAttributes") {
+            let span = Span::new(&ctx.uri, line_of(doc, root));
+            self.require_xsd11("defaultAttributes", &span);
+            ctx.default_attributes = self.attr_qname(root, v, &ctx, &span);
+        }
+        if let Some(n) = root
+            .children()
+            .filter(is_xs_element)
+            .find(|c| c.tag_name().name() == "defaultOpenContent")
+        {
+            let span = Span::new(&ctx.uri, line_of(doc, n));
+            self.require_xsd11("defaultOpenContent", &span);
+            ctx.default_open_applies_to_empty = n.attribute("appliesToEmpty") == Some("true");
+            ctx.default_open_content = self.read_open_content(n, &ctx);
+        }
+        ctx
+    }
+
+    /// Reports a construct that only XSD 1.1 defines, when reading as 1.0.
+    fn require_xsd11(&mut self, what: &str, span: &Span) {
+        if self.version == Version::Xsd10 {
+            self.diags.push(
+                Diagnostic::warning(
+                    DiagCode::Unsupported,
+                    format!("`xs:{what}` is an XSD 1.1 construct and is ignored"),
+                )
+                .at(span.clone())
+                .with_help("build with `Version::Xsd11` to process it"),
+            );
+        }
+    }
+
+    /// Reads an `xs:openContent` or `xs:defaultOpenContent` element.
+    fn read_open_content(&mut self, node: roxmltree::Node, ctx: &DocCtx) -> Option<OpenContent> {
+        let mode = match node.attribute("mode").unwrap_or("interleave") {
+            "none" => return None,
+            "suffix" => OpenContentMode::Suffix,
+            _ => OpenContentMode::Interleave,
+        };
+        let any = node
+            .children()
+            .filter(is_xs_element)
+            .find(|c| c.tag_name().name() == "any")?;
+        Some(OpenContent {
+            mode,
+            wildcard: self.read_wildcard(any, ctx),
+        })
     }
 
     /// `xs:redefine` — include a document, then modify some of its
@@ -1421,6 +1524,7 @@ impl<'r> Loader<'r> {
                 attribute_uses: Vec::new(),
                 attribute_group_refs: Vec::new(),
                 attribute_wildcard: None,
+                open_content: None,
                 is_abstract: node.attribute("abstract") == Some("true"),
                 block: node
                     .attribute("block")
@@ -1507,8 +1611,42 @@ impl<'r> Loader<'r> {
             }
         };
 
-        let (uses, groups, wildcard) =
+        let (uses, mut groups, wildcard) =
             self.read_attribute_uses(doc, member_node, ctx, AttrOwner::ComplexType(id), scope);
+
+        // `xs:defaultAttributes` reaches every complex type in the document,
+        // as though each had named the group itself.
+        if self.version == Version::Xsd11 {
+            if let Some(default_group) = ctx.default_attributes {
+                self.fixups.push(Fixup::AttrGroupRef {
+                    owner: AttrOwner::ComplexType(id),
+                    index: groups.len(),
+                    name: default_group,
+                    span: span.clone(),
+                });
+                groups.push(AttrGroupId::PLACEHOLDER);
+            }
+        }
+
+        // Open content: the type's own `xs:openContent` when it has one, else
+        // the document's default. `mode="none"` is how a type opts out.
+        let open_content = if self.version == Version::Xsd11 {
+            match member_node
+                .children()
+                .filter(is_xs_element)
+                .find(|c| c.tag_name().name() == "openContent")
+            {
+                Some(n) => self.read_open_content(n, ctx),
+                None if matches!(content, ContentType::Empty)
+                    && !ctx.default_open_applies_to_empty =>
+                {
+                    None
+                }
+                None => ctx.default_open_content.clone(),
+            }
+        } else {
+            None
+        };
 
         match self.types.get_mut(id.0) {
             TypeDefinition::Complex(t) => {
@@ -1516,6 +1654,7 @@ impl<'r> Loader<'r> {
                 t.attribute_uses = uses;
                 t.attribute_group_refs = groups;
                 t.attribute_wildcard = wildcard;
+                t.open_content = open_content;
             }
             _ => unreachable!(),
         }

@@ -38,10 +38,11 @@
 //! closure, content-model automata with UPA, and streaming instance
 //! validation with a typed PSVI.
 //!
-//! Not yet: XSD 1.1 assertions and conditional type assignment, `openContent`,
-//! and identity constraints.
-//! assertions and conditional type assignment, and `redefine`/`override`
-//! (currently read as plain includes, with a warning).
+//! XSD 1.1 is opt-in via [`Version::Xsd11`]: `openContent`,
+//! `defaultAttributes` and the relaxed UPA rule.
+//!
+//! Not yet: XSD 1.1 assertions and conditional type assignment, and identity
+//! constraints.
 
 #![forbid(unsafe_code)]
 #![warn(missing_debug_implementations)]
@@ -63,17 +64,17 @@ pub mod values;
 mod python;
 
 pub use content::{
-    AllGroup, AllMember, ContentAutomaton, ContentMatcher, ContentModel, ContentStats, Label,
-    MAX_POSITIONS, Position,
+    AllGroup, AllMember, Content, ContentAutomaton, ContentMatcher, ContentModel, ContentStats,
+    Label, MAX_POSITIONS, Position,
 };
 pub use diagnostics::{DiagCode, Diagnostic, Diagnostics, Severity, Span};
-pub use load::{Conformance, DEFAULT_NODES_LIMIT, FileResolver, Resolver};
+pub use load::{Conformance, DEFAULT_NODES_LIMIT, FileResolver, Resolver, Version};
 pub use model::{
     Annotation, AppInfo, AttrGroupId, AttributeDecl, AttributeId, AttributeUse, AttributeUseKind,
     ComplexType, ComponentCounts, Compositor, ContentType, DerivationMethod, DerivationSet,
-    ElementDecl, ElementId, IdcId, IdcKind, IdentityConstraint, MaxOccurs, ModelGroup, Particle,
-    ParticleId, Schemas, Scope, SimpleType, SourceDocument, SymbolSpace, Term, TypeDefinition,
-    TypeId, ValueConstraint, Wildcard,
+    ElementDecl, ElementId, IdcId, IdcKind, IdentityConstraint, MaxOccurs, ModelGroup, OpenContent,
+    OpenContentMode, Particle, ParticleId, Schemas, Scope, SimpleType, SourceDocument, SymbolSpace,
+    Term, TypeDefinition, TypeId, ValueConstraint, Wildcard,
 };
 pub use names::{Interner, QName};
 pub use values::{FacetViolation, Value, ValueError, check_facets};
@@ -95,6 +96,7 @@ pub struct SchemaSetBuilder {
     resolver: Option<Box<dyn Resolver>>,
     search_paths: Vec<std::path::PathBuf>,
     mode: Conformance,
+    version: Version,
     nodes_limit: u32,
     sources: Vec<Source>,
 }
@@ -124,6 +126,7 @@ impl SchemaSetBuilder {
             resolver: None,
             search_paths: Vec::new(),
             mode: Conformance::Strict,
+            version: Version::default(),
             nodes_limit: DEFAULT_NODES_LIMIT,
             sources: Vec::new(),
         }
@@ -142,6 +145,16 @@ impl SchemaSetBuilder {
     /// Ignored once [`Self::resolver`] has replaced the default.
     pub fn search_path(mut self, p: impl Into<std::path::PathBuf>) -> Self {
         self.search_paths.push(p.into());
+        self
+    }
+
+    /// Chooses which XSD version to process as.
+    ///
+    /// Defaults to [`Version::Xsd10`], which is what most shipping schemas
+    /// are and the stricter reading of the two — a 1.0-clean schema is also
+    /// 1.1-clean, but not the reverse.
+    pub fn version(mut self, v: Version) -> Self {
+        self.version = v;
         self
     }
 
@@ -220,6 +233,7 @@ impl SchemaSetBuilder {
         };
         let mut loader = Loader::new(resolver, self.mode);
         loader.set_nodes_limit(self.nodes_limit);
+        loader.set_version(self.version);
         for s in &self.sources {
             match s {
                 Source::Uri(u) => loader.load_uri(u, None),

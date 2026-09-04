@@ -192,6 +192,17 @@ pub enum ContentModel {
     All(AllGroup),
 }
 
+/// A content model together with any XSD 1.1 open content around it.
+#[derive(Clone, Debug)]
+pub struct Content {
+    pub model: ContentModel,
+    /// Kept beside the model rather than compiled into it: interleaved open
+    /// content is the *shuffle* of the declared language with the wildcard's,
+    /// which a position automaton cannot express — but a matcher decides it
+    /// in one extra check.
+    pub open: Option<OpenContent>,
+}
+
 impl ContentModel {
     pub fn is_nullable(&self) -> bool {
         match self {
@@ -479,8 +490,9 @@ fn extend_unique(dst: &mut Vec<PositionId>, src: &[PositionId]) {
 pub(crate) fn build_all(
     schemas: &Schemas,
     mode: crate::load::Conformance,
-) -> (Vec<Option<ContentModel>>, Diagnostics) {
-    let mut models = vec![None; schemas.component_counts().types];
+    version: crate::load::Version,
+) -> (Vec<Option<Content>>, Diagnostics) {
+    let mut models: Vec<Option<Content>> = vec![None; schemas.component_counts().types];
     let mut diags = Diagnostics::new();
 
     for (id, def) in schemas.iter_types() {
@@ -488,19 +500,23 @@ pub(crate) fn build_all(
             continue;
         };
         let particles = effective_particles(schemas, id);
-        models[id.index()] = Some(if particles.is_empty() {
+        let model = if particles.is_empty() {
             ContentModel::Empty
         } else {
             build_one(schemas, &particles)
-        });
+        };
+        let open = schemas[id]
+            .as_complex()
+            .and_then(|c| c.open_content.clone());
+        models[id.index()] = Some(Content { model, open });
     }
 
     for (id, def) in schemas.iter_types() {
-        let Some(model) = &models[id.index()] else {
+        let Some(content) = &models[id.index()] else {
             continue;
         };
-        if let ContentModel::Automaton(a) = model {
-            check_upa(schemas, def, a, mode, &mut diags);
+        if let ContentModel::Automaton(a) = &content.model {
+            check_upa(schemas, def, a, mode, version, &mut diags);
         }
     }
 
@@ -614,6 +630,7 @@ fn check_upa(
     def: &TypeDefinition,
     a: &ContentAutomaton,
     mode: crate::load::Conformance,
+    version: crate::load::Version,
     diags: &mut Diagnostics,
 ) {
     let mut reported: FxHashSet<(ParticleId, ParticleId)> = FxHashSet::default();
@@ -630,6 +647,13 @@ fn check_upa(
                 let Some(overlap) = overlap(schemas, p, q) else {
                     continue;
                 };
+                // XSD 1.1 resolves an element competing with a wildcard in
+                // favour of the element, so it is no longer ambiguous.
+                if version == crate::load::Version::Xsd11
+                    && matches!(overlap, Overlap::ElementAndWildcard(_))
+                {
+                    continue;
+                }
                 let key = if p.particle < q.particle {
                     (p.particle, q.particle)
                 } else {
@@ -803,6 +827,7 @@ fn upa_diagnostic(
 pub struct ContentMatcher<'a> {
     schemas: &'a Schemas,
     model: &'a ContentModel,
+    open: Option<&'a OpenContent>,
     /// Active positions, for an automaton model.
     active: Vec<PositionId>,
     /// The declaration the last successful `step` matched, if it named one.
@@ -814,7 +839,8 @@ pub struct ContentMatcher<'a> {
 }
 
 impl<'a> ContentMatcher<'a> {
-    pub fn new(schemas: &'a Schemas, model: &'a ContentModel) -> Self {
+    pub fn new(schemas: &'a Schemas, content: &'a Content) -> Self {
+        let model = &content.model;
         let counts = match model {
             ContentModel::All(g) => vec![0; g.members.len()],
             _ => Vec::new(),
@@ -822,6 +848,7 @@ impl<'a> ContentMatcher<'a> {
         Self {
             schemas,
             model,
+            open: content.open.as_ref(),
             active: Vec::new(),
             matched: None,
             counts,
@@ -843,10 +870,50 @@ impl<'a> ContentMatcher<'a> {
                 Self::step_all(self.schemas, g, &mut self.counts, name, &mut self.matched)
             }
         };
-        if !ok {
-            self.failed = true;
+        if ok {
+            return true;
         }
-        ok
+        // The declared model rejected it; XSD 1.1 open content may still
+        // admit it, *without* advancing the model — which is exactly what
+        // makes interleaved open content a shuffle rather than a sequence.
+        if self.open_admits(name) {
+            self.matched = None;
+            return true;
+        }
+        self.failed = true;
+        false
+    }
+
+    /// Whether open content admits an already-known name at this point.
+    fn open_admits(&self, name: QName) -> bool {
+        let Some(open) = self.open else { return false };
+        if !open.wildcard.namespace.admits(name.ns) || open.wildcard.not_qname.contains(&name) {
+            return false;
+        }
+        match open.mode {
+            OpenContentMode::Interleave => true,
+            // Suffix content is only legal once the declared model is
+            // satisfied, so ask it.
+            OpenContentMode::Suffix => self.model_accepts_end(),
+        }
+    }
+
+    fn model_accepts_end(&self) -> bool {
+        match self.model {
+            ContentModel::Empty => !self.started,
+            ContentModel::Automaton(a) => {
+                if !self.started {
+                    a.is_nullable()
+                } else {
+                    self.active.iter().any(|p| a.last().contains(p))
+                }
+            }
+            ContentModel::All(g) => g
+                .members
+                .iter()
+                .enumerate()
+                .all(|(i, m)| self.counts[i] >= m.min_occurs),
+        }
     }
 
     fn step_automaton(&mut self, a: &ContentAutomaton, name: QName) -> bool {
@@ -873,10 +940,16 @@ impl<'a> ContentMatcher<'a> {
                 }
             }
         }
+        if next.is_empty() {
+            // Leave the model where it was. Since open content can accept a
+            // child the declared model rejects, a failed step must not have
+            // consumed the position the next one needs.
+            return false;
+        }
         self.started = true;
         self.active = next;
         self.matched = matched;
-        !self.active.is_empty()
+        true
     }
 
     fn step_all(
@@ -916,6 +989,118 @@ impl<'a> ContentMatcher<'a> {
         false
     }
 
+    /// Consumes a child whose name the schema does not declare.
+    ///
+    /// Only a wildcard can admit such a name — which is the point of
+    /// wildcards — so element positions are skipped entirely.
+    pub fn step_foreign(&mut self, ns_uri: Option<&str>, local: &str) -> bool {
+        if self.failed {
+            return false;
+        }
+        let ok = match self.model {
+            ContentModel::Empty => false,
+            ContentModel::Automaton(a) => self.step_automaton_foreign(a, ns_uri, local),
+            ContentModel::All(g) => {
+                Self::step_all_foreign(self.schemas, g, &mut self.counts, ns_uri, local)
+            }
+        };
+        if ok {
+            self.matched = None;
+            return true;
+        }
+        if self.open_admits_uri(ns_uri, local) {
+            self.matched = None;
+            return true;
+        }
+        self.failed = true;
+        false
+    }
+
+    fn step_automaton_foreign(
+        &mut self,
+        a: &ContentAutomaton,
+        ns_uri: Option<&str>,
+        local: &str,
+    ) -> bool {
+        let candidates: Vec<PositionId> = if self.started {
+            self.active
+                .iter()
+                .flat_map(|&p| a.follow(p).iter().copied())
+                .collect()
+        } else {
+            a.first().to_vec()
+        };
+        let mut next = Vec::new();
+        for c in candidates {
+            let pos = a.position(c);
+            if !matches!(pos.label, Label::Wildcard) {
+                continue;
+            }
+            let Term::Wildcard(w) = &self.schemas[pos.particle].term else {
+                continue;
+            };
+            if w.namespace.admits_uri(self.schemas.names(), ns_uri)
+                && !excluded(self.schemas, w, ns_uri, local)
+                && !next.contains(&c)
+            {
+                next.push(c);
+            }
+        }
+        if next.is_empty() {
+            return false;
+        }
+        self.started = true;
+        self.active = next;
+        true
+    }
+
+    fn step_all_foreign(
+        schemas: &Schemas,
+        g: &AllGroup,
+        counts: &mut [u32],
+        ns_uri: Option<&str>,
+        local: &str,
+    ) -> bool {
+        for (i, m) in g.members.iter().enumerate() {
+            if !matches!(m.label, Label::Wildcard) {
+                continue;
+            }
+            let Term::Wildcard(w) = &schemas[m.particle].term else {
+                continue;
+            };
+            if !w.namespace.admits_uri(schemas.names(), ns_uri)
+                || excluded(schemas, w, ns_uri, local)
+            {
+                continue;
+            }
+            let room = match m.max_occurs {
+                MaxOccurs::Unbounded => true,
+                MaxOccurs::Bounded(n) => counts[i] < n,
+            };
+            if room {
+                counts[i] += 1;
+                return true;
+            }
+        }
+        false
+    }
+
+    fn open_admits_uri(&self, ns_uri: Option<&str>, local: &str) -> bool {
+        let Some(open) = self.open else { return false };
+        if !open
+            .wildcard
+            .namespace
+            .admits_uri(self.schemas.names(), ns_uri)
+            || excluded(self.schemas, &open.wildcard, ns_uri, local)
+        {
+            return false;
+        }
+        match open.mode {
+            OpenContentMode::Interleave => true,
+            OpenContentMode::Suffix => self.model_accepts_end(),
+        }
+    }
+
     /// The declaration the last successful [`Self::step`] matched.
     ///
     /// `None` when a wildcard matched, which admits a name without naming a
@@ -929,20 +1114,7 @@ impl<'a> ContentMatcher<'a> {
         if self.failed {
             return false;
         }
-        match self.model {
-            ContentModel::Empty => !self.started,
-            ContentModel::Automaton(a) => {
-                if !self.started {
-                    return a.is_nullable();
-                }
-                self.active.iter().any(|p| a.last().contains(p))
-            }
-            ContentModel::All(g) => g
-                .members
-                .iter()
-                .enumerate()
-                .all(|(i, m)| self.counts[i] >= m.min_occurs),
-        }
+        self.model_accepts_end()
     }
 }
 
@@ -950,6 +1122,18 @@ impl<'a> ContentMatcher<'a> {
 ///
 /// `Some(None)` means a wildcard matched, which admits a name without naming
 /// a declaration for it.
+/// Whether a wildcard's XSD 1.1 `notQName` list excludes this name.
+fn excluded(schemas: &Schemas, w: &Wildcard, ns_uri: Option<&str>, local: &str) -> bool {
+    w.not_qname.iter().any(|q| {
+        let ns_matches = match (q.ns, ns_uri) {
+            (None, None) | (None, Some("")) => true,
+            (Some(n), Some(u)) => schemas.names().resolve_ns(n) == u,
+            _ => false,
+        };
+        ns_matches && schemas.names().resolve(q.local) == local
+    })
+}
+
 fn admits(schemas: &Schemas, p: &Position, name: QName) -> Option<Option<ElementId>> {
     match &p.label {
         Label::Element(_) => p
@@ -971,16 +1155,23 @@ fn admits(schemas: &Schemas, p: &Position, name: QName) -> Option<Option<Element
 // ---------------------------------------------------------------------------
 
 impl Schemas {
-    /// The compiled content model of a complex type.
+    /// The compiled content of a complex type: its model plus any XSD 1.1
+    /// open content around it.
     ///
     /// `None` for simple types.
-    pub fn content_model(&self, id: TypeId) -> Option<&ContentModel> {
+    pub fn content(&self, id: TypeId) -> Option<&Content> {
         self.content_models.get(id.index())?.as_ref()
     }
 
-    /// Starts matching a sequence of children against a type's content model.
+    /// The compiled content model of a complex type, without its open
+    /// content.
+    pub fn content_model(&self, id: TypeId) -> Option<&ContentModel> {
+        Some(&self.content(id)?.model)
+    }
+
+    /// Starts matching a sequence of children against a type's content.
     pub fn match_content(&self, id: TypeId) -> Option<ContentMatcher<'_>> {
-        self.content_model(id).map(|m| ContentMatcher::new(self, m))
+        self.content(id).map(|c| ContentMatcher::new(self, c))
     }
 
     /// Every element that may appear directly inside this type, with
@@ -1082,14 +1273,19 @@ pub struct ContentStats {
     pub empty: usize,
     pub positions: usize,
     pub approximated: usize,
+    /// Models carrying XSD 1.1 open content.
+    pub open_content: usize,
 }
 
 impl Schemas {
     pub fn content_stats(&self) -> ContentStats {
         let mut s = ContentStats::default();
-        for m in self.content_models.iter().flatten() {
+        for c in self.content_models.iter().flatten() {
             s.models += 1;
-            match m {
+            if c.open.is_some() {
+                s.open_content += 1;
+            }
+            match &c.model {
                 ContentModel::Empty => s.empty += 1,
                 ContentModel::All(_) => s.all_groups += 1,
                 ContentModel::Automaton(a) => {

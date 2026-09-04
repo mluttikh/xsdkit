@@ -325,7 +325,7 @@ impl<'a, S: FnMut(PsviEvent)> Run<'a, '_, S> {
                 }
             }
         } else {
-            self.match_in_parent(qname, &shown, line)
+            self.match_in_parent(qname, ns.as_deref(), local, &shown, line)
         };
 
         if declaration.is_none() && !skipped {
@@ -394,6 +394,8 @@ impl<'a, S: FnMut(PsviEvent)> Run<'a, '_, S> {
     fn match_in_parent(
         &mut self,
         qname: Option<QName>,
+        ns_uri: Option<&str>,
+        local: &str,
         shown: &str,
         line: u32,
     ) -> (Option<ElementId>, bool) {
@@ -409,7 +411,12 @@ impl<'a, S: FnMut(PsviEvent)> Run<'a, '_, S> {
             return (None, true);
         };
         let Some(q) = qname else {
-            // A name no component in the schema carries cannot match anything.
+            // The schema declares no such name, so only a wildcard can admit
+            // it — which is exactly what wildcards are for. Matching on
+            // interned ids alone would reject every foreign element.
+            if matcher.step_foreign(ns_uri, local) {
+                return (None, true);
+            }
             let owner = self.show(parent_name);
             self.error(
                 DiagCode::UnexpectedElement,
