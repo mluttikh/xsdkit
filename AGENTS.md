@@ -207,7 +207,12 @@ Constraints and the Derivation Valid rules are unimplemented (see §7). A
 schema this crate accepts is not thereby a *valid* schema.
 
 The instance half — 21,671 documents — is `#[ignore]`d because it takes
-minutes where the schema half takes seconds. Run it with `-- --ignored`.
+minutes where the schema half takes seconds (4.5 minutes in `--release`; run
+it that way). Run it with `-- --ignored`. It scores 21,575 of them, 90.8%
+correct: **88.1%** of valid documents accepted, **94.1%** of invalid ones
+rejected. The shape is the mirror of the schema half — validation is
+implemented, so it catches things. 1,160 of the 1,412 false alarms sit in
+NIST2004-01-14 alone, which is where to look first.
 
 The harness carries a floor assertion on acceptance. **Raise it as the number
 improves; never lower it silently** — a drop means a schema that used to load
@@ -246,7 +251,7 @@ cargo fmt --check \
   && cargo clippy --all-targets --features python -- -D warnings \
   && cargo test --all-targets && cargo test --doc \
   && RUSTDOCFLAGS="-D warnings" cargo doc --no-deps \
-  && cargo +1.85 check --all-targets
+  && cargo +1.87 check --all-targets  # the rust-version in Cargo.toml
 ```
 
 CI uses `dtolnay/rust-toolchain@stable`, which tracks the newest stable. A
@@ -260,6 +265,52 @@ conda active, maturin refuses to run while both `VIRTUAL_ENV` and
 Adding a schema feature? Add: a synthetic test for the feature alone, a
 failure test for its malformed form, and a check that it survives the real
 fixture.
+
+## Fuzzing
+
+`fuzz/` is a `cargo-fuzz` workspace with four targets, run on nightly:
+
+```bash
+cargo +nightly fuzz run load_schema -- -max_total_time=300 -timeout=10 -rss_limit_mb=4096
+```
+
+- `load_schema` — arbitrary bytes through the loader in both versions under
+  `Conformance::Lax`, then `walk_everything`: a traversal of *every* arena,
+  calling every public accessor on every component. This is where the value is.
+  A target that only checks "did the build panic" finds nothing, because the
+  loader is written to answer rather than fail; the walk is what turns
+  `Schemas`'s invariants into assertions. Both crashes it found were surviving
+  placeholder ids, and neither was reachable from the schema roots.
+- `xsd_regex` — arbitrary text as an XSD pattern, compiled and matched.
+- `parse_value` — a leading byte selects the builtin, the rest is the lexical
+  form; parse, display, `facet_length`, `partial_cmp_value`, canonical reparse.
+  Comparison matters as much as parsing: the one finding here was a hang in an
+  *ordering*, not in a parse.
+- `validate_instance` — arbitrary bytes as an instance document against one
+  fixed schema built once in a `OnceLock`, consuming the PSVI through
+  `validate_with` and indexing every id it hands out back into the schema.
+  Same idea as the walk: the document picks the path through the automaton, so
+  the ids reaching a consumer are steered by the input in a way the loader's
+  are not.
+
+**Keep the walk honest.** `iter_*()` enumerates the arena, not the reachable
+graph, so a component pruned from its container is still handed to callers. Any
+new public accessor belongs in `walk_everything`, or the surface it opens is
+unfuzzed.
+
+The corpus is not vendored — it is derived from the same W3C suite `XSDTESTS`
+points at, and reseeded with:
+
+```bash
+find "$XSDTESTS" -name '*.xsd' -size -64k -exec cp {} fuzz/corpus/load_schema/ \;
+find "$XSDTESTS" -name '*.xml' -size -64k -exec cp {} fuzz/corpus/validate_instance/ \;
+```
+
+`fuzz/.gitignore` keeps `corpus/`, `artifacts/`, `target/` and `coverage/` out
+of the repository; only the targets and their manifest are committed. **A crash
+gets a named regression test in `tests/` or a `mod tests`, not an artifact file
+checked in** — the artifact is an opaque blob, the test says what was wrong.
+Fuzz findings are marked `Found by fuzzing` at the fix site.
 
 ## Planned, not present
 

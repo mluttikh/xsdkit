@@ -1,0 +1,43 @@
+[package]
+name = "xsdkit-fuzz"
+version = "0.0.0"
+publish = false
+edition = "2024"
+
+[package.metadata]
+cargo-fuzz = true
+
+[dependencies]
+libfuzzer-sys = "0.4"
+
+[dependencies.xsdkit]
+path = ".."
+
+[[bin]]
+name = "load_schema"
+path = "fuzz_targets/load_schema.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "xsd_regex"
+path = "fuzz_targets/xsd_regex.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "parse_value"
+path = "fuzz_targets/parse_value.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "validate_instance"
+path = "fuzz_targets/validate_instance.rs"
+test = false
+doc = false
+bench = false
+

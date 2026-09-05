@@ -106,6 +106,34 @@ jobs:
       - name: Check on the declared MSRV
         run: cargo check --all-targets
 
+  fuzz:
+    name: Fuzz (smoke)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: dtolnay/rust-toolchain@nightly
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: |
+            . -> target
+            fuzz -> fuzz/target
+      - name: Install cargo-fuzz
+        run: cargo install cargo-fuzz --locked
+      # The targets call the public API directly, so they rot the moment it
+      # changes shape — and nothing else in CI compiles them. Building is the
+      # gate that matters; the short run is a bonus, and finds nothing subtle
+      # because the corpus is not vendored (it is derived from the W3C suite,
+      # which is 231 MB). Real campaigns are run locally for minutes to hours.
+      - name: Build the fuzz targets
+        run: cargo fuzz build
+      - name: Smoke-run each target
+        run: |
+          for t in $(cargo fuzz list); do
+            echo "::group::$t"
+            cargo fuzz run "$t" -- -max_total_time=30 -timeout=10 -rss_limit_mb=4096
+            echo "::endgroup::"
+          done
+
 # Three gates are deliberately absent until they would say something:
 #
 #   semver     — `cargo-semver-checks` compares against the newest version on

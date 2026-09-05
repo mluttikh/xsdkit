@@ -233,9 +233,24 @@ constraints*, so a schema it accepts is not thereby a valid schema. If you
 need a conformance checker, use Xerces or Saxon; if you need to read a schema
 that already works, this is built for that.
 
+Document validation is the other half of the suite — 21,575 scored cases,
+90.8% correct:
+
+| | |
+|---|---|
+| valid documents accepted | **88.1%** (10,497 / 11,909) |
+| invalid documents rejected | **94.1%** (9,098 / 9,666) |
+
+Note the shape is the opposite of the schema half: the validator *does*
+enforce, so it catches 94.1% of what should be caught. The false alarms are
+concentrated — 1,160 of the 1,412 are in NIST2004-01-14, a single set of
+10,609 documents.
+
 ```bash
 git clone --depth 1 https://github.com/w3c/xsdtests /tmp/xsdtests
-XSDTESTS=/tmp/xsdtests cargo test --test w3c_suite -- --nocapture
+export XSDTESTS=/tmp/xsdtests
+cargo test --test w3c_suite -- --nocapture              # schemas, seconds
+cargo test --release --test w3c_suite -- --ignored --nocapture   # documents
 ```
 
 ## Security
@@ -250,6 +265,9 @@ Schemas arrive from elsewhere as often as documents do.
   detection closing the billion-laughs vector.
 - **Bounded work.** A per-document node cap (`nodes_limit`), an
   include-nesting cap, and cycle guards on every graph walk.
+- **Fuzzed.** Four `cargo-fuzz` targets cover the loader, the pattern
+  transpiler, value parsing and instance validation, seeded from the W3C
+  suite. Every finding has a named regression test; see `fuzz/`.
 
 ## Design
 
