@@ -288,3 +288,160 @@ fn narrowing_across_two_steps_is_not_a_conflict() {
            </xs:simpleType>"#,
     );
 }
+
+// ---------------------------------------------------------------------------
+// A restriction may only narrow
+// ---------------------------------------------------------------------------
+
+/// A bound that widens the one it inherits admits values the base rejects, so
+/// the derived type is not a subset of its base.
+#[test]
+fn a_bound_may_not_widen_the_one_it_inherits() {
+    let cases = [
+        (
+            r#"<xs:minInclusive value="10"/>"#,
+            r#"<xs:minInclusive value="5"/>"#,
+        ),
+        (
+            r#"<xs:maxInclusive value="10"/>"#,
+            r#"<xs:maxInclusive value="50"/>"#,
+        ),
+        (
+            r#"<xs:minExclusive value="10"/>"#,
+            r#"<xs:minExclusive value="5"/>"#,
+        ),
+        (
+            r#"<xs:maxExclusive value="10"/>"#,
+            r#"<xs:maxExclusive value="50"/>"#,
+        ),
+    ];
+    for (base, derived) in cases {
+        let body = format!(
+            r#"<xs:simpleType name="A">
+                 <xs:restriction base="xs:int">{base}</xs:restriction>
+               </xs:simpleType>
+               <xs:simpleType name="B">
+                 <xs:restriction base="tns:A">{derived}</xs:restriction>
+               </xs:simpleType>"#
+        );
+        assert_eq!(count(&body, DiagCode::ConflictingFacets), 1, "{derived}");
+    }
+}
+
+#[test]
+fn narrowing_the_same_bound_is_fine() {
+    clean(
+        r#"<xs:simpleType name="A">
+             <xs:restriction base="xs:int">
+               <xs:minInclusive value="0"/><xs:maxInclusive value="100"/>
+             </xs:restriction>
+           </xs:simpleType>
+           <xs:simpleType name="B">
+             <xs:restriction base="tns:A">
+               <xs:minInclusive value="10"/><xs:maxInclusive value="90"/>
+             </xs:restriction>
+           </xs:simpleType>
+           <xs:simpleType name="C">
+             <xs:restriction base="tns:B"><xs:maxInclusive value="90"/></xs:restriction>
+           </xs:simpleType>"#,
+    );
+}
+
+/// Sizes and digit counts narrow the same way, and `length` fixes the size
+/// outright — an inherited one it disagrees with is a contradiction, not a
+/// widening.
+#[test]
+fn sizes_and_digit_counts_may_only_narrow() {
+    let cases = [
+        (
+            r#"<xs:string"#,
+            r#"<xs:minLength value="5"/>"#,
+            r#"<xs:minLength value="2"/>"#,
+        ),
+        (
+            r#"<xs:string"#,
+            r#"<xs:maxLength value="5"/>"#,
+            r#"<xs:maxLength value="9"/>"#,
+        ),
+        (
+            r#"<xs:string"#,
+            r#"<xs:length value="5"/>"#,
+            r#"<xs:length value="4"/>"#,
+        ),
+        (
+            r#"<xs:decimal"#,
+            r#"<xs:totalDigits value="4"/>"#,
+            r#"<xs:totalDigits value="8"/>"#,
+        ),
+        (
+            r#"<xs:decimal"#,
+            r#"<xs:fractionDigits value="1"/>"#,
+            r#"<xs:fractionDigits value="3"/>"#,
+        ),
+    ];
+    for (prim, base, derived) in cases {
+        let body = format!(
+            r#"<xs:simpleType name="A">
+                 <xs:restriction base="{p}">{base}</xs:restriction>
+               </xs:simpleType>
+               <xs:simpleType name="B">
+                 <xs:restriction base="tns:A">{derived}</xs:restriction>
+               </xs:simpleType>"#,
+            p = prim.trim_start_matches('<')
+        );
+        assert_eq!(count(&body, DiagCode::ConflictingFacets), 1, "{derived}");
+    }
+}
+
+/// The narrowing rule alone misses a minimum raised above an *inherited*
+/// maximum: nothing widened, and the type still accepts nothing. The composed
+/// set is what catches it.
+#[test]
+fn the_composed_range_must_hold_something() {
+    assert_eq!(
+        count(
+            r#"<xs:simpleType name="A">
+                 <xs:restriction base="xs:int"><xs:maxInclusive value="10"/></xs:restriction>
+               </xs:simpleType>
+               <xs:simpleType name="B">
+                 <xs:restriction base="tns:A"><xs:minInclusive value="20"/></xs:restriction>
+               </xs:simpleType>"#,
+            DiagCode::ConflictingFacets
+        ),
+        1
+    );
+    // Both bounds on one step, which is the ordinary way to get it wrong.
+    assert_eq!(
+        count(
+            r#"<xs:simpleType name="T">
+                 <xs:restriction base="xs:yearMonthDuration">
+                   <xs:minInclusive value="P1Y10M"/>
+                   <xs:maxInclusive value="P1Y1M"/>
+                 </xs:restriction>
+               </xs:simpleType>"#,
+            DiagCode::ConflictingFacets
+        ),
+        1
+    );
+    // Equal bounds admit that one value — unless an end excludes it, and then
+    // the type accepts nothing at all.
+    clean(
+        r#"<xs:simpleType name="T">
+             <xs:restriction base="xs:int">
+               <xs:minInclusive value="7"/><xs:maxInclusive value="7"/>
+             </xs:restriction>
+           </xs:simpleType>"#,
+    );
+    assert_eq!(
+        count(
+            r#"<xs:simpleType name="T">
+                 <xs:restriction base="xs:yearMonthDuration">
+                   <xs:minExclusive value="P1Y1M"/>
+                   <xs:maxExclusive value="P1Y1M"/>
+                 </xs:restriction>
+               </xs:simpleType>"#,
+            DiagCode::ConflictingFacets
+        ),
+        1
+    );
+}

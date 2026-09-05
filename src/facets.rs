@@ -17,18 +17,25 @@
 //! These run against the assembled `Schemas` rather than at load time,
 //! because every one of them needs the base type resolved.
 //!
-//! Deliberately *not* here: whether a facet legally restricts the same facet
-//! on the base. That is a derivation rule, and the derivation rules are
-//! unimplemented as a set (see AGENTS.md §7).
+//! 4. **Narrowing.** A restriction may only narrow. A bound that widens the
+//!    one it inherits admits values the base rejects, so the derived type is
+//!    not a subset of it — and a composed range whose minimum sits above its
+//!    maximum describes a type that accepts nothing.
+//!
+//! Deliberately *not* here: particle subsumption, the same "may only narrow"
+//! idea applied to content models. That one is unimplemented as a set (see
+//! AGENTS.md §7); these four are each complete on their own.
 
 use crate::datatypes::{Builtin, FacetKind, FacetSet, Variety};
 use crate::diagnostics::{DiagCode, Diagnostic, Diagnostics, Span};
 use crate::model::{Schemas, SimpleType, TypeId};
-use crate::validate;
+use crate::validate::{self, Validator};
 use crate::values;
+use std::cmp::Ordering;
 
 pub(crate) fn check_all(schemas: &Schemas) -> Diagnostics {
     let mut diags = Diagnostics::new();
+    let v = schemas.validator();
     for (id, def) in schemas.iter_types() {
         let Some(s) = def.as_simple() else { continue };
         // The built-ins are installed by this crate, not read from a
@@ -36,15 +43,151 @@ pub(crate) fn check_all(schemas: &Schemas) -> Diagnostics {
         if s.builtin.is_some() {
             continue;
         }
-        check_one(schemas, id, s, &mut diags);
+        check_one(schemas, &v, id, s, &mut diags);
     }
     diags
 }
 
-fn check_one(schemas: &Schemas, id: TypeId, s: &SimpleType, diags: &mut Diagnostics) {
+fn check_one(
+    schemas: &Schemas,
+    v: &Validator<'_>,
+    id: TypeId,
+    s: &SimpleType,
+    diags: &mut Diagnostics,
+) {
     applicable(schemas, id, s, diags);
     values_are_in_the_base_space(schemas, id, s, diags);
     consistent(s, &s.span, diags);
+    narrows(schemas, v, id, s, diags);
+}
+
+/// Rule 4: a restriction may only narrow.
+///
+/// Two halves, and both are needed. A bound declared here must not widen the
+/// one it inherits — `minInclusive="5"` under a base that already said 10
+/// admits values the base rejects, so the derived type is not a subset of it.
+/// And the composed set has to describe a non-empty range at all: a type whose
+/// effective minimum sits above its effective maximum accepts nothing, which
+/// is never what the author meant and is not a legal type.
+fn narrows(
+    schemas: &Schemas,
+    v: &Validator<'_>,
+    id: TypeId,
+    s: &SimpleType,
+    diags: &mut Diagnostics,
+) {
+    let (variety, ..) = validate::effective_variety(schemas, id);
+    let own = &s.facets;
+
+    // Sizes and digit counts are plain integers, so they compare without a
+    // value space and apply to lists as well as atomic types.
+    let base = v.effective_facets(s.base);
+    let mut err = |msg: String| {
+        diags.push(Diagnostic::error(DiagCode::ConflictingFacets, msg).at(s.span.clone()));
+    };
+    if let Some(b) = base {
+        let widened = |name: &str, own: Option<u64>, inherited: Option<u64>, grew: bool| match (
+            own, inherited,
+        ) {
+            (Some(o), Some(i)) if grew == (o > i) && o != i => {
+                Some(format!("`xs:{name}` {o} is wider than the inherited {i}"))
+            }
+            _ => None,
+        };
+        for m in [
+            widened("minLength", own.min_length, b.min_length, false),
+            widened("maxLength", own.max_length, b.max_length, true),
+            widened(
+                "totalDigits",
+                own.total_digits.map(u64::from),
+                b.total_digits.map(u64::from),
+                true,
+            ),
+            widened(
+                "fractionDigits",
+                own.fraction_digits.map(u64::from),
+                b.fraction_digits.map(u64::from),
+                true,
+            ),
+        ]
+        .into_iter()
+        .flatten()
+        {
+            err(m);
+        }
+        // `length` fixes the size outright, so any inherited one it disagrees
+        // with is a contradiction rather than a widening.
+        if let (Some(o), Some(i)) = (own.length, b.length) {
+            if o != i {
+                err(format!("`xs:length` {o} disagrees with the inherited {i}"));
+            }
+        }
+    }
+
+    // The bounds live in a value space, so they need a built-in to parse
+    // against — and a union has no single one.
+    if variety != Variety::Atomic {
+        return;
+    }
+    let Some(builtin) = validate::nearest_builtin(schemas, s.base) else {
+        return;
+    };
+    if matches!(builtin, Builtin::QName | Builtin::Notation) {
+        return;
+    }
+    let cmp = |a: &str, b: &str| {
+        values::parse(builtin, a)
+            .ok()?
+            .partial_cmp_value(&values::parse(builtin, b).ok()?)
+    };
+
+    // Half one: each bound declared here against the one it inherits.
+    if let Some(b) = base {
+        let pairs: [(&str, &Option<String>, &Option<String>, bool); 4] = [
+            ("minInclusive", &own.min_inclusive, &b.min_inclusive, false),
+            ("minExclusive", &own.min_exclusive, &b.min_exclusive, false),
+            ("maxInclusive", &own.max_inclusive, &b.max_inclusive, true),
+            ("maxExclusive", &own.max_exclusive, &b.max_exclusive, true),
+        ];
+        for (name, o, i, upper) in pairs {
+            let (Some(o), Some(i)) = (o, i) else { continue };
+            let Some(ord) = cmp(o, i) else { continue };
+            let widened = if upper {
+                ord == Ordering::Greater
+            } else {
+                ord == Ordering::Less
+            };
+            if widened {
+                err(format!(
+                    "`xs:{name}` `{o}` is wider than the inherited `{i}`"
+                ));
+            }
+        }
+    }
+
+    // Half two: the composed range has to hold something. Taking the effective
+    // set rather than the declared one is what catches a bound that widens
+    // past a *different* bound on the base — a minimum raised above an
+    // inherited maximum is not a narrowing, it is an empty type.
+    let Some(eff) = v.effective_facets(id) else {
+        return;
+    };
+    let lower = eff.min_inclusive.as_ref().or(eff.min_exclusive.as_ref());
+    let upper = eff.max_inclusive.as_ref().or(eff.max_exclusive.as_ref());
+    if let (Some(lo), Some(hi)) = (lower, upper) {
+        let strict = eff.min_exclusive.is_some() || eff.max_exclusive.is_some();
+        match cmp(lo, hi) {
+            Some(Ordering::Greater) => {
+                err(format!("the minimum `{lo}` is above the maximum `{hi}`"))
+            }
+            // Equal bounds admit that one value — unless either end excludes
+            // it, and then the type accepts nothing at all.
+            Some(Ordering::Equal) if strict => err(format!(
+                "`{lo}` is both the minimum and the maximum, and one end excludes it"
+            )),
+            _ => {}
+        }
+    }
 }
 
 /// Rule 1: every facet declared here must be one this datatype admits.

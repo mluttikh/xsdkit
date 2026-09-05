@@ -200,7 +200,7 @@ crate:
 | | |
 |---|---|
 | valid schemas accepted | **98.9%** — it reads real schemas |
-| invalid schemas rejected | **50.4%** — particle subsumption is the big rule still missing |
+| invalid schemas rejected | **54.2%** — particle subsumption is the big rule still missing |
 
 That asymmetry is by construction, not neglect: the Schema Component
 Constraints and the Derivation Valid rules are largely unimplemented (see §7).
