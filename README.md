@@ -234,17 +234,12 @@ need a conformance checker, use Xerces or Saxon; if you need to read a schema
 that already works, this is built for that.
 
 Document validation is the other half of the suite — 21,575 scored cases,
-90.8% correct:
+95.0% correct:
 
 | | |
 |---|---|
-| valid documents accepted | **88.1%** (10,497 / 11,909) |
+| valid documents accepted | **95.7%** (11,397 / 11,909) |
 | invalid documents rejected | **94.1%** (9,098 / 9,666) |
-
-Note the shape is the opposite of the schema half: the validator *does*
-enforce, so it catches 94.1% of what should be caught. The false alarms are
-concentrated — 1,160 of the 1,412 are in NIST2004-01-14, a single set of
-10,609 documents.
 
 ```bash
 git clone --depth 1 https://github.com/w3c/xsdtests /tmp/xsdtests
