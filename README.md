@@ -77,6 +77,11 @@ import xsdkit
 schemas = xsdkit.SchemaSet.from_file("report.xsd", search_paths=["schemas/"])
 report = schemas.element("urn:example", "report")
 
+len(schemas)                       # globals this schema declares, built-ins aside
+"{urn:example}report" in schemas
+schemas["{urn:example}report"]     # KeyError when absent, unlike .element()
+for name in schemas: ...           # a mapping, so dict(schemas) works too
+
 for child in report.type.children:
     print(child.local_name,
           "repeats" if report.type.repeats(child) else "once",
@@ -94,8 +99,7 @@ report.is_valid           # False
 for d in report.errors:
     print(d)              # error[XSD2004]: `{urn:example}count`: ... --> :3
 
-events, report = schemas.read_typed(open("report.xml").read())
-for ev in events:
+for ev in schemas.iter_typed(open("report.xml").read()):
     if ev.kind == "text":
         print(type(ev.value).__name__, ev.value)
 # int       42
@@ -104,8 +108,15 @@ for ev in events:
 # date      2024-03-31
 ```
 
-Values arrive as native Python types, not strings to re-parse. Pass
-`on_event=` to stream instead of collecting.
+Values arrive as native Python types, not strings to re-parse. `iter_typed`
+composes with `enumerate`, `itertools` and generator expressions, and carries
+the outcome on its `.report` — before the loop as well as after.
+
+XSD 1.1 is opt-in, as it is in Rust:
+
+```python
+schemas = xsdkit.SchemaSet.from_file("report.xsd", version="1.1")
+```
 
 Schemas that are expected to be imperfect return their diagnostics instead of
 raising:

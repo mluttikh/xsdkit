@@ -6,11 +6,14 @@ that every exported name exists at runtime.
 
 import datetime
 import decimal
-from typing import Any, Callable, Iterable, Literal, Sequence
+import os
+from typing import Any, Callable, Iterable, Iterator, Literal, Sequence
 
 __version__: str
 
 Conformance = Literal["strict", "lax"]
+#: Which XSD to read the documents as.
+XsdVersion = Literal["1.0", "1.1"]
 Severity = Literal["error", "warning", "note"]
 Variety = Literal["atomic", "list", "union"]
 ContentKind = Literal["empty", "simple", "element-only", "mixed"]
@@ -273,6 +276,23 @@ class PsviEvent:
     @property
     def line(self) -> int: ...
 
+class PsviEvents:
+    """An iterator over one document's typed events."""
+
+    def __iter__(self) -> Iterator[PsviEvent]: ...
+    def __next__(self) -> PsviEvent: ...
+    def __len__(self) -> int:
+        """How many events are left."""
+    @property
+    def report(self) -> ValidationReport:
+        """The outcome, available before the events are consumed as well as
+        after — a document can be read for its values and still be invalid."""
+
+class NameIterator:
+    def __iter__(self) -> Iterator[str]: ...
+    def __next__(self) -> str: ...
+    def __len__(self) -> int: ...
+
 class ValidationReport:
     @property
     def is_valid(self) -> bool: ...
@@ -286,13 +306,19 @@ class SchemaSet:
     @classmethod
     def from_file(
         cls,
-        path: str,
+        path: str | os.PathLike[str],
         *,
         search_paths: Sequence[str] | None = ...,
         conformance: Conformance = ...,
+        version: XsdVersion = ...,
         nodes_limit: int | None = ...,
     ) -> SchemaSet:
-        """Raises `SchemaError` on any error diagnostic."""
+        """Raises `SchemaError` on any error diagnostic.
+
+        ``version="1.1"`` turns on XSD 1.1: open content, conditional
+        inclusion, assertions on wildcards, ``xs:precisionDecimal`` and the
+        relaxed Unique Particle Attribution rule.
+        """
     @classmethod
     def from_string(
         cls,
@@ -301,6 +327,7 @@ class SchemaSet:
         uri: str = ...,
         search_paths: Sequence[str] | None = ...,
         conformance: Conformance = ...,
+        version: XsdVersion = ...,
         nodes_limit: int | None = ...,
     ) -> SchemaSet: ...
     @classmethod
@@ -311,10 +338,25 @@ class SchemaSet:
         uri: str = ...,
         search_paths: Sequence[str] | None = ...,
         conformance: Conformance = ...,
+        version: XsdVersion = ...,
         nodes_limit: int | None = ...,
     ) -> SchemaSet:
         """Detects the encoding: byte-order mark, then the XML declaration,
         then UTF-8."""
+    def __len__(self) -> int:
+        """How many global elements and types *this schema* declares.
+
+        The XSD built-ins are excluded here, from ``in``, from iteration and
+        from ``types``: they are present in every schema set and would bury
+        what the documents actually declared. ``type()`` still resolves them.
+        """
+    def __contains__(self, name: Name, /) -> bool: ...
+    def __getitem__(self, name: Name, /) -> Element | Type:
+        """The element or type of that name, raising ``KeyError`` when there
+        is none. The lookup methods return ``None`` instead, for when absence
+        is an ordinary answer rather than a mistake."""
+    def __iter__(self) -> Iterator[str]:
+        """The global names in Clark notation, elements before types."""
     @property
     def documents(self) -> list[Document]: ...
     @property
@@ -322,13 +364,25 @@ class SchemaSet:
     @property
     def types(self) -> list[tuple[str, Type]]: ...
     @property
-    def counts(self) -> list[tuple[str, int]]: ...
+    def counts(self) -> dict[str, int]:
+        """Component tallies — types, elements, particles and the rest. Counts
+        a great deal more than the globals ``len()`` reports."""
     def element(self, namespace: Name | None, local: str | None = ..., /) -> Element | None: ...
     def type(self, namespace: Name | None, local: str | None = ..., /) -> Type | None: ...
     def attribute(self, namespace: Name | None, local: str | None = ..., /) -> Attribute | None: ...
     def validate(self, xml: str, *, uri: str = ...) -> ValidationReport:
         """Validates a document. Never raises for an invalid one — that is an
         answer, not an error."""
+    def iter_typed(self, xml: str, *, uri: str = ...) -> PsviEvents:
+        """Reads a document into typed PSVI events, one at a time.
+
+        The iterator form of ``read_typed``, and the one to reach for::
+
+            for ev in schemas.iter_typed(xml):
+                ...
+
+        The outcome is on the iterator's ``report``, before or after the loop.
+        """
     def read_typed(
         self,
         xml: str,
@@ -343,10 +397,11 @@ class SchemaSet:
         """
 
 def load(
-    path: str,
+    path: str | os.PathLike[str],
     *,
     search_paths: Sequence[str] | None = ...,
     conformance: Conformance = ...,
+    version: XsdVersion = ...,
     nodes_limit: int | None = ...,
 ) -> tuple[SchemaSet, list[Diagnostic]]:
     """Loads a schema and returns it *with* its diagnostics, rather than
@@ -358,5 +413,6 @@ def load_string(
     uri: str = ...,
     search_paths: Sequence[str] | None = ...,
     conformance: Conformance = ...,
+    version: XsdVersion = ...,
     nodes_limit: int | None = ...,
 ) -> tuple[SchemaSet, list[Diagnostic]]: ...

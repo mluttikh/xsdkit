@@ -8,6 +8,11 @@
 //! compilation, which is the only slow part.
 
 #![allow(clippy::needless_pass_by_value)]
+// The constructors take one parameter per keyword argument, and Python
+// keyword arguments do not have the readability cost that positional ones do —
+// `from_string(xsd, version="1.1")` names what it passes. The lint counts them
+// the same way regardless.
+#![allow(clippy::too_many_arguments)]
 // Every wrapper holds an `Arc<Schemas>`, so a derived `Debug` would print the
 // entire schema once per handle. `__repr__` is the useful rendering, and it is
 // defined on each type.
@@ -20,11 +25,12 @@ use crate::instance::PsviEvent as RustPsvi;
 use crate::model::*;
 use crate::names::QName;
 use crate::values::Value;
-use crate::{Conformance, FileResolver, SchemaSetBuilder};
+use crate::{Conformance, FileResolver, SchemaSetBuilder, Version};
 use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
 use pyo3::types::{PyBytes, PyList, PyTuple, PyType};
 use pyo3::{IntoPyObjectExt, create_exception};
+use std::collections::BTreeMap;
 use std::sync::Arc;
 
 create_exception!(xsdkit, XsdError, pyo3::exceptions::PyException);
@@ -49,6 +55,29 @@ fn schema_error(py: Python<'_>, diags: Diagnostics) -> PyErr {
     err
 }
 
+/// Accepts anything `os.fspath` understands, which in practice means a
+/// `pathlib.Path` as readily as a `str`. Refusing one is friction with no
+/// upside — every caller has a `Path`.
+fn path_from(obj: &Bound<'_, PyAny>) -> PyResult<String> {
+    let py = obj.py();
+    let s = py
+        .import("os")?
+        .call_method1("fspath", (obj,))?
+        .extract::<std::ffi::OsString>()?;
+    s.into_string()
+        .map_err(|_| PyValueError::new_err("the path is not valid Unicode"))
+}
+
+fn version_from(s: &str) -> PyResult<Version> {
+    match s {
+        "1.0" => Ok(Version::Xsd10),
+        "1.1" => Ok(Version::Xsd11),
+        other => Err(PyValueError::new_err(format!(
+            "version must be '1.0' or '1.1', got {other:?}"
+        ))),
+    }
+}
+
 fn conformance_from(s: &str) -> PyResult<Conformance> {
     match s {
         "strict" => Ok(Conformance::Strict),
@@ -56,6 +85,89 @@ fn conformance_from(s: &str) -> PyResult<Conformance> {
         other => Err(PyValueError::new_err(format!(
             "conformance must be 'strict' or 'lax', got {other:?}"
         ))),
+    }
+}
+
+/// Walks the PSVI events of one document.
+///
+/// The events are produced eagerly and handed out one at a time. Validation is
+/// a single pass that has to reach the end of the document to know whether the
+/// content model was satisfied, so there is nothing to gain by deferring it.
+/// What this buys is the *shape* Python expects — `for ev in ...` rather than a
+/// callback — so `enumerate`, `zip`, `itertools` and generator expressions all
+/// work on it.
+#[pyclass(name = "PsviEvents", module = "xsdkit")]
+pub struct PyPsviEvents {
+    events: Vec<Py<PyPsviEvent>>,
+    at: usize,
+    valid: bool,
+    diagnostics: Vec<PyDiagnostic>,
+}
+
+#[pymethods]
+impl PyPsviEvents {
+    fn __iter__(slf: PyRef<'_, Self>) -> PyRef<'_, Self> {
+        slf
+    }
+
+    fn __next__(mut slf: PyRefMut<'_, Self>) -> Option<Py<PyPsviEvent>> {
+        let at = slf.at;
+        let out = Python::attach(|py| slf.events.get(at).map(|e| e.clone_ref(py)));
+        slf.at += 1;
+        out
+    }
+
+    /// How many events are left.
+    fn __len__(&self) -> usize {
+        self.events.len().saturating_sub(self.at)
+    }
+
+    /// The outcome, available before the events are consumed as well as after.
+    ///
+    /// A document can be read for its values and still be invalid, so this is
+    /// not something to discover only once the loop has ended.
+    #[getter]
+    fn report(&self) -> PyValidationReport {
+        PyValidationReport {
+            valid: self.valid,
+            diagnostics: self.diagnostics.clone(),
+        }
+    }
+
+    fn __repr__(&self) -> String {
+        format!(
+            "<PsviEvents {} remaining, {}>",
+            self.__len__(),
+            if self.valid { "valid" } else { "invalid" }
+        )
+    }
+}
+
+/// Walks the global names of a [`PySchemaSet`].
+///
+/// A snapshot rather than a live cursor: the model is immutable, so there is
+/// nothing to invalidate, and holding the names costs one allocation against
+/// the alternative of keeping an index into two maps in step.
+#[pyclass(name = "NameIterator", module = "xsdkit")]
+pub struct PyNameIter {
+    names: Vec<String>,
+    at: usize,
+}
+
+#[pymethods]
+impl PyNameIter {
+    fn __iter__(slf: PyRef<'_, Self>) -> PyRef<'_, Self> {
+        slf
+    }
+
+    fn __next__(mut slf: PyRefMut<'_, Self>) -> Option<String> {
+        let out = slf.names.get(slf.at).cloned();
+        slf.at += 1;
+        out
+    }
+
+    fn __len__(&self) -> usize {
+        self.names.len().saturating_sub(self.at)
     }
 }
 
@@ -110,9 +222,12 @@ impl PySchemaSet {
 fn builder(
     search_paths: Option<Vec<String>>,
     conformance: &str,
+    version: &str,
     nodes_limit: Option<u32>,
 ) -> PyResult<SchemaSetBuilder> {
-    let mut b = SchemaSetBuilder::new().conformance(conformance_from(conformance)?);
+    let mut b = SchemaSetBuilder::new()
+        .conformance(conformance_from(conformance)?)
+        .version(version_from(version)?);
     if let Some(paths) = search_paths {
         let mut fr = FileResolver::new();
         fr.search_paths = paths.into_iter().map(Into::into).collect();
@@ -124,20 +239,39 @@ fn builder(
     Ok(b)
 }
 
+impl PySchemaSet {
+    /// The global types this schema set's documents declare.
+    ///
+    /// The XSD built-ins live in the same table — they have to, so that
+    /// `type="xs:int"` resolves like any other reference — but they are not
+    /// part of what a schema *says*, and every Python-facing enumeration
+    /// leaves them out.
+    fn declared_types(&self) -> impl Iterator<Item = (&QName, &TypeId)> {
+        // By namespace, not by `as_builtin`: that one answers from
+        // `SimpleType::builtin` and so cannot see `xs:anyType`, which is
+        // complex. Everything predeclared lives in the XSD namespace, and
+        // nothing a document declares may.
+        self.inner.globals().types.iter().filter(|(q, _)| {
+            q.ns.is_none_or(|ns| self.inner.names().resolve_ns(ns) != crate::names::XS)
+        })
+    }
+}
+
 #[pymethods]
 impl PySchemaSet {
     /// Loads a schema from a file, following its includes and imports.
     #[classmethod]
-    #[pyo3(signature = (path, *, search_paths=None, conformance="strict", nodes_limit=None))]
+    #[pyo3(signature = (path, *, search_paths=None, conformance="strict", version="1.0", nodes_limit=None))]
     fn from_file(
         _cls: &Bound<'_, PyType>,
         py: Python<'_>,
-        path: String,
+        path: &Bound<'_, PyAny>,
         search_paths: Option<Vec<String>>,
         conformance: &str,
+        version: &str,
         nodes_limit: Option<u32>,
     ) -> PyResult<Self> {
-        let b = builder(search_paths, conformance, nodes_limit)?.file(path);
+        let b = builder(search_paths, conformance, version, nodes_limit)?.file(path_from(path)?);
         // Compilation is the only slow part, and `Schemas` is Send + Sync
         // precisely so this is legal.
         let (schemas, diags) = py.detach(|| b.build_with_warnings());
@@ -149,7 +283,7 @@ impl PySchemaSet {
 
     /// Loads a schema from a string. The text must already be decoded.
     #[classmethod]
-    #[pyo3(signature = (xsd, *, uri="<string>", search_paths=None, conformance="strict", nodes_limit=None))]
+    #[pyo3(signature = (xsd, *, uri="<string>", search_paths=None, conformance="strict", version="1.0", nodes_limit=None))]
     fn from_string(
         _cls: &Bound<'_, PyType>,
         py: Python<'_>,
@@ -157,9 +291,10 @@ impl PySchemaSet {
         uri: &str,
         search_paths: Option<Vec<String>>,
         conformance: &str,
+        version: &str,
         nodes_limit: Option<u32>,
     ) -> PyResult<Self> {
-        let b = builder(search_paths, conformance, nodes_limit)?.text(xsd, uri);
+        let b = builder(search_paths, conformance, version, nodes_limit)?.text(xsd, uri);
         let (schemas, diags) = py.detach(|| b.build_with_warnings());
         if diags.has_errors() {
             return Err(schema_error(py, diags));
@@ -172,7 +307,7 @@ impl PySchemaSet {
     /// Prefer this over `from_string` when the encoding is not known to be
     /// UTF-8: a byte-order mark or the XML declaration decides it.
     #[classmethod]
-    #[pyo3(signature = (data, *, uri="<bytes>", search_paths=None, conformance="strict", nodes_limit=None))]
+    #[pyo3(signature = (data, *, uri="<bytes>", search_paths=None, conformance="strict", version="1.0", nodes_limit=None))]
     fn from_bytes(
         _cls: &Bound<'_, PyType>,
         py: Python<'_>,
@@ -180,9 +315,10 @@ impl PySchemaSet {
         uri: &str,
         search_paths: Option<Vec<String>>,
         conformance: &str,
+        version: &str,
         nodes_limit: Option<u32>,
     ) -> PyResult<Self> {
-        let b = builder(search_paths, conformance, nodes_limit)?.bytes(data, uri);
+        let b = builder(search_paths, conformance, version, nodes_limit)?.bytes(data, uri);
         let (schemas, diags) = py.detach(|| b.build_with_warnings());
         if diags.has_errors() {
             return Err(schema_error(py, diags));
@@ -207,6 +343,84 @@ impl PySchemaSet {
             .collect()
     }
 
+    /// How many global elements and types *this schema* declares.
+    ///
+    /// `SchemaSet` behaves as a mapping from a global name to its declaration:
+    /// `len`, `in`, `[]` and iteration all work, and iterating yields names, so
+    /// `dict(s)` and `for name in s` read as they do for any other mapping.
+    ///
+    /// The XSD built-in types are excluded. They are present in every schema
+    /// set, so counting them would drown a two-element schema in fifty
+    /// entries — `len(s)` is meant to answer "how much is in this schema". They
+    /// are still reachable by name through [`Self::type`], which resolves
+    /// rather than enumerates. [`Self::counts`] is the component tally, and
+    /// counts a great deal more than the globals.
+    fn __len__(&self) -> usize {
+        let g = self.inner.globals();
+        g.elements.len() + self.declared_types().count()
+    }
+
+    fn __contains__(&self, name: &Bound<'_, PyAny>) -> PyResult<bool> {
+        let Some(q) = parse_name(&self.inner, name)? else {
+            return Ok(false);
+        };
+        Ok(self.inner.globals().elements.contains_key(&q)
+            || self.inner.globals().types.contains_key(&q)
+                && q.ns
+                    .is_none_or(|ns| self.inner.names().resolve_ns(ns) != crate::names::XS))
+    }
+
+    /// The element or type of that name, raising `KeyError` when there is
+    /// none.
+    ///
+    /// The lookup methods return `None` instead, for when absence is an
+    /// ordinary answer; this is for when it is a mistake.
+    fn __getitem__<'py>(
+        &self,
+        py: Python<'py>,
+        name: &Bound<'_, PyAny>,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        let q = parse_name(&self.inner, name)?;
+        if let Some(q) = q {
+            if let Some(id) = self.inner.globals().elements.get(&q) {
+                return PyElement {
+                    s: self.inner.clone(),
+                    id: *id,
+                }
+                .into_bound_py_any(py);
+            }
+            if let Some(id) = self.inner.globals().types.get(&q) {
+                // Agrees with `in` and with iteration: a built-in is not one
+                // of this schema's declarations, and `type()` is the way to
+                // resolve one.
+                if q.ns
+                    .is_none_or(|ns| self.inner.names().resolve_ns(ns) != crate::names::XS)
+                {
+                    return PyType_ {
+                        s: self.inner.clone(),
+                        id: *id,
+                    }
+                    .into_bound_py_any(py);
+                }
+            }
+        }
+        Err(pyo3::exceptions::PyKeyError::new_err(
+            name.repr()?.to_string(),
+        ))
+    }
+
+    /// The global names, elements before types, each sorted.
+    fn __iter__(&self) -> PyResult<Py<PyNameIter>> {
+        let mut names: Vec<String> = self
+            .elements()
+            .into_iter()
+            .map(|(n, _)| n)
+            .chain(self.types().into_iter().map(|(n, _)| n))
+            .collect();
+        names.dedup();
+        Python::attach(|py| Py::new(py, PyNameIter { names, at: 0 }))
+    }
+
     /// Every global element declaration, keyed by Clark-notation name.
     #[getter]
     fn elements(&self) -> Vec<(String, PyElement)> {
@@ -229,14 +443,16 @@ impl PySchemaSet {
         v
     }
 
-    /// Every global type definition, keyed by Clark-notation name.
+    /// Every global type definition *this schema* declares, keyed by
+    /// Clark-notation name.
+    ///
+    /// The XSD built-ins are excluded, for the same reason [`Self::__len__`]
+    /// excludes them: they are in every schema set and would bury the ones the
+    /// document actually wrote. `type("{...}string")` still resolves them.
     #[getter]
     fn types(&self) -> Vec<(String, PyType_)> {
         let mut v: Vec<_> = self
-            .inner
-            .globals()
-            .types
-            .iter()
+            .declared_types()
             .map(|(q, id)| {
                 (
                     clark(&self.inner, *q),
@@ -345,6 +561,39 @@ impl PySchemaSet {
     /// event defeats the point of streaming.
     ///
     /// Validation still runs; `report` carries the diagnostics either way.
+    /// Reads a document into typed PSVI events, one at a time.
+    ///
+    /// The iterator form of [`Self::read_typed`], and the one to reach for:
+    /// `for ev in schemas.iter_typed(xml)` composes with everything Python
+    /// has for iterables, where a callback composes with nothing. The outcome
+    /// is on the iterator's `report`, before or after the loop.
+    #[pyo3(signature = (xml, *, uri="<instance>"))]
+    fn iter_typed(&self, py: Python<'_>, xml: &str, uri: &str) -> PyResult<PyPsviEvents> {
+        let mut events: Vec<Py<PyPsviEvent>> = Vec::new();
+        let mut failed: Option<PyErr> = None;
+        let report = self
+            .inner
+            .instance_validator()
+            .validate_named(xml, uri, |ev| {
+                if failed.is_some() {
+                    return;
+                }
+                match self.psvi_to_py(py, ev) {
+                    Ok(obj) => events.push(obj.unbind()),
+                    Err(e) => failed = Some(e),
+                }
+            });
+        if let Some(e) = failed {
+            return Err(e);
+        }
+        Ok(PyPsviEvents {
+            events,
+            at: 0,
+            valid: report.is_valid(),
+            diagnostics: report.diagnostics.into_iter().map(PyDiagnostic).collect(),
+        })
+    }
+
     #[pyo3(signature = (xml, *, on_event=None, uri="<instance>"))]
     fn read_typed(
         &self,
@@ -391,9 +640,9 @@ impl PySchemaSet {
 
     /// Component counts, for diagnostics and smoke tests.
     #[getter]
-    fn counts(&self) -> Vec<(String, usize)> {
+    fn counts(&self) -> std::collections::BTreeMap<String, usize> {
         let c = self.inner.component_counts();
-        vec![
+        BTreeMap::from([
             ("types".into(), c.types),
             ("elements".into(), c.elements),
             ("attributes".into(), c.attributes),
@@ -402,7 +651,7 @@ impl PySchemaSet {
             ("attribute_groups".into(), c.attribute_groups),
             ("identity_constraints".into(), c.identity_constraints),
             ("annotations".into(), c.annotations),
-        ]
+        ])
     }
 
     fn __repr__(&self) -> String {
@@ -712,6 +961,20 @@ impl PyAttribute {
     fn __repr__(&self) -> String {
         format!("<Attribute {}>", self.qname())
     }
+
+    /// Two handles to the same declaration are the same declaration.
+    ///
+    /// Without this the class falls back to identity, and looking the same
+    /// attribute up twice yields two objects that are unequal and hash apart —
+    /// so a set of them silently holds duplicates. That is worse than being
+    /// unhashable, because nothing raises.
+    fn __eq__(&self, other: &PyAttribute) -> bool {
+        self.id == other.id && Arc::ptr_eq(&self.s, &other.s)
+    }
+
+    fn __hash__(&self) -> u64 {
+        self.id.index() as u64
+    }
 }
 
 /// An attribute declaration as used by one complex type.
@@ -785,6 +1048,17 @@ impl PyAttributeUse {
 
     fn __repr__(&self) -> String {
         format!("<AttributeUse {} {}>", self.local_name(), self.r#use())
+    }
+
+    fn __eq__(&self, other: &PyAttributeUse) -> bool {
+        self.attribute == other.attribute
+            && self.kind == other.kind
+            && self.constraint == other.constraint
+            && Arc::ptr_eq(&self.s, &other.s)
+    }
+
+    fn __hash__(&self) -> u64 {
+        self.attribute.index() as u64
     }
 }
 
@@ -1149,6 +1423,13 @@ impl PyFacets {
         }
         format!("<Facets {}>", parts.join(" "))
     }
+
+    /// A value, not a handle: two facet sets with the same constraints are the
+    /// same set. Deliberately no `__hash__` — a `FacetSet` holds vectors, and
+    /// nothing needs facets as a dict key.
+    fn __eq__(&self, other: &PyFacets) -> bool {
+        self.0 == other.0
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -1225,6 +1506,21 @@ impl PyDocument {
     fn __repr__(&self) -> String {
         format!("<Document {} ns={:?}>", self.uri, self.target_namespace)
     }
+
+    /// A value, not a handle: two with the same fields are the same.
+    fn __eq__(&self, other: &PyDocument) -> bool {
+        self.uri == other.uri
+            && self.target_namespace == other.target_namespace
+            && self.chameleon == other.chameleon
+            && self.version == other.version
+    }
+
+    fn __hash__(&self) -> u64 {
+        use std::hash::{Hash, Hasher};
+        let mut h = std::collections::hash_map::DefaultHasher::new();
+        (&self.uri, &self.target_namespace).hash(&mut h);
+        h.finish()
+    }
 }
 
 #[pyclass(module = "xsdkit", name = "Span", frozen, get_all, skip_from_py_object)]
@@ -1248,6 +1544,18 @@ impl PySpan {
 
     fn __repr__(&self) -> String {
         format!("<Span {}>", self.__str__())
+    }
+
+    /// A value, not a handle: two with the same fields are the same.
+    fn __eq__(&self, other: &PySpan) -> bool {
+        self.uri == other.uri && self.line == other.line && self.label == other.label
+    }
+
+    fn __hash__(&self) -> u64 {
+        use std::hash::{Hash, Hasher};
+        let mut h = std::collections::hash_map::DefaultHasher::new();
+        (&self.uri, self.line, &self.label).hash(&mut h);
+        h.finish()
     }
 }
 
@@ -1606,15 +1914,16 @@ impl PyPsviEvent {
 /// Use this when a schema is expected to be imperfect — a vendor schema with
 /// dangling imports, say — and you want the components anyway.
 #[pyfunction]
-#[pyo3(signature = (path, *, search_paths=None, conformance="lax", nodes_limit=None))]
+#[pyo3(signature = (path, *, search_paths=None, conformance="lax", version="1.0", nodes_limit=None))]
 fn load(
     py: Python<'_>,
-    path: String,
+    path: &Bound<'_, PyAny>,
     search_paths: Option<Vec<String>>,
     conformance: &str,
+    version: &str,
     nodes_limit: Option<u32>,
 ) -> PyResult<(PySchemaSet, Vec<PyDiagnostic>)> {
-    let b = builder(search_paths, conformance, nodes_limit)?.file(path);
+    let b = builder(search_paths, conformance, version, nodes_limit)?.file(path_from(path)?);
     let (schemas, diags) = py.detach(|| b.build_with_warnings());
     Ok((
         PySchemaSet::wrap(schemas),
@@ -1624,16 +1933,17 @@ fn load(
 
 /// The same, from a string.
 #[pyfunction]
-#[pyo3(signature = (xsd, *, uri="<string>", search_paths=None, conformance="lax", nodes_limit=None))]
+#[pyo3(signature = (xsd, *, uri="<string>", search_paths=None, conformance="lax", version="1.0", nodes_limit=None))]
 fn load_string(
     py: Python<'_>,
     xsd: String,
     uri: &str,
     search_paths: Option<Vec<String>>,
     conformance: &str,
+    version: &str,
     nodes_limit: Option<u32>,
 ) -> PyResult<(PySchemaSet, Vec<PyDiagnostic>)> {
-    let b = builder(search_paths, conformance, nodes_limit)?.text(xsd, uri);
+    let b = builder(search_paths, conformance, version, nodes_limit)?.text(xsd, uri);
     let (schemas, diags) = py.detach(|| b.build_with_warnings());
     Ok((
         PySchemaSet::wrap(schemas),
@@ -1652,6 +1962,8 @@ fn xsdkit_module(m: &Bound<'_, PyModule>) -> PyResult<()> {
     schema_error.setattr("diagnostics", PyList::empty(m.py()))?;
     m.add("SchemaError", schema_error)?;
     m.add_class::<PySchemaSet>()?;
+    m.add_class::<PyNameIter>()?;
+    m.add_class::<PyPsviEvents>()?;
     m.add_class::<PyElement>()?;
     m.add_class::<PyAttribute>()?;
     m.add_class::<PyAttributeUse>()?;

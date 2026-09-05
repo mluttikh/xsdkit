@@ -267,3 +267,23 @@ def test_an_inherited_fixed_unit_survives_a_vacuous_extension():
     events, report = s.read_typed('<depth xmlns="urn:example">120.5</depth>')
     assert report.is_valid
     assert events[0].attributes[0].value == "m"
+
+
+def test_iter_typed_is_an_iterator(schemas):
+    """The shape Python expects: a callback composes with nothing."""
+    it = schemas.iter_typed(DOC)
+    kinds = [ev.kind for ev in it]
+    assert kinds[0] == "start" and kinds[-1] == "end"
+    # The outcome is available without waiting for the loop to end.
+    assert schemas.iter_typed(DOC).report.is_valid
+
+    # It composes: enumerate, islice, a generator expression.
+    import itertools
+
+    firsts = list(itertools.islice(schemas.iter_typed(DOC), 2))
+    assert len(firsts) == 2
+    texts = [ev.value for ev in schemas.iter_typed(DOC) if ev.kind == "text"]
+    assert texts, "typed values arrive through the iterator too"
+    for i, ev in enumerate(schemas.iter_typed(DOC)):
+        assert ev.kind in {"start", "text", "end"}
+    assert i + 1 == len(kinds)

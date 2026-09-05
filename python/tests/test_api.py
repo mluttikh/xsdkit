@@ -259,3 +259,71 @@ def test_globals_are_listed_and_sorted(schema_for_schemas):
     assert names == sorted(names)
     assert f"{{{XS}}}schema" in names
     assert dict(schema_for_schemas.counts)["types"] > 100
+
+
+# --- ergonomics -------------------------------------------------------------
+
+
+def test_xsd_11_is_reachable():
+    """Everything the 1.1 reader adds was Rust-only until `version=` existed."""
+    xsd = (
+        f'<xs:schema xmlns:xs="{XS}" xmlns:tns="{NS}" targetNamespace="{NS}">'
+        '<xs:element name="e" type="xs:precisionDecimal"/>'
+        "</xs:schema>"
+    )
+    s = xsdkit.SchemaSet.from_string(xsd, version="1.1")
+    assert s.element(NS, "e").type.qname == f"{{{XS}}}precisionDecimal"
+
+    with pytest.raises(ValueError, match="1.0"):
+        xsdkit.SchemaSet.from_string(xsd, version="1.2")
+
+
+def test_schema_set_is_a_mapping():
+    s = build('<xs:element name="a" type="xs:string"/>'
+              '<xs:simpleType name="T"><xs:restriction base="xs:string"/></xs:simpleType>')
+    # Its own declarations only — the fifty-odd built-ins would bury them.
+    assert len(s) == 2
+    assert sorted(s) == [f"{{{NS}}}T", f"{{{NS}}}a"]
+    assert f"{{{NS}}}a" in s
+    assert s[f"{{{NS}}}a"] == s.element(NS, "a")
+    assert s[(NS, "T")] == s.type(NS, "T")
+
+    # A built-in is not one of this schema's declarations, but is still
+    # resolvable by name.
+    assert f"{{{XS}}}string" not in s
+    assert s.type(XS, "string") is not None
+
+    with pytest.raises(KeyError):
+        s[f"{{{NS}}}nope"]
+
+
+def test_counts_is_a_dict():
+    s = build('<xs:element name="a" type="xs:string"/>')
+    assert isinstance(s.counts, dict)
+    assert s.counts["elements"] >= 1
+
+
+def test_handles_compare_by_identity_of_the_component():
+    """Two handles to one declaration are one declaration.
+
+    Without `__eq__`/`__hash__` these fall back to object identity, so a set of
+    them silently holds duplicates and nothing raises.
+    """
+    s = build(
+        '<xs:element name="e"><xs:complexType>'
+        '<xs:attribute name="k" type="xs:string"/></xs:complexType></xs:element>'
+    )
+    t = s.element(NS, "e").type
+    a1, a2 = t.attributes[0].attribute, t.attributes[0].attribute
+    assert a1 == a2 and len({a1, a2}) == 1
+    assert t.attributes[0] == t.attributes[0]
+    assert s.documents[0] == s.documents[0]
+    assert len(set(s.documents)) == 1
+
+
+def test_from_file_takes_a_path(tmp_path):
+    p = tmp_path / "s.xsd"
+    p.write_text(f'<xs:schema xmlns:xs="{XS}" xmlns:tns="{NS}" targetNamespace="{NS}">'
+                 '<xs:element name="a" type="xs:string"/></xs:schema>')
+    assert xsdkit.SchemaSet.from_file(p).element(NS, "a") is not None
+    assert xsdkit.load(p)[0].element(NS, "a") is not None
