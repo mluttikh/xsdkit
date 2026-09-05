@@ -1071,7 +1071,7 @@ impl<'r> Loader<'r> {
         }
         let qualified =
             global || ctx.element_form_qualified || node.attribute("form") == Some("qualified");
-        let name = self.qualified_name(local, qualified, ctx);
+        let name = self.local_name(node, local, qualified, global, ctx);
 
         let annotation = self.read_annotation(node, ctx);
         let id = ElementId(
@@ -1276,7 +1276,7 @@ impl<'r> Loader<'r> {
         let local = node.attribute("name").unwrap_or_default();
         let qualified =
             global || ctx.attribute_form_qualified || node.attribute("form") == Some("qualified");
-        let name = self.qualified_name(local, qualified, ctx);
+        let name = self.local_name(node, local, qualified, global, ctx);
         let annotation = self.read_annotation(node, ctx);
 
         let id = AttributeId(self.attributes.push(AttributeDecl {
@@ -2124,6 +2124,32 @@ impl<'r> Loader<'r> {
 
     // -- name helpers ------------------------------------------------------
 
+    /// The name of a *local* declaration, honouring XSD 1.1's
+    /// `targetNamespace`.
+    ///
+    /// A local element or attribute normally lands in this document's target
+    /// namespace or in none, decided by `form`. XSD 1.1 lets it name a
+    /// namespace outright — which is how a schema puts a declaration in a
+    /// namespace it does not own, and the only way to restrict a wildcard that
+    /// admits one. Nothing else may carry the attribute, so this is only
+    /// reached from the two local-declaration sites.
+    fn local_name(
+        &mut self,
+        node: roxmltree::Node,
+        local: &str,
+        qualified: bool,
+        global: bool,
+        ctx: &DocCtx,
+    ) -> QName {
+        match node.attribute("targetNamespace").filter(|_| !global) {
+            Some(uri) => QName {
+                ns: self.names.opt_namespace(uri),
+                local: self.names.intern(local),
+            },
+            None => self.qualified_name(local, qualified, ctx),
+        }
+    }
+
     fn qualified_name(&mut self, local: &str, qualified: bool, ctx: &DocCtx) -> QName {
         QName {
             ns: if qualified { ctx.target_ns } else { None },
@@ -2261,6 +2287,42 @@ fn check_representation(
             );
         }
 
+        // XSD 1.1 lets a *local* declaration name its namespace outright,
+        // under three conditions. The last is the one with a reason worth
+        // stating: the declaration only means something if it corresponds to
+        // one in a base type, so it has to sit inside a restriction of
+        // something other than `xs:anyType`, which declares nothing.
+        if matches!(name, "element" | "attribute") && node.has_attribute("targetNamespace") {
+            let top_level = node.parent().is_some_and(|p| p.has_tag_name("schema"));
+            let mut why = None;
+            if top_level {
+                why = Some("a top-level declaration is already in the document's namespace");
+            } else if node.has_attribute("form") {
+                why = Some("`form` already decides the namespace");
+            } else if node.attribute("targetNamespace") != root.attribute("targetNamespace")
+                && !within_restriction_of_a_named_type(node)
+            {
+                // Naming the document's own namespace is always allowed. Naming
+                // a *different* one only means something against a base
+                // declaration to correspond to, so it needs a restriction of
+                // something more specific than `xs:anyType`, which declares
+                // nothing to correspond to.
+                why = Some(
+                    "naming another namespace needs an `xs:restriction` of a type other than `xs:anyType`",
+                );
+            }
+            if let Some(reason) = why {
+                diags.push(
+                    Diagnostic::error(
+                        DiagCode::InvalidAttributeValue,
+                        format!("`xs:{name}` may not carry `targetNamespace` here"),
+                    )
+                    .at(span())
+                    .with_help(reason),
+                );
+            }
+        }
+
         // A named model group *is* its one model group. Two of them name no
         // single content model, and nothing downstream would ever look at the
         // second.
@@ -2283,6 +2345,29 @@ fn check_representation(
             }
         }
     }
+}
+
+/// Whether a node sits inside an `xs:restriction` of something other than
+/// `xs:anyType`.
+///
+/// Read from the document rather than the model: this is a representation
+/// constraint, and the base is a QName the loader has not resolved yet. An
+/// unprefixed `anyType` is not matched — that would need the in-scope default
+/// namespace — so this errs towards accepting, which is right for a rule whose
+/// only job is to catch a declaration that could not mean anything.
+fn within_restriction_of_a_named_type(node: roxmltree::Node) -> bool {
+    let mut cur = node.parent();
+    while let Some(n) = cur {
+        if n.has_tag_name("schema") {
+            return false;
+        }
+        if is_xs_element(&n) && n.tag_name().name() == "restriction" {
+            let base = n.attribute("base").unwrap_or_default();
+            return !base.is_empty() && !base.ends_with(":anyType") && base != "anyType";
+        }
+        cur = n.parent();
+    }
+    false
 }
 
 /// Where `xs:annotation` is allowed to sit.

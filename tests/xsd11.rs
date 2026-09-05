@@ -1,6 +1,7 @@
 //! XSD 1.1 structural features: open content, default attributes, and the
 //! relaxed Unique Particle Attribution rule.
 
+use xsdkit::diagnostics::DiagCode;
 use xsdkit::model::Term;
 use xsdkit::*;
 
@@ -415,4 +416,81 @@ fn defined_sibling_sees_through_a_group_reference() {
         &s,
         r#"<root xmlns="urn:example"><inner>1</inner><inner>2</inner></root>"#
     ));
+}
+
+/// XSD 1.1 lets a *local* declaration name its namespace outright, which is
+/// how a schema puts a declaration in a namespace it does not own — and the
+/// only way to restrict a wildcard that admits one.
+#[test]
+fn a_local_declaration_may_name_its_own_namespace() {
+    let s = build(
+        r#"<xs:complexType name="B">
+             <xs:sequence><xs:any namespace="urn:other" processContents="lax"/></xs:sequence>
+           </xs:complexType>
+           <xs:complexType name="R">
+             <xs:complexContent>
+               <xs:restriction base="tns:B">
+                 <xs:sequence>
+                   <xs:element name="child" targetNamespace="urn:other" type="xs:int"/>
+                 </xs:sequence>
+               </xs:restriction>
+             </xs:complexContent>
+           </xs:complexType>
+           <xs:element name="root" type="tns:R"/>"#,
+        Version::Xsd11,
+    );
+    // The declaration landed in the namespace it named, not the document's.
+    let t = s.type_(Some(NS), "R").expect("type");
+    let p = s[t].as_complex().unwrap().content.particle().unwrap();
+    let kids = s.child_particles(p);
+    let Term::Element(e) = s[kids[0]].term else {
+        panic!("expected an element")
+    };
+    assert_eq!(s.display_name(s[e].name), "{urn:other}child");
+
+    assert!(valid(
+        &s,
+        r#"<root xmlns="urn:example"><child xmlns="urn:other">1</child></root>"#
+    ));
+}
+
+/// Three conditions on it, and the third is the one with a reason: naming a
+/// *different* namespace only means something against a base declaration to
+/// correspond to.
+#[test]
+fn a_local_target_namespace_is_constrained() {
+    let cases = [
+        // Top-level: already in the document's namespace.
+        r#"<xs:element name="e" type="xs:int" targetNamespace="urn:other"/>"#,
+        // `form` already decides the namespace.
+        r#"<xs:complexType name="T">
+             <xs:sequence>
+               <xs:element name="e" type="xs:int" form="qualified"
+                           targetNamespace="urn:example"/>
+             </xs:sequence>
+           </xs:complexType>"#,
+        // Another namespace, with nothing to correspond to.
+        r#"<xs:complexType name="T">
+             <xs:sequence>
+               <xs:element name="e" type="xs:int" targetNamespace="urn:other"/>
+             </xs:sequence>
+           </xs:complexType>"#,
+    ];
+    for c in cases {
+        let d = diagnostics(c, Version::Xsd11);
+        assert!(
+            d.errors()
+                .any(|x| x.code == DiagCode::InvalidAttributeValue),
+            "expected a rejection for:\n{c}\ngot:\n{d}"
+        );
+    }
+
+    // Naming the document's own namespace is always allowed.
+    let d = diagnostics(
+        r#"<xs:complexType name="T">
+             <xs:attribute name="a" type="xs:int" targetNamespace="urn:example"/>
+           </xs:complexType>"#,
+        Version::Xsd11,
+    );
+    assert!(!d.has_errors(), "{d}");
 }
