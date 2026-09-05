@@ -52,6 +52,7 @@ pub mod content;
 pub mod datatypes;
 pub mod diagnostics;
 pub mod encoding;
+pub(crate) mod facets;
 pub mod instance;
 pub mod load;
 pub mod model;

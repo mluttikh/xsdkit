@@ -120,6 +120,15 @@ pub enum DiagCode {
     /// A content model breaches Unique Particle Attribution: one element
     /// could be matched by two different particles.
     AmbiguousContentModel,
+    /// A facet was applied to a datatype that does not admit it, e.g.
+    /// `length` on a `xs:duration`.
+    FacetNotApplicable,
+    /// A facet's own value is not legal — a bound that is not a value of the
+    /// type it bounds, or a count the facet's own type forbids.
+    InvalidFacetValue,
+    /// Two facets on one restriction step cannot both hold, e.g. `length`
+    /// beside `minLength`, or `minInclusive` above `maxInclusive`.
+    ConflictingFacets,
 
     // 2000-2099 — instance documents
     /// No global element declaration matches the document's root.
@@ -168,6 +177,9 @@ impl DiagCode {
             DiagCode::InvalidOccurrence => "XSD1302",
             DiagCode::ConflictingTypeDefinition => "XSD1303",
             DiagCode::AmbiguousContentModel => "XSD1304",
+            DiagCode::FacetNotApplicable => "XSD1305",
+            DiagCode::InvalidFacetValue => "XSD1306",
+            DiagCode::ConflictingFacets => "XSD1307",
 
             DiagCode::ElementNotDeclared => "XSD2001",
             DiagCode::UnexpectedElement => "XSD2002",

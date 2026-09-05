@@ -133,24 +133,94 @@ pub enum Facet {
     Assertion(String),
 }
 
+/// Which facet, without its value.
+///
+/// `Facet` carries a value and so cannot be compared or tabulated; the rules
+/// about *which* facets a datatype admits are about the kind alone.
+#[derive(Copy, Clone, PartialEq, Eq, Hash, Debug)]
+#[non_exhaustive]
+pub enum FacetKind {
+    Length,
+    MinLength,
+    MaxLength,
+    Pattern,
+    Enumeration,
+    WhiteSpace,
+    MaxInclusive,
+    MaxExclusive,
+    MinInclusive,
+    MinExclusive,
+    TotalDigits,
+    FractionDigits,
+    ExplicitTimezone,
+    Assertion,
+}
+
+impl FacetKind {
+    /// The facet's XSD element name, e.g. `minInclusive`.
+    pub fn name(self) -> &'static str {
+        match self {
+            FacetKind::Length => "length",
+            FacetKind::MinLength => "minLength",
+            FacetKind::MaxLength => "maxLength",
+            FacetKind::Pattern => "pattern",
+            FacetKind::Enumeration => "enumeration",
+            FacetKind::WhiteSpace => "whiteSpace",
+            FacetKind::MaxInclusive => "maxInclusive",
+            FacetKind::MaxExclusive => "maxExclusive",
+            FacetKind::MinInclusive => "minInclusive",
+            FacetKind::MinExclusive => "minExclusive",
+            FacetKind::TotalDigits => "totalDigits",
+            FacetKind::FractionDigits => "fractionDigits",
+            FacetKind::ExplicitTimezone => "explicitTimezone",
+            FacetKind::Assertion => "assertion",
+        }
+    }
+
+    /// Whether this facet bounds the value space rather than the lexical one.
+    ///
+    /// The four of them share a rule: the facet's own value has to be a legal
+    /// value of the type being restricted.
+    pub fn is_bound(self) -> bool {
+        matches!(
+            self,
+            FacetKind::MaxInclusive
+                | FacetKind::MaxExclusive
+                | FacetKind::MinInclusive
+                | FacetKind::MinExclusive
+        )
+    }
+}
+
+impl fmt::Display for FacetKind {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(self.name())
+    }
+}
+
 impl Facet {
     /// The facet's XSD element name, e.g. `minInclusive`.
     pub fn name(&self) -> &'static str {
+        self.kind().name()
+    }
+
+    /// Which facet this is, discarding the value.
+    pub fn kind(&self) -> FacetKind {
         match self {
-            Facet::Length(_) => "length",
-            Facet::MinLength(_) => "minLength",
-            Facet::MaxLength(_) => "maxLength",
-            Facet::Pattern(_) => "pattern",
-            Facet::Enumeration(_) => "enumeration",
-            Facet::WhiteSpace(_) => "whiteSpace",
-            Facet::MaxInclusive(_) => "maxInclusive",
-            Facet::MaxExclusive(_) => "maxExclusive",
-            Facet::MinInclusive(_) => "minInclusive",
-            Facet::MinExclusive(_) => "minExclusive",
-            Facet::TotalDigits(_) => "totalDigits",
-            Facet::FractionDigits(_) => "fractionDigits",
-            Facet::ExplicitTimezone(_) => "explicitTimezone",
-            Facet::Assertion(_) => "assertion",
+            Facet::Length(_) => FacetKind::Length,
+            Facet::MinLength(_) => FacetKind::MinLength,
+            Facet::MaxLength(_) => FacetKind::MaxLength,
+            Facet::Pattern(_) => FacetKind::Pattern,
+            Facet::Enumeration(_) => FacetKind::Enumeration,
+            Facet::WhiteSpace(_) => FacetKind::WhiteSpace,
+            Facet::MaxInclusive(_) => FacetKind::MaxInclusive,
+            Facet::MaxExclusive(_) => FacetKind::MaxExclusive,
+            Facet::MinInclusive(_) => FacetKind::MinInclusive,
+            Facet::MinExclusive(_) => FacetKind::MinExclusive,
+            Facet::TotalDigits(_) => FacetKind::TotalDigits,
+            Facet::FractionDigits(_) => FacetKind::FractionDigits,
+            Facet::ExplicitTimezone(_) => FacetKind::ExplicitTimezone,
+            Facet::Assertion(_) => FacetKind::Assertion,
         }
     }
 }
@@ -383,6 +453,69 @@ impl Builtin {
             BuiltinKind::Complex | BuiltinKind::AnySimple => None,
             BuiltinKind::Atomic => Some(Variety::Atomic),
             BuiltinKind::List(_) => Some(Variety::List),
+        }
+    }
+
+    /// Whether `facet` may constrain this datatype.
+    ///
+    /// From the per-datatype "Constraining facets" lists in the datatypes
+    /// specification. The rule is about the *primitive*, not the type itself:
+    /// `xs:yearMonthDuration` derives from `xs:duration`, so `length` is no
+    /// more applicable to it than to a duration, even though it reads like a
+    /// measure of one.
+    ///
+    /// The ur-types admit everything. Nothing may be derived from them by
+    /// restriction anyway, so the question is moot there, and answering
+    /// `false` would turn a schema this crate cannot place into a schema it
+    /// rejects.
+    pub fn allows_facet(self, facet: FacetKind) -> bool {
+        use FacetKind as F;
+        // Applies to every simple type that admits any facet at all.
+        let universal = matches!(facet, F::Pattern | F::WhiteSpace | F::Assertion);
+        // Counts characters, or items for a list.
+        let sized = matches!(facet, F::Length | F::MinLength | F::MaxLength);
+
+        match self.kind() {
+            BuiltinKind::Complex | BuiltinKind::AnySimple => true,
+            BuiltinKind::List(_) => universal || sized || facet == F::Enumeration,
+            BuiltinKind::Atomic => {
+                let Some(p) = self.primitive() else {
+                    // xs:anyAtomicType, which is not restrictable either.
+                    return true;
+                };
+                if universal {
+                    return true;
+                }
+                match p {
+                    // Boolean has no enumeration: with two values, enumerating
+                    // them either says nothing or contradicts the type.
+                    B::Boolean => false,
+                    B::String
+                    | B::HexBinary
+                    | B::Base64Binary
+                    | B::AnyUri
+                    | B::QName
+                    | B::Notation => sized || facet == F::Enumeration,
+                    B::Decimal => {
+                        facet.is_bound()
+                            || matches!(facet, F::TotalDigits | F::FractionDigits | F::Enumeration)
+                    }
+                    B::Float | B::Double | B::Duration => {
+                        facet.is_bound() || facet == F::Enumeration
+                    }
+                    B::DateTime
+                    | B::Time
+                    | B::Date
+                    | B::GYearMonth
+                    | B::GYear
+                    | B::GMonthDay
+                    | B::GDay
+                    | B::GMonth => {
+                        facet.is_bound() || matches!(facet, F::Enumeration | F::ExplicitTimezone)
+                    }
+                    _ => unreachable!("primitive() returned a non-primitive: {p:?}"),
+                }
+            }
         }
     }
 

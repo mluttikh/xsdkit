@@ -323,7 +323,7 @@ fn compose(base: &FacetSet, step: &FacetSet) -> FacetSet {
 
 /// A simple type's base chain, itself first, stopping at the first
 /// non-simple type.
-fn simple_chain(schemas: &Schemas, id: TypeId) -> Vec<TypeId> {
+pub(crate) fn simple_chain(schemas: &Schemas, id: TypeId) -> Vec<TypeId> {
     let mut out = Vec::new();
     let mut cur = id;
     let mut guard = 0usize;
@@ -347,7 +347,10 @@ fn simple_chain(schemas: &Schemas, id: TypeId) -> Vec<TypeId> {
 ///
 /// A restriction inherits its base's variety, so restricting a list yields a
 /// list. The variety is therefore the nearest one actually declared.
-fn effective_variety(schemas: &Schemas, id: TypeId) -> (Variety, Option<TypeId>, Vec<TypeId>) {
+pub(crate) fn effective_variety(
+    schemas: &Schemas,
+    id: TypeId,
+) -> (Variety, Option<TypeId>, Vec<TypeId>) {
     for ty in simple_chain(schemas, id) {
         let Some(s) = schemas[ty].as_simple() else {
             continue;
@@ -368,7 +371,7 @@ fn effective_variety(schemas: &Schemas, id: TypeId) -> (Variety, Option<TypeId>,
 /// This is what fixes `whiteSpace`, and it is not the same as the primitive:
 /// a type restricting `xs:token` collapses, while its primitive `xs:string`
 /// preserves.
-fn nearest_builtin(schemas: &Schemas, id: TypeId) -> Option<Builtin> {
+pub(crate) fn nearest_builtin(schemas: &Schemas, id: TypeId) -> Option<Builtin> {
     simple_chain(schemas, id)
         .into_iter()
         .find_map(|t| schemas[t].as_simple().and_then(|s| s.builtin))

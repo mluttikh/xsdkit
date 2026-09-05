@@ -14,6 +14,8 @@
 //! 6. [`crate::content`] compiles every content model and checks UPA. It runs
 //!    against the finished `Schemas`, so it can expand substitution groups
 //!    while building.
+//! 7. [`crate::facets`] checks that each simple type's facets are facets that
+//!    datatype admits, and that their values are legal.
 
 use crate::datatypes::Builtin;
 use crate::diagnostics::{DiagCode, Diagnostic, Diagnostics, Severity, Span};
@@ -72,6 +74,8 @@ pub(crate) fn compile(mut loader: Loader<'_>, mode: Conformance) -> (Schemas, Di
     schemas.content_models = models;
     let mut diags = diags;
     diags.extend(content_diags);
+    // Step 7 likewise: every facet rule needs the base type resolved.
+    diags.extend(crate::facets::check_all(&schemas));
 
     (schemas, diags)
 }

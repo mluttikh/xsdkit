@@ -200,18 +200,23 @@ crate:
 | | |
 |---|---|
 | valid schemas accepted | **98.9%** — it reads real schemas |
-| invalid schemas rejected | **21.4%** — it does not enforce most validity constraints |
+| invalid schemas rejected | **30.7%** — it does not enforce most validity constraints |
 
 That asymmetry is by construction, not neglect: the Schema Component
-Constraints and the Derivation Valid rules are unimplemented (see §7). A
-schema this crate accepts is not thereby a *valid* schema.
+Constraints and the Derivation Valid rules are largely unimplemented (see §7).
+A schema this crate accepts is not thereby a *valid* schema. The facet rules
+*are* implemented — see `src/facets.rs`.
+
+`examples/w3c_gap.rs` is how to pick what to implement next: it clusters the
+invalid schemas we accept by test-group family, so a family with fifty misses
+is fifty cases one rule buys.
 
 The instance half — 21,671 documents — is `#[ignore]`d because it takes
 minutes where the schema half takes seconds (4.5 minutes in `--release`; run
 it that way). Run it with `-- --ignored`. It scores 21,575 of them, 90.8%
 correct: **88.1%** of valid documents accepted, **94.1%** of invalid ones
 rejected. The shape is the mirror of the schema half — validation is
-implemented, so it catches things. 1,160 of the 1,412 false alarms sit in
+implemented, so it catches things (the schema half's 21.4% at the time). 1,160 of the 1,412 false alarms sit in
 NIST2004-01-14 alone, which is where to look first.
 
 The harness carries a floor assertion on acceptance. **Raise it as the number

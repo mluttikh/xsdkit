@@ -11,7 +11,7 @@
 //! graphs that real schemas have.
 
 use crate::datatypes::{
-    Builtin, BuiltinKind, ExplicitTimezone, Facet, FacetSet, Variety, WhiteSpace,
+    Builtin, BuiltinKind, ExplicitTimezone, Facet, FacetKind, FacetSet, Variety, WhiteSpace,
 };
 use crate::diagnostics::{DiagCode, Diagnostic, Diagnostics, Span};
 use crate::model::*;
@@ -1530,7 +1530,49 @@ impl<'r> Loader<'r> {
                 }
             }
         }
+        self.check_step_facets(&out, &Span::new(&ctx.uri, line_of(doc, node)));
         out
+    }
+
+    /// Facets that contradict each other *on this restriction element*.
+    ///
+    /// This has to happen here rather than on the finished model, because
+    /// `FacetSet::restrict` composes: a `minExclusive` clears any inherited
+    /// `minInclusive`, which is right across steps and erases the evidence
+    /// within one. All of it is answerable from the document alone anyway —
+    /// nothing here needs the base type resolved.
+    fn check_step_facets(&mut self, facets: &[Facet], span: &Span) {
+        let mut err = |msg: String| {
+            self.diags
+                .push(Diagnostic::error(DiagCode::ConflictingFacets, msg).at(span.clone()));
+        };
+
+        // Each facet may be declared once per step. Patterns, enumerations and
+        // assertions are the exceptions: several of them combine rather than
+        // compete.
+        let mut seen: Vec<FacetKind> = Vec::new();
+        for f in facets {
+            let k = f.kind();
+            if matches!(
+                k,
+                FacetKind::Pattern | FacetKind::Enumeration | FacetKind::Assertion
+            ) {
+                continue;
+            }
+            if seen.contains(&k) {
+                err(format!("`xs:{k}` is declared more than once here"));
+            } else {
+                seen.push(k);
+            }
+        }
+
+        let has = |k: FacetKind| seen.contains(&k);
+        if has(FacetKind::MinInclusive) && has(FacetKind::MinExclusive) {
+            err("`xs:minInclusive` and `xs:minExclusive` cannot both be declared here".into());
+        }
+        if has(FacetKind::MaxInclusive) && has(FacetKind::MaxExclusive) {
+            err("`xs:maxInclusive` and `xs:maxExclusive` cannot both be declared here".into());
+        }
     }
 
     // -- complex types -----------------------------------------------------
