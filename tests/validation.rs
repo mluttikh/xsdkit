@@ -1,5 +1,6 @@
 //! Validating values against a schema's own simple types.
 
+use xsdkit::atomic::Decimal;
 use xsdkit::validate::ValidationError;
 use xsdkit::*;
 
@@ -438,4 +439,53 @@ fn a_bare_parse_reads_the_superset() {
 
     // The rule reaches into a list's items, not just the top-level form.
     assert!(parse_in(Builtin::Entities, "a b", Version::Xsd10).is_ok());
+}
+
+/// `Value` is public, so whatever it holds is this crate's API. These wrappers
+/// exist so that is *our* API — a consumer needs no extra dependency to take a
+/// value apart, and swapping the implementation behind them stays an internal
+/// change rather than a breaking one.
+#[test]
+fn a_parsed_value_can_be_taken_apart_without_another_dependency() {
+    use xsdkit::datatypes::Builtin;
+    use xsdkit::values::parse;
+
+    let Value::DateTime(dt) = parse(Builtin::DateTime, "2024-02-29T13:45:06.5+02:00").unwrap()
+    else {
+        panic!("expected a dateTime")
+    };
+    assert_eq!((dt.year(), dt.month(), dt.day()), (2024, 2, 29));
+    assert_eq!((dt.hour(), dt.minute()), (13, 45));
+    assert_eq!(dt.second().to_string(), "6.5");
+    assert_eq!(dt.timezone_offset().map(|t| t.minutes()), Some(120));
+    // And it still renders canonically.
+    assert_eq!(dt.to_string(), "2024-02-29T13:45:06.5+02:00");
+
+    let Value::Date(d) = parse(Builtin::Date, "2024-03-01").unwrap() else {
+        panic!("expected a date")
+    };
+    assert_eq!((d.year(), d.month(), d.day()), (2024, 3, 1));
+    assert_eq!(d.timezone_offset(), None, "no timezone was written");
+
+    let Value::Duration(dur) = parse(Builtin::Duration, "P1Y2M3DT4H5M6.5S").unwrap() else {
+        panic!("expected a duration")
+    };
+    assert_eq!((dur.years(), dur.months()), (1, 2));
+    assert_eq!((dur.days(), dur.hours(), dur.minutes()), (3, 4, 5));
+    assert_eq!(dur.seconds().to_string(), "6.5");
+
+    // A decimal converts exactly, without going through a string.
+    let Value::Decimal(dec) = parse(Builtin::Decimal, "1.5").unwrap() else {
+        panic!("expected a decimal")
+    };
+    assert_eq!(dec.to_i128_scaled(), 15 * (Decimal::SCALE / 10));
+
+    let Value::Double(x) = parse(Builtin::Double, "-1.5E3").unwrap() else {
+        panic!("expected a double")
+    };
+    assert_eq!(f64::from(x), -1500.0);
+    let Value::Float(y) = parse(Builtin::Float, "NaN").unwrap() else {
+        panic!("expected a float")
+    };
+    assert!(f32::from(y).is_nan());
 }

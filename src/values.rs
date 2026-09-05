@@ -15,15 +15,14 @@
 //! comparison, the two duration subtypes — and is exercised hard inside
 //! Oxigraph.
 
-use crate::datatypes::{Builtin, BuiltinKind, FacetSet};
-use crate::load::Version;
-use crate::names::QName;
-use oxsdatatypes::{
+use crate::atomic::{
     Date, DateTime, DayTimeDuration, Decimal, Double, Duration, Float, GDay, GMonth, GMonthDay,
     GYear, GYearMonth, Time, YearMonthDuration,
 };
+use crate::datatypes::{Builtin, BuiltinKind, FacetSet};
+use crate::load::Version;
+use crate::names::QName;
 use std::fmt;
-use std::str::FromStr;
 
 /// A value in an XSD value space.
 #[derive(Clone, Debug, PartialEq)]
@@ -89,8 +88,8 @@ impl Value {
         match (self, other) {
             (Decimal(a), Decimal(b)) => a.partial_cmp(b),
             (Integer(a), Integer(b)) => a.partial_cmp(b),
-            (Decimal(a), Integer(b)) => a.partial_cmp(&(*b).try_into().ok()?),
-            (Integer(a), Decimal(b)) => <oxsdatatypes::Decimal>::try_from(*a).ok()?.partial_cmp(b),
+            (Decimal(a), Integer(b)) => a.partial_cmp(&crate::atomic::Decimal::from_integer(*b)?),
+            (Integer(a), Decimal(b)) => crate::atomic::Decimal::from_integer(*a)?.partial_cmp(b),
             (Float(a), Float(b)) => a.partial_cmp(b),
             (Double(a), Double(b)) => a.partial_cmp(b),
             (DateTime(a), DateTime(b)) => a.partial_cmp(b),
@@ -127,8 +126,8 @@ impl Value {
 /// work reduces to turning a year and month into a day number, which the civil
 /// calendar formula does in constant time.
 fn duration_cmp(
-    a: &oxsdatatypes::Duration,
-    b: &oxsdatatypes::Duration,
+    a: &crate::atomic::Duration,
+    b: &crate::atomic::Duration,
 ) -> Option<std::cmp::Ordering> {
     // From the datatypes specification. Note the first is 1696, not the 1969
     // `oxsdatatypes` uses: 1696 is a leap year and 1969 is not, so the two
@@ -154,7 +153,7 @@ fn duration_cmp(
 /// 10^25 and scaling that by the decimal's 10^18 would overflow. Splitting at
 /// the second keeps the remainder non-negative, which is what makes comparing
 /// the pair lexicographically the same as comparing the instants.
-fn instant(reference: (i128, i128), d: &oxsdatatypes::Duration) -> Option<(i128, i128)> {
+fn instant(reference: (i128, i128), d: &crate::atomic::Duration) -> Option<(i128, i128)> {
     // `years`/`months` and `days`/`hours`/`minutes`/`seconds` are the
     // normalized components: everything below the leading one is bounded, so
     // recombining them recovers the totals exactly.
@@ -170,8 +169,8 @@ fn instant(reference: (i128, i128), d: &oxsdatatypes::Duration) -> Option<(i128,
 
     // The decimal is a fixed-point i128 scaled by 10^18, and holds less than a
     // minute, so splitting it at the second is exact.
-    const SCALE: i128 = 1_000_000_000_000_000_000;
-    let scaled = i128::from_be_bytes(d.seconds().to_be_bytes());
+    const SCALE: i128 = crate::atomic::Decimal::SCALE;
+    let scaled = d.seconds().to_i128_scaled();
 
     let seconds = day
         .checked_mul(86_400)?
@@ -362,7 +361,7 @@ fn parse_normalized(
             _ => return Err(bad("expected `true`, `false`, `1` or `0`")),
         },
 
-        B::Decimal => Value::Decimal(Decimal::from_str(s).map_err(|e| bad(&e.to_string()))?),
+        B::Decimal => Value::Decimal(Decimal::parse_lexical(s).map_err(|e| bad(&e))?),
 
         B::Integer
         | B::NonPositiveInteger
@@ -387,35 +386,33 @@ fn parse_normalized(
             Value::Integer(n)
         }
 
-        B::Float => Value::Float(Float::from_str(s).map_err(|e| bad(&e.to_string()))?),
-        B::Double => Value::Double(Double::from_str(s).map_err(|e| bad(&e.to_string()))?),
+        B::Float => Value::Float(Float::parse_lexical(s).map_err(|e| bad(&e))?),
+        B::Double => Value::Double(Double::parse_lexical(s).map_err(|e| bad(&e))?),
 
-        B::Duration => Value::Duration(Duration::from_str(s).map_err(|e| bad(&e.to_string()))?),
-        B::YearMonthDuration => Value::YearMonthDuration(
-            YearMonthDuration::from_str(s).map_err(|e| bad(&e.to_string()))?,
-        ),
+        B::Duration => Value::Duration(Duration::parse_lexical(s).map_err(|e| bad(&e))?),
+        B::YearMonthDuration => {
+            Value::YearMonthDuration(YearMonthDuration::parse_lexical(s).map_err(|e| bad(&e))?)
+        }
         B::DayTimeDuration => {
-            Value::DayTimeDuration(DayTimeDuration::from_str(s).map_err(|e| bad(&e.to_string()))?)
+            Value::DayTimeDuration(DayTimeDuration::parse_lexical(s).map_err(|e| bad(&e))?)
         }
 
-        B::DateTime => Value::DateTime(DateTime::from_str(s).map_err(|e| bad(&e.to_string()))?),
+        B::DateTime => Value::DateTime(DateTime::parse_lexical(s).map_err(|e| bad(&e))?),
         B::DateTimeStamp => {
-            let v = DateTime::from_str(s).map_err(|e| bad(&e.to_string()))?;
+            let v = DateTime::parse_lexical(s).map_err(|e| bad(&e))?;
             if v.timezone_offset().is_none() {
                 // The one thing dateTimeStamp adds over dateTime.
                 return Err(bad("a timezone is required by xs:dateTimeStamp"));
             }
             Value::DateTime(v)
         }
-        B::Time => Value::Time(Time::from_str(s).map_err(|e| bad(&e.to_string()))?),
-        B::Date => Value::Date(Date::from_str(s).map_err(|e| bad(&e.to_string()))?),
-        B::GYearMonth => {
-            Value::GYearMonth(GYearMonth::from_str(s).map_err(|e| bad(&e.to_string()))?)
-        }
-        B::GYear => Value::GYear(GYear::from_str(s).map_err(|e| bad(&e.to_string()))?),
-        B::GMonthDay => Value::GMonthDay(GMonthDay::from_str(s).map_err(|e| bad(&e.to_string()))?),
-        B::GDay => Value::GDay(GDay::from_str(s).map_err(|e| bad(&e.to_string()))?),
-        B::GMonth => Value::GMonth(GMonth::from_str(s).map_err(|e| bad(&e.to_string()))?),
+        B::Time => Value::Time(Time::parse_lexical(s).map_err(|e| bad(&e))?),
+        B::Date => Value::Date(Date::parse_lexical(s).map_err(|e| bad(&e))?),
+        B::GYearMonth => Value::GYearMonth(GYearMonth::parse_lexical(s).map_err(|e| bad(&e))?),
+        B::GYear => Value::GYear(GYear::parse_lexical(s).map_err(|e| bad(&e))?),
+        B::GMonthDay => Value::GMonthDay(GMonthDay::parse_lexical(s).map_err(|e| bad(&e))?),
+        B::GDay => Value::GDay(GDay::parse_lexical(s).map_err(|e| bad(&e))?),
+        B::GMonth => Value::GMonth(GMonth::parse_lexical(s).map_err(|e| bad(&e))?),
 
         B::HexBinary => Value::HexBinary(
             hex_decode(s).ok_or_else(|| bad("expected an even number of hexadecimal digits"))?,

@@ -1346,7 +1346,7 @@ fn value_to_py<'py>(py: Python<'py>, v: &Value) -> PyResult<Bound<'py, PyAny>> {
                 dt.minute(),
                 sec,
                 micro,
-                tzinfo(py, dt.timezone_offset().map(tz_minutes))?,
+                tzinfo(py, dt.timezone_offset().map(|t| t.minutes()))?,
             ))
         }
         Value::Date(d) => {
@@ -1361,7 +1361,7 @@ fn value_to_py<'py>(py: Python<'py>, v: &Value) -> PyResult<Bound<'py, PyAny>> {
                 t.minute(),
                 sec,
                 micro,
-                tzinfo(py, t.timezone_offset().map(tz_minutes))?,
+                tzinfo(py, t.timezone_offset().map(|t| t.minutes()))?,
             ))
         }
         Value::DayTimeDuration(d) => py.import("datetime")?.getattr("timedelta")?.call1((
@@ -1391,10 +1391,6 @@ fn split_seconds(text: &str) -> (u32, u32) {
     let sec = f.trunc().max(0.0) as u32;
     let micro = ((f - f.trunc()) * 1_000_000.0).round() as u32;
     (sec, micro.min(999_999))
-}
-
-fn tz_minutes(tz: oxsdatatypes::TimezoneOffset) -> i16 {
-    i16::from_be_bytes(tz.to_be_bytes())
 }
 
 fn tzinfo<'py>(py: Python<'py>, minutes: Option<i16>) -> PyResult<Option<Bound<'py, PyAny>>> {

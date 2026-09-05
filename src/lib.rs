@@ -47,6 +47,7 @@
 #![forbid(unsafe_code)]
 #![warn(missing_debug_implementations)]
 
+pub mod atomic;
 pub(crate) mod compile;
 pub mod content;
 pub mod datatypes;

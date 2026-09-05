@@ -928,11 +928,11 @@ binding shapes are already reachable through the public API in fifteen lines
      spaces; we apply them in 1.0 mode because `values::parse` never receives
      the version. That one is ours (see AGENTS.md, road to 1.0, P1.2).
 
-   What *did* change is the API judgement. `Value` exposes these types
-   publicly, which pins every downstream user to our exact version of the
-   library. That has to be wrapped before 1.0 — not to leave `oxsdatatypes`,
-   but so that leaving it later would be an internal change rather than a
-   breaking one.
+   What *did* change is the API judgement, and it is now acted on. `Value`
+   exposed these types publicly, which pinned every downstream user to our
+   exact version of the library. `src/atomic.rs` wraps all 14 — not to leave
+   `oxsdatatypes`, but so that leaving it later is an internal change rather
+   than a breaking one.
 5. **Codegen?** No — see §3.1. This is the load-bearing exclusion.
 6. **One package or three?** Three (§3.0b). `xsdkit` stays a generic XSD
    reader with almost no dependencies; `xsd2arrow` and the unit-conversion

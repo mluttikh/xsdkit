@@ -379,23 +379,28 @@ Both need `XSDTESTS`. Re-run them before trusting any number here.
 
 ### P0 — the irreversible one
 
-**Get `oxsdatatypes` out of the public API.** `Value` is public and holds its
-types directly:
+~~**Get `oxsdatatypes` out of the public API.**~~ **Done** — `src/atomic.rs`.
 
-```rust
-pub enum Value { Decimal(Decimal), DateTime(DateTime), Duration(Duration), … }
-```
+`Value` is public, so whatever it held was this crate's API, and it held the
+library's types directly. Anyone matching on `Value::DateTime(dt)` had to add
+`oxsdatatypes` to their own `Cargo.toml` and was pinned to our exact version,
+so a patch bump on our side was a breaking change on theirs.
 
-Anyone who matches on `Value::DateTime(dt)` has to add `oxsdatatypes` to their
-own `Cargo.toml` and is pinned to our exact version — so every bump of it is a
-breaking change for them. Wrap the 14 datatypes in our own types (or newtypes
-exposing `Display`, `PartialOrd` and the accessors) before 1.0.
+The 14 datatypes are now newtypes that forward to it. **Nothing outside
+`src/atomic.rs` may name `oxsdatatypes`** — not even in a `From` impl, which
+is why `TimezoneOffset::wrap` is an inherent function rather than the obvious
+`From`. A public trait impl naming a foreign type is the same leak wearing a
+different hat. `grep -rl oxsdatatypes src/` should list `atomic.rs` and
+nothing else but prose.
 
-The point is not to leave the library. It is that after 1.0 this cannot be
-changed, and doing it now turns "should we replace `oxsdatatypes`?" from a
-one-shot breaking decision into an internal, per-type one we can take later on
-evidence — or never. See `DESIGN.md` §3.15.4 for why the answer today is
-"keep it".
+What the wrappers expose is what a consumer actually does with a parsed value:
+`Display` for the canonical form, ordering, and the components — enough to
+build a `chrono::DateTime`, an Arrow column or a Python `datetime`. Add to
+that list rather than handing out the inner value.
+
+This was never about leaving the library; `DESIGN.md` §3.15.4 says why keeping
+it is right. It is that after 1.0 the choice could not be revisited, and now
+replacing any one type is an internal change.
 
 ### P1 — correctness bugs, all small, all with repros
 
