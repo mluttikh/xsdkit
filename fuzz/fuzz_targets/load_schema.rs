@@ -36,6 +36,28 @@ fn walk_everything(schemas: &xsdkit::Schemas) {
     for (id, def) in schemas.iter_types() {
         let _ = def.name().map(|n| schemas.display_name(n));
         let _ = schemas.base_chain(id);
+        // Index the id-bearing fields *directly*. `base_chain` guards against
+        // a placeholder and stops, so it cannot see one; indexing is what
+        // trips the debug assertion. Three separate bugs have been a field
+        // nothing indexed — a simple type's base, a list's item type, a
+        // union's members — so every new one belongs here.
+        let _ = &schemas[def.base()];
+        if let Some(t) = def.as_simple() {
+            if let Some(item) = t.item_type {
+                let _ = &schemas[item];
+            }
+            for m in &t.member_types {
+                let _ = &schemas[*m];
+            }
+        }
+        if let Some(c) = def.as_complex() {
+            for u in &c.attribute_uses {
+                let _ = &schemas[u.attribute];
+            }
+            if let xsdkit::model::ContentType::Simple(t) = c.content {
+                let _ = &schemas[t];
+            }
+        }
         let _ = schemas.attribute_uses(id);
         let _ = schemas.content(id);
         for child in schemas.possible_children(id) {

@@ -346,6 +346,17 @@ graph, so a component pruned from its container is still handed to callers. Any
 new public accessor belongs in `walk_everything`, or the surface it opens is
 unfuzzed.
 
+**And index every id-bearing field there, directly.** Three separate bugs have
+now been the same shape: `prune_placeholders` repairs the fields someone
+remembered, and one nobody walked kept its placeholder into `Schemas` — an
+attribute's type, a dangling particle's term, and the four places one type
+points at another. The `debug_assert!` in the arena `Index` impls is what
+catches it, so a field is only checked if something *indexes* it. Convenience
+accessors do not count: `base_chain` guards against a placeholder and stops,
+which is exactly why it never saw the third one. **Adding an id to a component
+means adding a repair in `prune_placeholders` and an index in
+`walk_everything`, in the same change.**
+
 The corpus is not vendored — it is derived from the same W3C suite `XSDTESTS`
 points at, and reseeded with:
 
