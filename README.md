@@ -78,6 +78,7 @@ schemas = xsdkit.SchemaSet.from_file("report.xsd", search_paths=["schemas/"])
 report = schemas["{urn:example}report"]
 
 report.tree()          # or print(...); it renders in a notebook either way
+                       # in Jupyter, a collapsible colour-coded tree
 # report
 #   title: xs:string
 #   item+

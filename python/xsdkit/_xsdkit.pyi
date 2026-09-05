@@ -71,6 +71,9 @@ class Span:
     label: str | None
 
 class Diagnostic:
+    def _repr_html_(self) -> str:
+        """The diagnostic as a compiler would print it."""
+
     @property
     def code(self) -> str: ...
     @property
@@ -101,6 +104,9 @@ class AppInfo:
     xml: str
 
 class Facets:
+    def _repr_html_(self) -> str:
+        """The constraints in force, as a table."""
+
     """A set of facets on a simple type.
 
     Bounds and enumerations are the lexical forms the schema wrote, not typed
@@ -408,6 +414,9 @@ class NameIterator:
     def __len__(self) -> int: ...
 
 class ValidationReport:
+    def _repr_html_(self) -> str:
+        """A summary line and a table of what was found."""
+
     @property
     def is_valid(self) -> bool: ...
     @property
@@ -417,6 +426,9 @@ class ValidationReport:
     def __bool__(self) -> bool: ...
 
 class SchemaSet:
+    def _repr_html_(self) -> str:
+        """Its documents and globals at a glance."""
+
     @classmethod
     def from_file(
         cls,

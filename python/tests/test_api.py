@@ -480,9 +480,9 @@ def test_a_tree_shows_itself_rather_than_escaping_itself():
     assert "\\n" not in repr(t)
     assert repr(t).splitlines()[0] == "report"
 
-    # Jupyter picks the HTML up, monospaced and whitespace-preserving.
+    # Jupyter picks the HTML up, structured and monospaced.
     html = t._repr_html_()
-    assert html.startswith("<pre") and "item+" in html
+    assert "item" in html and "jp-code-font-family" in html
 
     # And it still behaves as the text it is.
     assert "item+" in t
@@ -513,6 +513,97 @@ def test_evaluating_a_component_shows_it():
     )
     for component in (s.elements[0], s.types[0]):
         html = component._repr_html_()
-        assert html.startswith("<pre") and "item" in html
+        assert "item" in html and html.startswith("<div")
     # `repr` stays short, so a list of them is still readable.
     assert repr(s.elements) == "[<Element {urn:example}report>]"
+
+
+# --- notebook rendering -----------------------------------------------------
+
+
+def _html(obj):
+    """What IPython would actually put in a cell's output."""
+    from IPython.core.formatters import DisplayFormatter
+
+    data, _ = DisplayFormatter().format(obj)
+    return data.get("text/html", "")
+
+
+@pytest.fixture
+def rich():
+    return build(
+        '<xs:element name="report"><xs:complexType><xs:sequence>'
+        '<xs:element name="item" maxOccurs="unbounded"><xs:complexType><xs:sequence>'
+        '<xs:element name="amount" type="tns:Money"/>'
+        '<xs:element name="note" type="xs:string" minOccurs="0"/>'
+        '</xs:sequence><xs:attribute name="sku" type="xs:string" use="required"/>'
+        "</xs:complexType></xs:element></xs:sequence></xs:complexType></xs:element>"
+        '<xs:simpleType name="Money"><xs:restriction base="xs:decimal">'
+        '<xs:fractionDigits value="2"/><xs:minInclusive value="0"/>'
+        "</xs:restriction></xs:simpleType>"
+    )
+
+
+def test_every_rendering_reaches_ipython_and_is_well_formed(rich):
+    report = rich.validate(f'<report xmlns="{NS}"><item><amount>x</amount></item></report>')
+    subjects = {
+        "SchemaSet": rich,
+        "Element": rich.elements[0],
+        "Type": rich.types[0],
+        "Facets": rich.type(NS, "Money").facets,
+        "ValidationReport": report,
+        "Diagnostic": report.diagnostics[0],
+        "Tree": rich.elements[0].tree(),
+    }
+    for label, obj in subjects.items():
+        html = _html(obj)
+        assert html, f"{label} gives IPython no text/html"
+        for open_tag, close in (("<div", "</div>"), ("<table", "</table>"),
+                                ("<tr>", "</tr>"), ("<details", "</details>")):
+            assert html.count(open_tag) == html.count(close), f"{label}: {open_tag} unbalanced"
+
+
+def test_renderings_adapt_to_the_theme(rich):
+    """Hard-coded colours are unreadable in half of all notebooks.
+
+    Every colour goes through a `--jp-*` variable, which JupyterLab redefines
+    per theme, with a literal fallback for the classic Notebook and VS Code,
+    which define none of them.
+    """
+    for obj in (rich, rich.elements[0], rich.type(NS, "Money").facets):
+        html = _html(obj)
+        colours = [c for c in html.split("color:")[1:]]
+        assert colours, "nothing coloured at all"
+        for c in colours:
+            assert c.startswith("var(--jp-"), f"hard-coded colour: {c[:40]}"
+            assert "," in c.split(")")[0], "no fallback for a non-Jupyter host"
+
+
+def test_a_tree_is_collapsible(rich):
+    """`<details>` gives a big schema a way to be explored rather than dumped."""
+    html = rich.elements[0].tree()._repr_html_()
+    assert "<details" in html and "<summary" in html
+    # Open near the root, closed deeper, so a large schema does not arrive
+    # fully expanded.
+    assert "<details open>" in html
+
+
+def test_a_long_report_is_cut_off(rich):
+    many = "".join(f"<item><amount>x{i}</amount></item>" for i in range(60))
+    report = rich.validate(f'<report xmlns="{NS}">{many}</report>')
+    html = _html(report)
+    assert len(report.diagnostics) > 40
+    assert "and" in html and "more" in html, "a long list has to say it was cut"
+    assert html.count("<tr>") <= 41
+
+
+def test_markup_from_a_schema_cannot_escape_into_the_page(rich):
+    s = xsdkit.SchemaSet.from_string(
+        f'<xs:schema xmlns:xs="{XS}" xmlns:tns="urn:a&amp;b" targetNamespace="urn:a&amp;b">'
+        '<xs:element name="e" type="tns:T"/>'
+        '<xs:complexType name="T"><xs:sequence/></xs:complexType></xs:schema>'
+    )
+    for obj in (s, s.elements[0], s.elements[0].tree()):
+        html = _html(obj)
+        assert "urn:a&amp;b" in html
+        assert "urn:a&b<" not in html

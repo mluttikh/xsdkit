@@ -764,6 +764,64 @@ impl PySchemaSet {
         ])
     }
 
+    /// What is in this schema set, at a glance.
+    ///
+    /// The documents it was built from and the globals they declare, which is
+    /// what you want to see first on opening a schema you did not write.
+    #[allow(non_snake_case)]
+    fn _repr_html_(&self) -> String {
+        let elements = self.elements();
+        let types = self.types();
+        let documents = self.documents();
+        let plural = |n: usize| if n == 1 { "" } else { "s" };
+        let mut out = format!(
+            "<div style=\"{MONO}\"><b>SchemaSet</b> <span style=\"{FAINT}\">\
+             {} document{}, {} element{}, {} type{}</span></div>",
+            documents.len(),
+            plural(documents.len()),
+            elements.len(),
+            plural(elements.len()),
+            types.len(),
+            plural(types.len()),
+        );
+
+        const LIMIT: usize = 25;
+        let mut rows = String::new();
+        for d in documents.iter().take(LIMIT) {
+            rows.push_str(&format!(
+                "<tr>{}{}</tr>",
+                cell(MUTED, &esc(&d.uri)),
+                cell(
+                    NAME,
+                    &esc(d.target_namespace.as_deref().unwrap_or("(no namespace)"))
+                ),
+            ));
+        }
+        out.push_str(&table(rows));
+
+        // Names only. A schema with three hundred globals should not render
+        // three hundred trees, and each one is a subscript away.
+        if !elements.is_empty() {
+            let shown: Vec<String> = elements
+                .iter()
+                .take(LIMIT)
+                .map(|e| format!("<span style=\"{NAME}\">{}</span>", esc(&e.local_name())))
+                .collect();
+            let more = elements.len().saturating_sub(LIMIT);
+            out.push_str(&format!(
+                "<div style=\"{MONO};padding-top:.3em\"><span style=\"{FAINT}\">elements: \
+                 </span>{}{}</div>",
+                shown.join(&format!("<span style=\"{FAINT}\">, </span>")),
+                if more > 0 {
+                    format!("<span style=\"{FAINT}\"> … and {more} more</span>")
+                } else {
+                    String::new()
+                }
+            ));
+        }
+        out
+    }
+
     fn __repr__(&self) -> String {
         let c = self.inner.component_counts();
         format!(
@@ -1116,10 +1174,10 @@ impl PyElement {
     ///         note?: xs:string
     #[pyo3(signature = (depth=3))]
     fn tree(&self, depth: usize) -> PyTree {
-        let mut text = String::new();
+        let (mut text, mut html) = (String::new(), String::new());
         let mut seen = Vec::new();
-        self.write_tree(&mut text, 0, depth, &mut seen, "");
-        PyTree { text }
+        self.write_tree(&mut text, &mut html, 0, depth, &mut seen, "");
+        PyTree { text, html }
     }
 
     fn __repr__(&self) -> String {
@@ -1135,6 +1193,59 @@ impl PyElement {
     }
 }
 
+// ---------------------------------------------------------------------------
+// Notebook rendering
+// ---------------------------------------------------------------------------
+//
+// Everything below styles itself with JupyterLab's `--jp-*` CSS variables,
+// each with a literal fallback. That is what makes a rendering readable in
+// both themes without asking which one is on: `--jp-content-font-color1` is
+// near-black in the light theme and white in the dark one. A hard-coded colour
+// is unreadable in half of all notebooks, and the fallback covers the classic
+// Notebook and VS Code, which define none of these.
+//
+// Styles are inline rather than in a `<style>` block: an output cell has no
+// scope of its own, so a class name would leak into every other rendering on
+// the page.
+
+/// Escapes text for HTML. A namespace URI may hold an ampersand.
+fn esc(s: &str) -> String {
+    s.replace('&', "&amp;")
+        .replace('<', "&lt;")
+        .replace('>', "&gt;")
+}
+
+/// The monospaced frame every rendering sits in.
+const MONO: &str = "font-family:var(--jp-code-font-family,ui-monospace,SFMono-Regular,Menlo,monospace);\
+                    font-size:var(--jp-code-font-size,13px);line-height:1.5";
+/// An element or attribute name — the thing being named.
+const NAME: &str = "color:var(--jp-mirror-editor-def-color,#00f)";
+/// An attribute name, distinguished from an element's.
+const ATTR: &str = "color:var(--jp-mirror-editor-attribute-color,#00c)";
+/// A type name: present, but not what the eye should land on.
+const MUTED: &str = "color:var(--jp-content-font-color2,rgba(0,0,0,.54))";
+/// Occurrence markers and other punctuation.
+const FAINT: &str = "color:var(--jp-content-font-color3,rgba(0,0,0,.38))";
+
+/// The colour a severity is shown in.
+fn severity_color(severity: &str) -> &'static str {
+    match severity {
+        "error" => "var(--jp-error-color1,#d32f2f)",
+        "warning" => "var(--jp-warn-color1,#f57c00)",
+        _ => "var(--jp-info-color1,#1976d2)",
+    }
+}
+
+/// A table, with the borders and padding every rendering here shares.
+fn table(rows: String) -> String {
+    format!("<table style=\"{MONO};border-collapse:collapse\"><tbody>{rows}</tbody></table>")
+}
+
+/// One cell of one.
+fn cell(style: &str, content: &str) -> String {
+    format!("<td style=\"padding:.1em .7em .1em 0;vertical-align:top;{style}\">{content}</td>")
+}
+
 /// Rendered text that knows how to show itself.
 ///
 /// A plain `str` is the wrong return type for something meant to be *looked
@@ -1144,6 +1255,7 @@ impl PyElement {
 #[pyclass(module = "xsdkit", name = "Tree", frozen)]
 pub struct PyTree {
     text: String,
+    html: String,
 }
 
 #[pymethods]
@@ -1163,15 +1275,7 @@ impl PyTree {
     /// The leading underscore is IPython's convention, not ours.
     #[allow(non_snake_case)]
     fn _repr_html_(&self) -> String {
-        let escaped = self
-            .text
-            .replace('&', "&amp;")
-            .replace('<', "&lt;")
-            .replace('>', "&gt;");
-        format!(
-            "<pre style=\"line-height:1.3;margin:0;font-family:ui-monospace,\
-             SFMono-Regular,Menlo,monospace\">{escaped}</pre>"
-        )
+        format!("<div style=\"{MONO}\">{}</div>", self.html)
     }
 
     /// The lines, so a tree can be sliced and searched like the text it is.
@@ -1215,6 +1319,7 @@ impl PyElement {
     fn write_tree(
         &self,
         out: &mut String,
+        html: &mut String,
         indent: usize,
         left: usize,
         seen: &mut Vec<ElementId>,
@@ -1242,35 +1347,80 @@ impl PyElement {
             named
         );
 
+        // The same line in HTML, coloured by role so that a name, its type and
+        // how often it may appear are told apart at a glance.
+        let label = format!(
+            "<span style=\"{NAME}\">{}</span><span style=\"{FAINT}\">{}</span>\
+             <span style=\"{MUTED}\">{}</span>",
+            esc(&self.local_name()),
+            esc(occurrence),
+            esc(&named)
+        );
+
+        let attributes = t.attributes();
+        let children = self.children();
         // A recursive schema — a section containing sections — would otherwise
         // print until the depth ran out, saying nothing new each time.
-        if seen.contains(&self.id) {
+        let repeated = seen.contains(&self.id);
+        let leaf = repeated || left == 0 || (attributes.is_empty() && children.is_empty());
+
+        if leaf {
+            // Padded to where a disclosure triangle puts its text, so leaves
+            // and branches line up.
+            let _ = write!(html, "<div style=\"padding-left:1.15em\">{label}");
+            if repeated {
+                let _ = write!(html, " <span style=\"{FAINT}\">…</span>");
+            }
+            let _ = writeln!(html, "</div>");
+        } else {
+            // Open near the root, closed deeper down: the top of a schema is
+            // what you want to see, and a large one would otherwise arrive
+            // fully expanded.
+            let open = if indent < 2 { " open" } else { "" };
+            let _ = writeln!(
+                html,
+                "<details{open}><summary style=\"cursor:pointer\">{label}</summary>\
+                 <div style=\"padding-left:.6em;margin-left:.35em;\
+                 border-left:1px solid var(--jp-border-color2,#e0e0e0)\">"
+            );
+        }
+
+        if repeated {
             let _ = writeln!(out, "{}  ...", "  ".repeat(indent));
             return;
         }
-        if left == 0 {
+        if leaf {
             return;
         }
         seen.push(self.id);
-        for u in t.attributes() {
+        for u in &attributes {
+            let optional = if u.required() { "" } else { "?" };
             let _ = writeln!(
                 out,
                 "{}  @{}{}",
                 "  ".repeat(indent),
                 u.local_name(),
-                if u.required() { "" } else { "?" }
+                optional
+            );
+            let _ = writeln!(
+                html,
+                "<div style=\"padding-left:1.15em\"><span style=\"{ATTR}\">@{}</span>\
+                 <span style=\"{FAINT}\">{}</span></div>",
+                esc(&u.local_name()),
+                optional
             );
         }
-        for c in self.children() {
-            let marker = match (t.repeats(&c), t.optional(&c)) {
+        for c in &children {
+            let marker = match (t.repeats(c), t.optional(c)) {
                 (true, true) => "*",
                 (true, false) => "+",
                 (false, true) => "?",
                 (false, false) => "",
             };
-            c.write_tree(out, indent + 1, left - 1, seen, marker);
+            c.write_tree(out, html, indent + 1, left - 1, seen, marker);
         }
         seen.pop();
+        let _ = writeln!(html, "</div></details>");
     }
 }
 
@@ -1805,20 +1955,22 @@ impl PyType_ {
     #[pyo3(signature = (depth=3))]
     fn tree(&self, depth: usize) -> PyTree {
         use std::fmt::Write;
-        let mut text = String::new();
-        let _ = writeln!(
-            text,
-            "{}",
-            self.qname()
-                .map(|n| short(&n))
-                .unwrap_or_else(|| "(anonymous)".into())
-        );
+        let (mut text, mut html) = (String::new(), String::new());
+        let name = self
+            .qname()
+            .map(|n| short(&n))
+            .unwrap_or_else(|| "(anonymous)".into());
+        let _ = writeln!(text, "{name}");
+        let _ = writeln!(html, "<div style=\"{NAME}\">{}</div>", esc(&name));
         for u in self.attributes() {
+            let optional = if u.required() { "" } else { "?" };
+            let _ = writeln!(text, "  @{}{}", u.local_name(), optional);
             let _ = writeln!(
-                text,
-                "  @{}{}",
-                u.local_name(),
-                if u.required() { "" } else { "?" }
+                html,
+                "<div style=\"padding-left:1.15em\"><span style=\"{ATTR}\">@{}</span>\
+                 <span style=\"{FAINT}\">{}</span></div>",
+                esc(&u.local_name()),
+                optional
             );
         }
         let mut seen = Vec::new();
@@ -1829,9 +1981,9 @@ impl PyType_ {
                 (false, true) => "?",
                 (false, false) => "",
             };
-            c.write_tree(&mut text, 1, depth, &mut seen, marker);
+            c.write_tree(&mut text, &mut html, 1, depth, &mut seen, marker);
         }
-        PyTree { text }
+        PyTree { text, html }
     }
 
     /// Shows the tree in a notebook. Shallower than `tree()`, as on `Element`.
@@ -1980,6 +2132,64 @@ impl PyFacets {
     #[getter]
     fn fraction_digits(&self) -> Option<u32> {
         self.0.fraction_digits
+    }
+
+    /// The constraints in force, as a table of the ones that are set.
+    #[allow(non_snake_case)]
+    fn _repr_html_(&self) -> String {
+        let mut rows = String::new();
+        let mut row = |name: &str, value: String| {
+            rows.push_str(&format!(
+                "<tr>{}{}</tr>",
+                cell(MUTED, &esc(name)),
+                cell(NAME, &esc(&value))
+            ));
+        };
+        if let Some(v) = self.length() {
+            row("length", v.to_string());
+        }
+        if let Some(v) = self.min_length() {
+            row("minLength", v.to_string());
+        }
+        if let Some(v) = self.max_length() {
+            row("maxLength", v.to_string());
+        }
+        for (name, value) in [
+            ("minInclusive", self.min_inclusive()),
+            ("minExclusive", self.min_exclusive()),
+            ("maxInclusive", self.max_inclusive()),
+            ("maxExclusive", self.max_exclusive()),
+            ("whiteSpace", self.white_space()),
+        ] {
+            if let Some(v) = value {
+                row(name, v);
+            }
+        }
+        if let Some(v) = self.total_digits() {
+            row("totalDigits", v.to_string());
+        }
+        if let Some(v) = self.fraction_digits() {
+            row("fractionDigits", v.to_string());
+        }
+        if let Some(values) = self.enumeration() {
+            row("enumeration", values.join(" | "));
+        }
+        // Patterns are ANDed across steps and ORed within one, which a flat
+        // list would misrepresent.
+        for (i, step) in self.patterns().iter().enumerate() {
+            row(
+                &if i == 0 {
+                    "pattern".to_string()
+                } else {
+                    format!("pattern ({})", i + 1)
+                },
+                step.join(" | "),
+            );
+        }
+        if rows.is_empty() {
+            return format!("<div style=\"{MONO};{FAINT}\">no facets</div>");
+        }
+        table(rows)
     }
 
     fn __repr__(&self) -> String {
@@ -2215,6 +2425,39 @@ impl PyDiagnostic {
         self.0.to_string()
     }
 
+    /// The diagnostic as a compiler would print it, coloured by severity.
+    #[allow(non_snake_case)]
+    fn _repr_html_(&self) -> String {
+        let severity = self.severity();
+        let mut out = format!(
+            "<div style=\"{MONO}\"><span style=\"color:{};font-weight:600\">{}</span> \
+             <span style=\"{FAINT}\">[{}]</span> {}",
+            severity_color(severity),
+            esc(severity),
+            esc(self.code()),
+            esc(&self.message())
+        );
+        for span in self.spans() {
+            out.push_str(&format!(
+                "<div style=\"padding-left:1.2em;{MUTED}\">→ {}{}</div>",
+                esc(&span.__str__()),
+                span.label
+                    .as_deref()
+                    .map(|l| format!("  <em>{}</em>", esc(l)))
+                    .unwrap_or_default()
+            ));
+        }
+        if let Some(help) = self.help() {
+            out.push_str(&format!(
+                "<div style=\"padding-left:1.2em;color:var(--jp-info-color1,#1976d2)\">\
+                 help: {}</div>",
+                esc(&help)
+            ));
+        }
+        out.push_str("</div>");
+        out
+    }
+
     fn __repr__(&self) -> String {
         format!("<Diagnostic {} {}>", self.code(), self.0.message)
     }
@@ -2354,6 +2597,69 @@ impl PyValidationReport {
 
     fn __bool__(&self) -> bool {
         self.valid
+    }
+
+    /// A summary line and a table of what was found.
+    ///
+    /// The old rendering said only how many diagnostics there were, so seeing
+    /// any of them meant a loop. Long lists are cut off rather than filling
+    /// the notebook: a document that is wrong in four hundred ways is not
+    /// usefully read four hundred lines at a time.
+    #[allow(non_snake_case)]
+    fn _repr_html_(&self) -> String {
+        let errors = self.errors().len();
+        let others = self.diagnostics.len() - errors;
+        let (colour, verdict) = if self.valid {
+            ("var(--jp-success-color1,#388e3c)", "valid")
+        } else {
+            ("var(--jp-error-color1,#d32f2f)", "invalid")
+        };
+        let mut counts = Vec::new();
+        if errors > 0 {
+            counts.push(format!(
+                "{errors} error{}",
+                if errors == 1 { "" } else { "s" }
+            ));
+        }
+        if others > 0 {
+            counts.push(format!(
+                "{others} other{}",
+                if others == 1 { "" } else { "s" }
+            ));
+        }
+        let summary = format!(
+            "<div style=\"{MONO}\"><span style=\"color:{colour};font-weight:600\">{verdict}</span>\
+             <span style=\"{FAINT}\">{}</span></div>",
+            if counts.is_empty() {
+                String::new()
+            } else {
+                format!(" — {}", counts.join(", "))
+            }
+        );
+
+        const LIMIT: usize = 40;
+        let mut rows = String::new();
+        for d in self.diagnostics.iter().take(LIMIT) {
+            let severity = d.severity();
+            let location = d.spans().first().map(|s| s.__str__()).unwrap_or_default();
+            rows.push_str(&format!(
+                "<tr>{}{}{}{}</tr>",
+                cell(
+                    &format!("color:{};font-weight:600", severity_color(severity)),
+                    &esc(severity)
+                ),
+                cell(FAINT, &esc(d.code())),
+                cell("", &esc(&d.message())),
+                cell(MUTED, &esc(&location)),
+            ));
+        }
+        let more = self.diagnostics.len().saturating_sub(LIMIT);
+        let tail = if more > 0 {
+            format!("<div style=\"{MONO};{FAINT}\">… and {more} more</div>")
+        } else {
+            String::new()
+        };
+        format!("{summary}{}{tail}", table(rows))
     }
 
     fn __repr__(&self) -> String {

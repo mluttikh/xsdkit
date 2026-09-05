@@ -608,6 +608,15 @@ practice, since each was a real complaint:
   on the component, and pairs made every caller write `[0][1]`. The complaint
   that produced all of this was one line of real code:
   `x.elements[0][1].type.children[1].type.children[0].qname`.
+- **Notebook renderings style themselves with `--jp-*` variables, always with
+  a fallback.** JupyterLab redefines them per theme —
+  `--jp-content-font-color1` is `rgba(0,0,0,.87)` in light and `#fff` in dark —
+  so a hard-coded colour is unreadable in half of all notebooks, and the
+  fallback covers the classic Notebook and VS Code, which define none of them.
+  A test asserts every colour goes through one. Styles are inline rather than
+  in a `<style>` block: an output cell has no scope, so a class name leaks into
+  every other rendering on the page. Escape everything — a namespace URI may
+  hold an ampersand.
 - **Anything meant to be looked at returns a display object, not a `str`.**
   A notebook shows `repr()` of the last expression, and `repr` of a string
   escapes every newline — so `tree()` returning a `str` was unreadable in the
