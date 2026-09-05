@@ -16,6 +16,7 @@
 //! Oxigraph.
 
 use crate::datatypes::{Builtin, BuiltinKind, FacetSet};
+use crate::load::Version;
 use crate::names::QName;
 use oxsdatatypes::{
     Date, DateTime, DayTimeDuration, Decimal, Double, Duration, Float, GDay, GMonth, GMonthDay,
@@ -268,28 +269,63 @@ fn err(builtin: Builtin, lexical: &str, reason: impl Into<String>) -> ValueError
 /// Applies the type's `whiteSpace` facet first — that ordering is the whole
 /// difference between `xs:string` and `xs:token`, and between a valid and an
 /// invalid `xs:int`.
+///
+/// Reads the **XSD 1.1** lexical spaces, which are a superset of 1.0's. With
+/// no schema in hand there is nothing to say which language applies, and
+/// refusing a form that some schema somewhere admits is the more surprising
+/// answer. Use [`parse_in`] where the version is known — validating against a
+/// schema does, and [`crate::validate::Validator`] passes it through.
 pub fn parse(builtin: Builtin, lexical: &str) -> Result<Value, ValueError> {
+    parse_in(builtin, lexical, Version::Xsd11)
+}
+
+/// Parses a lexical form in a particular version of XSD.
+///
+/// The two languages differ in exactly two places among the built-ins, both
+/// widenings that 1.1 made and 1.0 forbids:
+///
+/// - the year `0000`, which 1.1 admits as 1 BCE and 1.0 prohibits outright;
+/// - `+INF`, which 1.1 added to the special values and 1.0 does not have.
+pub fn parse_in(builtin: Builtin, lexical: &str, version: Version) -> Result<Value, ValueError> {
     let normalized = builtin.white_space().normalize(lexical);
     let s = normalized.as_ref();
-    parse_normalized(builtin, s, lexical)
+    parse_normalized(builtin, s, lexical, version)
 }
 
 /// Parses an already-whitespace-normalised lexical form.
 ///
 /// `raw` is carried only so errors quote what the document actually said.
-fn parse_normalized(builtin: Builtin, s: &str, raw: &str) -> Result<Value, ValueError> {
+fn parse_normalized(
+    builtin: Builtin,
+    s: &str,
+    raw: &str,
+    version: Version,
+) -> Result<Value, ValueError> {
     use Builtin as B;
 
     // A list type's value is its items', so the item type does the work.
     if let BuiltinKind::List(item) = builtin.kind() {
         let items = s
             .split_whitespace()
-            .map(|tok| parse(item, tok))
+            .map(|tok| parse_in(item, tok, version))
             .collect::<Result<Vec<_>, _>>()?;
         return Ok(Value::List(items));
     }
 
     let bad = |reason: &str| err(builtin, raw, reason);
+
+    // The 1.0/1.1 divergences. Both are forms 1.1 added, so 1.0 refuses them
+    // and the underlying parser — which implements 1.1 — would not.
+    if version == Version::Xsd10 {
+        if matches!(builtin, B::Float | B::Double) && s == "+INF" {
+            return Err(bad("`+INF` is XSD 1.1; XSD 1.0 spells it `INF`"));
+        }
+        if is_temporal(builtin) && has_year_zero(s) {
+            return Err(bad(
+                "the year 0000 is prohibited in XSD 1.0; 1 BCE is `-0001`",
+            ));
+        }
+    }
 
     Ok(match builtin {
         B::String | B::NormalizedString | B::Token => Value::String(s.to_string()),
@@ -431,6 +467,29 @@ fn integer_bounds(b: Builtin) -> (i128, i128) {
 
 /// Parses the XSD `integer` lexical form, which permits a leading sign and
 /// leading zeroes but nothing else.
+/// Whether this built-in's lexical form starts with a year.
+///
+/// `xs:time`, `xs:gMonth`, `xs:gDay` and `xs:gMonthDay` carry no year, so the
+/// year-zero rule cannot apply to them.
+fn is_temporal(builtin: Builtin) -> bool {
+    use Builtin as B;
+    matches!(
+        builtin,
+        B::DateTime | B::DateTimeStamp | B::Date | B::GYearMonth | B::GYear
+    )
+}
+
+/// Whether the lexical form names the year zero.
+///
+/// The year is the leading field, optionally signed, and at least four digits.
+/// `-0000` is not a way to write it either: the sign is what distinguishes
+/// 1 BCE from 1 CE, and zero has no sign.
+fn has_year_zero(s: &str) -> bool {
+    let digits = s.strip_prefix('-').unwrap_or(s);
+    let year: String = digits.chars().take_while(char::is_ascii_digit).collect();
+    year.len() >= 4 && year.bytes().all(|b| b == b'0')
+}
+
 fn parse_integer(s: &str) -> Option<i128> {
     let (neg, digits) = match s.as_bytes().first()? {
         b'-' => (true, &s[1..]),

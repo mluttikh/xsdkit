@@ -200,7 +200,7 @@ crate:
 | | |
 |---|---|
 | valid schemas accepted | **99.0%** — it reads real schemas |
-| invalid schemas rejected | **54.0%** — particle subsumption is the big rule still missing |
+| invalid schemas rejected | **53.8%** — particle subsumption is the big rule still missing |
 
 That asymmetry is by construction, not neglect: the Schema Component
 Constraints and the Derivation Valid rules are largely unimplemented (see §7).
@@ -219,8 +219,8 @@ is fifty cases one rule buys.
 
 The instance half — 21,671 documents — is `#[ignore]`d because it takes
 minutes where the schema half takes seconds (4.5 minutes in `--release`; run
-it that way). Run it with `-- --ignored`. It scores 21,575 of them, 95.0%
-correct: **95.7%** of valid documents accepted, **94.1%** of invalid ones
+it that way). Run it with `-- --ignored`. It scores 21,533 of them, 95.0%
+correct: **95.7%** of valid documents accepted, **94.2%** of invalid ones
 rejected.
 
 That first figure was 88.1% until a one-line bug turned up: an *enumeration on
@@ -229,6 +229,26 @@ enumeration rejected every value. Fixing it moved 900 documents, and the whole
 run from 90.8% to 95.0%. Worth remembering when a conformance number looks
 like a long tail of unrelated failures — 1,160 of the 1,412 false alarms sat
 in NIST2004-01-14 alone, and they were all that one bug.
+
+**A test may prescribe different results per version.** `<expected>` can carry
+its own `version`, and the tokens on it are **and**ed — the result is
+prescribed only for a processor supporting all of them. So the harness picks
+the `<expected>` matching the version it is running the group as, falls back to
+an unqualified one, and *skips the case entirely* when the only expectation
+names the other version. Taking the first `<expected>` regardless, which it
+used to do, scored 49 cases against the wrong expectation and inflated the
+denominator by 10.
+
+Some groups are unmarked but only make sense in one version, and no scoring
+rule fixes that. `saxonData/Simple` is the clearest: `simple001` expects `+INF`
+to be **valid** (a 1.1-only lexical form) while `simple004` expects
+`final="extension"` on a simple type to be **invalid** (a 1.0-only
+prohibition), and neither group declares a version. No single reading satisfies
+both, so two cases there are permanently lost. **Do not "fix" that by relaxing
+the 1.0 lexical rules** — the suite's own `XSD1_1TestCategories.xml` lists
+`xsd1_1-Misc-LexicalRepForFloatAndDouble`, "lexical representation +INF for
+float and double", as a 1.1 *feature*. The rule is right; the test data is
+unmarked.
 
 The harness carries a floor assertion on acceptance. **Raise it as the number
 improves; never lower it silently** — a drop means a schema that used to load
@@ -378,10 +398,11 @@ evidence — or never. See `DESIGN.md` §3.15.4 for why the answer today is
    and cost 1 — a schema that is invalid for an unrelated reason was being
    caught by the bogus duplicate, which is a reminder that a rejection being
    *right* is not the same as a rejection being *correct*.
-2. **`values::parse` does not know the version.** It takes a `Builtin` and a
-   lexical form, so it always applies the XSD 1.1 lexical spaces.
-   `+INF` and the year `0000` are legal in 1.1 and illegal in 1.0, and we
-   accept both in either mode. Thread `Version` through and tighten 1.0.
+2. ~~**`values::parse` does not know the version.**~~ **Done.** `Schemas` now
+   carries the XSD it was read as (`Schemas::xsd_version`), and
+   `values::parse_in` takes it. The bare `values::parse` still reads the 1.1
+   superset — with no schema in hand there is nothing to say which language
+   applies.
 3. **Four UPA false positives** (`XSD1304`). Three are named by `w3c_why`:
    `saxonData/Wild/wild050`, `wildcard/s3_10_1ii08` and `ii09` — wildcards
    the checker believes overlap and the specification does not.

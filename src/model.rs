@@ -739,6 +739,10 @@ pub struct Schemas {
     /// Compiled content models, indexed by `TypeId`. `None` for simple types.
     pub(crate) content_models: Vec<Option<crate::content::Content>>,
     pub(crate) documents: Vec<SourceDocument>,
+    /// Which XSD the documents were read as. Not the `xs:schema/@version`
+    /// attribute (that is [`SourceDocument::version`]) — this is the language
+    /// the reader applied, and the two lexical spaces differ.
+    pub(crate) xsd_version: crate::load::Version,
 }
 
 macro_rules! arena_index {
@@ -844,6 +848,17 @@ impl Schemas {
     /// The documents this schema set was built from.
     pub fn documents(&self) -> &[SourceDocument] {
         &self.documents
+    }
+
+    /// Which XSD these documents were read as.
+    ///
+    /// Not the `xs:schema/@version` attribute — that is per-document and says
+    /// what the *vocabulary* calls itself ([`SourceDocument::version`]). This
+    /// is the language the reader applied, and it decides questions the
+    /// components alone cannot: the year `0000` and `+INF` are XSD 1.1 forms
+    /// that 1.0 rejects.
+    pub fn xsd_version(&self) -> crate::load::Version {
+        self.xsd_version
     }
 
     /// Builds a [`QName`] from a namespace URI and local name, for lookups.

@@ -71,6 +71,7 @@ pub(crate) fn compile(mut loader: Loader<'_>, mode: Conformance) -> (Schemas, Di
         substitution_closure,
         content_models: Vec::new(),
         documents,
+        xsd_version: version,
     };
 
     // Step 6 needs the query API, so it runs on the assembled value.
@@ -81,7 +82,7 @@ pub(crate) fn compile(mut loader: Loader<'_>, mode: Conformance) -> (Schemas, Di
     // Steps 7 and 8 likewise: the facet rules need the base type resolved,
     // and the declaration rules need the composed facet set on top of that.
     diags.extend(crate::facets::check_all(&schemas));
-    diags.extend(crate::declarations::check_all(&schemas, version));
+    diags.extend(crate::declarations::check_all(&schemas));
     diags.extend(crate::derivation::check_all(&schemas));
 
     (schemas, diags)

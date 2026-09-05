@@ -136,9 +136,9 @@ fn narrows(
         return;
     }
     let cmp = |a: &str, b: &str| {
-        values::parse(builtin, a)
+        values::parse_in(builtin, a, schemas.xsd_version)
             .ok()?
-            .partial_cmp_value(&values::parse(builtin, b).ok()?)
+            .partial_cmp_value(&values::parse_in(builtin, b, schemas.xsd_version).ok()?)
     };
 
     // Half one: each bound declared here against the one it inherits.
@@ -277,7 +277,7 @@ fn values_are_in_the_base_space(
     ];
     for (kind, value) in bounds {
         let Some(v) = value else { continue };
-        if let Err(e) = values::parse(builtin, v) {
+        if let Err(e) = values::parse_in(builtin, v, schemas.xsd_version) {
             diags.push(
                 Diagnostic::error(
                     DiagCode::InvalidFacetValue,
@@ -291,7 +291,7 @@ fn values_are_in_the_base_space(
         }
     }
     for v in f.enumeration.iter().flatten() {
-        if let Err(e) = values::parse(builtin, v) {
+        if let Err(e) = values::parse_in(builtin, v, schemas.xsd_version) {
             diags.push(
                 Diagnostic::error(
                     DiagCode::InvalidFacetValue,

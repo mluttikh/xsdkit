@@ -171,8 +171,8 @@ impl<'a> Validator<'a> {
         }
         // Already normalised, and the built-in's own whiteSpace is idempotent
         // over its output, so re-applying it inside `parse` changes nothing.
-        let value =
-            values::parse(builtin, normalized.as_ref()).map_err(ValidationError::Lexical)?;
+        let value = values::parse_in(builtin, normalized.as_ref(), self.schemas.xsd_version)
+            .map_err(ValidationError::Lexical)?;
         // Facet literals are parsed against the same built-in, so bounds and
         // enumerations compare like with like.
         values::check_facets(&value, &p.facets, builtin).map_err(ValidationError::Facet)?;

@@ -19,7 +19,7 @@ use crate::load::Version;
 use crate::model::{ContentType, Schemas, TypeId, ValueConstraint};
 use crate::validate::{ValidationError, Validator};
 
-pub(crate) fn check_all(schemas: &Schemas, version: Version) -> Diagnostics {
+pub(crate) fn check_all(schemas: &Schemas) -> Diagnostics {
     let mut diags = Diagnostics::new();
     let v = schemas.validator();
 
@@ -34,7 +34,7 @@ pub(crate) fn check_all(schemas: &Schemas, version: Version) -> Diagnostics {
         // 1.1 dropped the rule — the duplicate it guards against is caught by
         // ID uniqueness anyway, and only when it actually happens — so this is
         // one of the few places where the version changes a verdict.
-        if version == Version::Xsd10 && is_id(schemas, a.type_id) {
+        if schemas.xsd_version() == Version::Xsd10 && is_id(schemas, a.type_id) {
             diags.push(
                 Diagnostic::error(
                     DiagCode::InvalidValueConstraint,

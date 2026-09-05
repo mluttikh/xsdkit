@@ -21,6 +21,47 @@ use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use xsdkit::{Conformance, SchemaSetBuilder, Version};
 
+/// The `validity` the suite prescribes for a test, read at the version we
+/// actually run it as.
+///
+/// A test may carry several `<expected>` elements, each qualified by
+/// `version`. Per the suite's own schema those tokens are **and**ed: the
+/// result is prescribed only for a processor supporting all of them. So a
+/// version-qualified `expected` that names our version wins, an unqualified
+/// one is the fallback, and one naming only the *other* version says nothing
+/// about us.
+///
+/// Taking the first `<expected>` regardless — which this harness used to do —
+/// scores 49 cases against the wrong expectation.
+fn expected_validity<'a>(test: roxmltree::Node<'a, 'a>, version: Version) -> Option<&'a str> {
+    let token = match version {
+        Version::Xsd10 => "1.0",
+        Version::Xsd11 => "1.1",
+    };
+    let expects: Vec<_> = test
+        .children()
+        .filter(|n| n.has_tag_name("expected"))
+        .collect();
+
+    expects
+        .iter()
+        .find(|n| n.attribute("version").is_some_and(|v| v.contains(token)))
+        .or_else(|| expects.iter().find(|n| n.attribute("version").is_none()))
+        .and_then(|n| n.attribute("validity"))
+}
+
+/// Which XSD a test group is run as.
+///
+/// A group listing both versions is run as 1.0: it is the stricter reading, so
+/// a schema that passes there passes in either.
+fn version_of(v: &str) -> Version {
+    if v.contains("1.1") && !v.contains("1.0") {
+        Version::Xsd11
+    } else {
+        Version::Xsd10
+    }
+}
+
 /// Where the suite lives, if it is available.
 fn suite() -> Option<PathBuf> {
     let p = PathBuf::from(std::env::var("XSDTESTS").ok()?);
@@ -105,11 +146,7 @@ fn parse_test_sets(root: &Path) -> (Vec<SchemaCase>, Vec<InstanceCase>) {
                     .filter_map(|n| n.attribute(("http://www.w3.org/1999/xlink", "href")))
                     .map(|h| dir.join(h))
                     .collect();
-                let Some(validity) = st
-                    .children()
-                    .find(|n| n.has_tag_name("expected"))
-                    .and_then(|n| n.attribute("validity"))
-                else {
+                let Some(validity) = expected_validity(st, version_of(&version)) else {
                     continue;
                 };
                 // `notKnown` cases are the ones the working group could not
@@ -144,11 +181,7 @@ fn parse_test_sets(root: &Path) -> (Vec<SchemaCase>, Vec<InstanceCase>) {
                     else {
                         continue;
                     };
-                    let Some(validity) = it
-                        .children()
-                        .find(|n| n.has_tag_name("expected"))
-                        .and_then(|n| n.attribute("validity"))
-                    else {
+                    let Some(validity) = expected_validity(it, version_of(&version)) else {
                         continue;
                     };
                     let expect = match validity {
@@ -172,11 +205,7 @@ fn parse_test_sets(root: &Path) -> (Vec<SchemaCase>, Vec<InstanceCase>) {
 
 /// Whether `xsdkit` considers the schema valid.
 fn accepts(case: &SchemaCase) -> bool {
-    let version = if case.version.contains("1.1") && !case.version.contains("1.0") {
-        Version::Xsd11
-    } else {
-        Version::Xsd10
-    };
+    let version = version_of(&case.version);
     let mut b = SchemaSetBuilder::new()
         .version(version)
         .conformance(Conformance::Strict);
@@ -363,11 +392,7 @@ fn w3c_instance_conformance() {
                 .join(",")
         );
         let entry = cache.entry(key).or_insert_with(|| {
-            let version = if c.version.contains("1.1") && !c.version.contains("1.0") {
-                Version::Xsd11
-            } else {
-                Version::Xsd10
-            };
+            let version = version_of(&c.version);
             let mut b = SchemaSetBuilder::new()
                 .version(version)
                 .conformance(Conformance::Lax);

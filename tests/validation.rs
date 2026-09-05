@@ -382,3 +382,60 @@ fn an_enumeration_on_a_list_compares_lists() {
     assert!(check(&s, "Sizes", "small").is_err());
     assert!(check(&s, "Sizes", "small medium").is_err());
 }
+
+/// XSD 1.1 widened two lexical spaces, and 1.0 must still refuse them. The
+/// underlying date-time library implements 1.1, so without the version these
+/// went through in either mode.
+#[test]
+fn the_two_lexical_spaces_xsd11_widened() {
+    fn accepts(version: Version, body: &str, lexical: &str) -> bool {
+        let xsd = format!(
+            r#"<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema"
+                          xmlns:tns="{NS}" targetNamespace="{NS}">{body}</xs:schema>"#
+        );
+        let s = SchemaSetBuilder::new()
+            .version(version)
+            .text(xsd, "mem://main.xsd")
+            .build()
+            .unwrap_or_else(|d| panic!("{d}"));
+        let t = s.type_(Some(NS), "T").expect("type");
+        s.validator().validate(t, lexical).is_ok()
+    }
+
+    let date = r#"<xs:simpleType name="T"><xs:restriction base="xs:date"/></xs:simpleType>"#;
+    let dbl = r#"<xs:simpleType name="T"><xs:restriction base="xs:double"/></xs:simpleType>"#;
+
+    // The year 0000 is 1 BCE in 1.1 and prohibited outright in 1.0.
+    assert!(accepts(Version::Xsd11, date, "0000-01-01"));
+    assert!(!accepts(Version::Xsd10, date, "0000-01-01"));
+    // 1.0 spells 1 BCE `-0001`, and both versions take it.
+    assert!(accepts(Version::Xsd10, date, "-0001-01-01"));
+    assert!(accepts(Version::Xsd11, date, "-0001-01-01"));
+    // An ordinary year is unaffected in either.
+    assert!(accepts(Version::Xsd10, date, "2024-02-29"));
+
+    // 1.1 added `+INF` to the special values; 1.0 has only `INF`.
+    assert!(accepts(Version::Xsd11, dbl, "+INF"));
+    assert!(!accepts(Version::Xsd10, dbl, "+INF"));
+    for v in [Version::Xsd10, Version::Xsd11] {
+        assert!(accepts(v, dbl, "INF"));
+        assert!(accepts(v, dbl, "-INF"));
+        assert!(accepts(v, dbl, "NaN"));
+        assert!(accepts(v, dbl, "1.5E3"));
+    }
+}
+
+/// The bare `values::parse` has no schema to ask, so it reads the 1.1
+/// superset. `parse_in` is the one that takes a side.
+#[test]
+fn a_bare_parse_reads_the_superset() {
+    use xsdkit::datatypes::Builtin;
+    use xsdkit::values::{parse, parse_in};
+
+    assert!(parse(Builtin::Double, "+INF").is_ok());
+    assert!(parse_in(Builtin::Double, "+INF", Version::Xsd11).is_ok());
+    assert!(parse_in(Builtin::Double, "+INF", Version::Xsd10).is_err());
+
+    // The rule reaches into a list's items, not just the top-level form.
+    assert!(parse_in(Builtin::Entities, "a b", Version::Xsd10).is_ok());
+}
