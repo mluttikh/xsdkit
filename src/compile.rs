@@ -16,6 +16,8 @@
 //!    while building.
 //! 7. [`crate::facets`] checks that each simple type's facets are facets that
 //!    datatype admits, and that their values are legal.
+//! 8. [`crate::declarations`] checks each declaration's `default` or `fixed`
+//!    against the type it belongs to.
 
 use crate::datatypes::Builtin;
 use crate::diagnostics::{DiagCode, Diagnostic, Diagnostics, Severity, Span};
@@ -74,8 +76,10 @@ pub(crate) fn compile(mut loader: Loader<'_>, mode: Conformance) -> (Schemas, Di
     schemas.content_models = models;
     let mut diags = diags;
     diags.extend(content_diags);
-    // Step 7 likewise: every facet rule needs the base type resolved.
+    // Steps 7 and 8 likewise: the facet rules need the base type resolved,
+    // and the declaration rules need the composed facet set on top of that.
     diags.extend(crate::facets::check_all(&schemas));
+    diags.extend(crate::declarations::check_all(&schemas, version));
 
     (schemas, diags)
 }

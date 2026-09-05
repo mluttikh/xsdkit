@@ -129,6 +129,9 @@ pub enum DiagCode {
     /// Two facets on one restriction step cannot both hold, e.g. `length`
     /// beside `minLength`, or `minInclusive` above `maxInclusive`.
     ConflictingFacets,
+    /// A `default` or `fixed` value its own type rejects, or one on a
+    /// declaration that cannot carry one at all.
+    InvalidValueConstraint,
 
     // 2000-2099 — instance documents
     /// No global element declaration matches the document's root.
@@ -180,6 +183,7 @@ impl DiagCode {
             DiagCode::FacetNotApplicable => "XSD1305",
             DiagCode::InvalidFacetValue => "XSD1306",
             DiagCode::ConflictingFacets => "XSD1307",
+            DiagCode::InvalidValueConstraint => "XSD1308",
 
             DiagCode::ElementNotDeclared => "XSD2001",
             DiagCode::UnexpectedElement => "XSD2002",

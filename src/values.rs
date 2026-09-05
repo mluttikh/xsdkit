@@ -78,6 +78,11 @@ impl Value {
     ///
     /// Partial because `xs:duration` genuinely is: `P1M` and `P30D` cannot be
     /// ordered without knowing which month.
+    /// Whether this is a list value, whose facets count and compare items.
+    pub fn is_list(&self) -> bool {
+        matches!(self, Value::List(_))
+    }
+
     pub fn partial_cmp_value(&self, other: &Value) -> Option<std::cmp::Ordering> {
         use Value::*;
         match (self, other) {
@@ -633,7 +638,12 @@ pub fn check_facets(
 
     // Enumeration compares in the *value* space: `1.0` satisfies an
     // enumeration listing `1.00`, which a string comparison would reject.
-    if let Some(allowed) = &facets.enumeration {
+    //
+    // A list is the exception. Its enumeration literals are lists too, and
+    // comparing them means parsing each one against the *item* type, which is
+    // not reachable from here — so `Validator::list` does that itself and this
+    // would only ever compare a list against a string and reject everything.
+    if let Some(allowed) = facets.enumeration.as_ref().filter(|_| !value.is_list()) {
         let matched = allowed
             .iter()
             .any(|lex| parse(builtin, lex).map(|v| &v == value).unwrap_or(false));

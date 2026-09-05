@@ -180,20 +180,20 @@ fn consistent(s: &SimpleType, span: &Span, diags: &mut Diagnostics) {
             err("`xs:length` and `xs:maxLength` cannot both be declared here".into());
         }
     }
-    if let (Some(min), Some(max)) = (f.min_length, f.max_length)
-        && min > max
-    {
-        err(format!("`xs:minLength` {min} exceeds `xs:maxLength` {max}"));
+    if let (Some(min), Some(max)) = (f.min_length, f.max_length) {
+        if min > max {
+            err(format!("`xs:minLength` {min} exceeds `xs:maxLength` {max}"));
+        }
     }
     // The inclusive/exclusive pairs are checked in the loader instead:
     // `FacetSet::restrict` clears one when the other is set, which is right
     // across restriction steps and leaves nothing to see within one.
-    if let (Some(t), Some(fd)) = (f.total_digits, f.fraction_digits)
-        && fd > t
-    {
-        err(format!(
-            "`xs:fractionDigits` {fd} exceeds `xs:totalDigits` {t}"
-        ));
+    if let (Some(t), Some(fd)) = (f.total_digits, f.fraction_digits) {
+        if fd > t {
+            err(format!(
+                "`xs:fractionDigits` {fd} exceeds `xs:totalDigits` {t}"
+            ));
+        }
     }
     // totalDigits is a positiveInteger; zero significant digits is no number.
     if f.total_digits == Some(0) {

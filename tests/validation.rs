@@ -358,3 +358,27 @@ fn token_derived_types_collapse_through_a_user_restriction() {
     );
     assert!(check(&s, "Code", "abcd").is_err());
 }
+
+/// An enumeration on a list names whole lists, so it has to be compared item
+/// by item against the item type. Comparing the list against the *literal* as
+/// a string never matches, which used to make any such enumeration reject
+/// every value — documents included, not only the schema's own defaults.
+#[test]
+fn an_enumeration_on_a_list_compares_lists() {
+    let s = build(
+        r#"<xs:simpleType name="Sizes">
+             <xs:restriction base="xs:NMTOKENS">
+               <xs:enumeration value="small large"/>
+               <xs:enumeration value="one two three"/>
+             </xs:restriction>
+           </xs:simpleType>"#,
+    );
+    assert!(check(&s, "Sizes", "small large").is_ok());
+    // Lists collapse, so the extra whitespace names the same value.
+    assert!(check(&s, "Sizes", "  small   large ").is_ok());
+    assert!(check(&s, "Sizes", "one two three").is_ok());
+    // Order is part of the value, and a prefix is a different list.
+    assert!(check(&s, "Sizes", "large small").is_err());
+    assert!(check(&s, "Sizes", "small").is_err());
+    assert!(check(&s, "Sizes", "small medium").is_err());
+}

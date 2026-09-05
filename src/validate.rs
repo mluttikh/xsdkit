@@ -191,6 +191,29 @@ impl<'a> Validator<'a> {
             .map(|tok| self.validate(item, tok))
             .collect::<Result<Vec<_>, _>>()?;
 
+        // An enumeration on a list names whole lists, so each literal has to
+        // be parsed as one and compared item by item. `check_facets` cannot:
+        // it has no item type, and comparing a list against a string rejects
+        // every value.
+        if let Some(allowed) = &p.facets.enumeration {
+            let matched = allowed.iter().any(|lex| {
+                lex.split_whitespace()
+                    .map(|tok| self.validate(item, tok))
+                    .collect::<Result<Vec<_>, _>>()
+                    .is_ok_and(|want| want == items)
+            });
+            if !matched {
+                return Err(ValidationError::Facet(FacetViolation {
+                    facet: "enumeration",
+                    message: format!(
+                        "`{}` is not one of the {} permitted lists",
+                        normalized,
+                        allowed.len()
+                    ),
+                }));
+            }
+        }
+
         let value = Value::List(items);
         // A list's own length facets count items, which `facet_length` knows.
         values::check_facets(&value, &p.facets, Builtin::String).map_err(ValidationError::Facet)?;

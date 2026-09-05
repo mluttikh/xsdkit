@@ -1,7 +1,7 @@
 //! Loads a schema and prints what came out of it.
 //!
 //! ```text
-//! cargo run --example inspect -- schema.xsd [--lax] [--search DIR]
+//! cargo run --example inspect -- schema.xsd [--lax] [--11] [--search DIR]
 //! ```
 
 use xsdkit::model::Term;
@@ -15,6 +15,7 @@ fn main() {
     while i < args.len() {
         match args[i].as_str() {
             "--lax" => builder = builder.conformance(Conformance::Lax),
+            "--11" => builder = builder.version(Version::Xsd11),
             "--search" => {
                 i += 1;
                 builder = builder.search_path(&args[i]);
