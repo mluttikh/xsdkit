@@ -233,13 +233,13 @@ constraints*, so a schema it accepts is not thereby a valid schema. If you
 need a conformance checker, use Xerces or Saxon; if you need to read a schema
 that already works, this is built for that.
 
-Document validation is the other half of the suite — 21,533 scored cases,
-95.0% correct:
+Document validation is the other half of the suite — 21,540 scored cases,
+95.1% correct:
 
 | | |
 |---|---|
-| valid documents accepted | **95.7%** (11,381 / 11,890) |
-| invalid documents rejected | **94.2%** (9,080 / 9,643) |
+| valid documents accepted | **95.7%** (11,386 / 11,895) |
+| invalid documents rejected | **94.4%** (9,104 / 9,645) |
 
 ```bash
 git clone --depth 1 https://github.com/w3c/xsdtests /tmp/xsdtests
