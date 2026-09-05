@@ -82,7 +82,9 @@ pub use model::{
     Term, TypeDefinition, TypeId, ValueConstraint, Wildcard,
 };
 pub use names::{Interner, QName};
-pub use values::{FacetViolation, Value, ValueError, check_facets};
+pub use values::{
+    FacetViolation, Namespaces, NoNamespaces, QNameValue, Value, ValueError, check_facets,
+};
 
 use load::Loader;
 

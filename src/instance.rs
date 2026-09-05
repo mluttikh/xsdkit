@@ -139,6 +139,7 @@ impl<'a> InstanceValidator<'a> {
             v: self,
             diags: Diagnostics::new(),
             stack: Vec::new(),
+            namespaces: Vec::new(),
             uri: "<instance>".to_string(),
             sink,
         };
@@ -159,6 +160,7 @@ impl<'a> InstanceValidator<'a> {
             v: self,
             diags: Diagnostics::new(),
             stack: Vec::new(),
+            namespaces: Vec::new(),
             uri: uri.to_string(),
             sink,
         };
@@ -173,8 +175,48 @@ struct Run<'a, 'b, S: FnMut(PsviEvent)> {
     v: &'b InstanceValidator<'a>,
     diags: Diagnostics,
     stack: Vec<Frame<'a>>,
+    /// Namespace declarations from the elements currently open, outermost
+    /// first, one entry per open element.
+    ///
+    /// `xs:QName` and `xs:NOTATION` are the only datatypes whose value depends
+    /// on the document rather than the schema, and this is what they resolve
+    /// against. Pushed and popped in step with `stack`.
+    namespaces: Vec<Vec<(Option<String>, String)>>,
     uri: String,
     sink: S,
+}
+
+/// A borrowed view of the open elements' namespace declarations.
+struct Scopes<'s>(&'s [Vec<(Option<String>, String)>]);
+
+impl crate::values::Namespaces for Scopes<'_> {
+    fn resolve(&self, prefix: Option<&str>) -> Option<&str> {
+        // The `xml` prefix is bound everywhere and cannot be redeclared to
+        // anything else, so it never reaches the stack.
+        if prefix == Some("xml") {
+            return Some(crate::names::XML);
+        }
+        self.0
+            .iter()
+            .rev()
+            .flat_map(|scope| scope.iter().rev())
+            .find(|(p, _)| p.as_deref() == prefix)
+            // `xmlns=""` undeclares the default namespace rather than binding
+            // it to the empty string.
+            .and_then(|(_, uri)| (!uri.is_empty()).then_some(uri.as_str()))
+    }
+}
+
+/// The namespace declarations an element carries, as bindings.
+fn declared_namespaces(attrs: &[RawAttr]) -> Vec<(Option<String>, String)> {
+    attrs
+        .iter()
+        .filter_map(|a| match &a.namespace {
+            Some(ns) if ns == crate::names::XMLNS => Some((Some(a.local.clone()), a.value.clone())),
+            None if a.local == "xmlns" => Some((None, a.value.clone())),
+            _ => None,
+        })
+        .collect()
 }
 
 impl<'a, S: FnMut(PsviEvent)> Run<'a, '_, S> {
@@ -284,6 +326,10 @@ impl<'a, S: FnMut(PsviEvent)> Run<'a, '_, S> {
         attrs: Vec<RawAttr>,
         line: u32,
     ) {
+        // In scope for this element's attributes and for its text, so it goes
+        // on before any of them are looked at and comes off in `end`.
+        self.namespaces.push(declared_namespaces(&attrs));
+
         // Inside a skipped subtree nothing is checked, but nesting still has
         // to be tracked so the right `End` closes it.
         if self.stack.last().is_some_and(|f| f.skipped) {
@@ -551,18 +597,23 @@ impl<'a, S: FnMut(PsviEvent)> Run<'a, '_, S> {
                 Some(u) => {
                     seen.push(q);
                     let ty = self.v.schemas[u.attribute].type_id;
-                    let value = match self.v.values.validate(ty, &a.value) {
-                        Ok(v) => Some(v),
-                        Err(e) => {
-                            let shown = self.show(q);
-                            self.error(
-                                DiagCode::InvalidValue,
-                                line,
-                                format!("attribute `{shown}`: {e}"),
-                            );
-                            None
-                        }
-                    };
+                    let value =
+                        match self
+                            .v
+                            .values
+                            .validate_in(ty, &a.value, &Scopes(&self.namespaces))
+                        {
+                            Ok(v) => Some(v),
+                            Err(e) => {
+                                let shown = self.show(q);
+                                self.error(
+                                    DiagCode::InvalidValue,
+                                    line,
+                                    format!("attribute `{shown}`: {e}"),
+                                );
+                                None
+                            }
+                        };
                     // A `fixed` value is a constraint, not a default: the
                     // document may repeat it but may not differ from it.
                     if let Some(vc) = u
@@ -635,7 +686,11 @@ impl<'a, S: FnMut(PsviEvent)> Run<'a, '_, S> {
             };
             let ty = self.v.schemas[u.attribute].type_id;
             let lexical = vc.value().to_string();
-            let value = self.v.values.validate(ty, &lexical).ok();
+            let value = self
+                .v
+                .values
+                .validate_in(ty, &lexical, &Scopes(&self.namespaces))
+                .ok();
             out.push(AttributePsvi {
                 name,
                 declaration: Some(u.attribute),
@@ -672,6 +727,13 @@ impl<'a, S: FnMut(PsviEvent)> Run<'a, '_, S> {
             );
             return;
         };
+        self.finish(frame, line);
+        // Only now: the text just checked resolved its QNames against this
+        // element's own declarations.
+        self.namespaces.pop();
+    }
+
+    fn finish(&mut self, frame: Frame<'a>, line: u32) {
         if frame.skipped {
             return;
         }
@@ -712,13 +774,18 @@ impl<'a, S: FnMut(PsviEvent)> Run<'a, '_, S> {
         };
 
         if let Some(target) = simple_target {
-            let value = match self.v.values.validate(target, &frame.text) {
-                Ok(v) => Some(v),
-                Err(e) => {
-                    self.error(DiagCode::InvalidValue, line, format!("`{shown}`: {e}"));
-                    None
-                }
-            };
+            let value =
+                match self
+                    .v
+                    .values
+                    .validate_in(target, &frame.text, &Scopes(&self.namespaces))
+                {
+                    Ok(v) => Some(v),
+                    Err(e) => {
+                        self.error(DiagCode::InvalidValue, line, format!("`{shown}`: {e}"));
+                        None
+                    }
+                };
             (self.sink)(PsviEvent::Text {
                 value,
                 type_id: target,

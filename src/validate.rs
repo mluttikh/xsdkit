@@ -157,7 +157,23 @@ impl<'a> Validator<'a> {
 
     /// Validates a lexical form against a simple type, returning its value.
     pub fn validate(&self, ty: TypeId, lexical: &str) -> Result<Value, ValidationError> {
-        self.validate_within(ty, lexical, 0)
+        self.validate_in(ty, lexical, &values::NoNamespaces)
+    }
+
+    /// [`Self::validate`], with the namespace bindings in scope where the
+    /// value was written.
+    ///
+    /// `xs:QName` and `xs:NOTATION` are the only datatypes whose value is not
+    /// a function of the lexical form alone: `a:x` names whatever `a` is bound
+    /// to *there*. Without bindings an unprefixed name is still a value — it
+    /// is in no namespace — and a prefixed one cannot be resolved.
+    pub fn validate_in(
+        &self,
+        ty: TypeId,
+        lexical: &str,
+        ns: &dyn values::Namespaces,
+    ) -> Result<Value, ValidationError> {
+        self.validate_within(ty, lexical, 0, ns)
     }
 
     /// The recursion behind [`Self::validate`], carrying how deep it is.
@@ -173,6 +189,7 @@ impl<'a> Validator<'a> {
         ty: TypeId,
         lexical: &str,
         depth: u32,
+        ns: &dyn values::Namespaces,
     ) -> Result<Value, ValidationError> {
         if depth > 64 {
             return Err(ValidationError::CircularType);
@@ -182,13 +199,18 @@ impl<'a> Validator<'a> {
         };
 
         match p.variety {
-            Variety::Atomic => self.atomic(p, lexical),
-            Variety::List => self.list(p, lexical, depth),
-            Variety::Union => self.union(p, lexical, depth),
+            Variety::Atomic => self.atomic(p, lexical, ns),
+            Variety::List => self.list(p, lexical, depth, ns),
+            Variety::Union => self.union(p, lexical, depth, ns),
         }
     }
 
-    fn atomic(&self, p: &Prepared, lexical: &str) -> Result<Value, ValidationError> {
+    fn atomic(
+        &self,
+        p: &Prepared,
+        lexical: &str,
+        ns: &dyn values::Namespaces,
+    ) -> Result<Value, ValidationError> {
         let normalized = p.white_space.normalize(lexical);
 
         // Patterns constrain the lexical form, so they run on the normalised
@@ -196,20 +218,24 @@ impl<'a> Validator<'a> {
         values::check_patterns(normalized.as_ref(), &p.patterns).map_err(ValidationError::Facet)?;
 
         let builtin = p.builtin.unwrap_or(Builtin::String);
-        if matches!(builtin, Builtin::QName | Builtin::Notation) {
-            return Err(ValidationError::NeedsNamespaceContext);
-        }
         // Already normalised, and the built-in's own whiteSpace is idempotent
         // over its output, so re-applying it inside `parse` changes nothing.
-        let value = values::parse_in(builtin, normalized.as_ref(), self.schemas.xsd_version)
-            .map_err(ValidationError::Lexical)?;
+        let value =
+            values::parse_qualified(builtin, normalized.as_ref(), self.schemas.xsd_version, ns)
+                .map_err(ValidationError::Lexical)?;
         // Facet literals are parsed against the same built-in, so bounds and
         // enumerations compare like with like.
         values::check_facets(&value, &p.facets, builtin).map_err(ValidationError::Facet)?;
         Ok(value)
     }
 
-    fn list(&self, p: &Prepared, lexical: &str, depth: u32) -> Result<Value, ValidationError> {
+    fn list(
+        &self,
+        p: &Prepared,
+        lexical: &str,
+        depth: u32,
+        ns: &dyn values::Namespaces,
+    ) -> Result<Value, ValidationError> {
         let normalized = p.white_space.normalize(lexical);
         values::check_patterns(normalized.as_ref(), &p.patterns).map_err(ValidationError::Facet)?;
 
@@ -218,7 +244,7 @@ impl<'a> Validator<'a> {
         };
         let items = normalized
             .split_whitespace()
-            .map(|tok| self.validate_within(item, tok, depth + 1))
+            .map(|tok| self.validate_within(item, tok, depth + 1, ns))
             .collect::<Result<Vec<_>, _>>()?;
 
         // An enumeration on a list names whole lists, so each literal has to
@@ -228,7 +254,7 @@ impl<'a> Validator<'a> {
         if let Some(allowed) = &p.facets.enumeration {
             let matched = allowed.iter().any(|lex| {
                 lex.split_whitespace()
-                    .map(|tok| self.validate_within(item, tok, depth + 1))
+                    .map(|tok| self.validate_within(item, tok, depth + 1, ns))
                     .collect::<Result<Vec<_>, _>>()
                     .is_ok_and(|want| want == items)
             });
@@ -250,11 +276,17 @@ impl<'a> Validator<'a> {
         Ok(value)
     }
 
-    fn union(&self, p: &Prepared, lexical: &str, depth: u32) -> Result<Value, ValidationError> {
+    fn union(
+        &self,
+        p: &Prepared,
+        lexical: &str,
+        depth: u32,
+        ns: &dyn values::Namespaces,
+    ) -> Result<Value, ValidationError> {
         // Declaration order decides which member the value belongs to, not
         // just whether it is valid at all.
         for &member in &p.members {
-            if let Ok(v) = self.validate_within(member, lexical, depth + 1) {
+            if let Ok(v) = self.validate_within(member, lexical, depth + 1, ns) {
                 // The union's own facets still apply on top of the member's.
                 if !p.patterns.is_empty() {
                     let normalized = p.white_space.normalize(lexical);
@@ -264,7 +296,7 @@ impl<'a> Validator<'a> {
                 if let Some(allowed) = &p.facets.enumeration {
                     let ok = allowed.iter().any(|lex| {
                         p.members.iter().any(|m| {
-                            self.validate_within(*m, lex, depth + 1)
+                            self.validate_within(*m, lex, depth + 1, ns)
                                 .map(|x| x == v)
                                 .unwrap_or(false)
                         })

@@ -103,12 +103,22 @@ fn check_value(
     what: &str,
     diags: &mut Diagnostics,
 ) {
+    // A QName's value depends on the prefix bindings in scope where it was
+    // written — here, in the *schema* document. The loader does not carry them
+    // this far, so checking would reject every prefixed default outright.
+    // Skipping is the honest answer until the schema-side bindings are kept.
+    if matches!(
+        schemas[ty].as_simple().and_then(|t| t.primitive),
+        Some(crate::datatypes::Builtin::QName | crate::datatypes::Builtin::Notation)
+    ) {
+        return;
+    }
+
     let lexical = vc.value();
     match v.validate(ty, lexical) {
         Ok(_) => {}
-        // Not a verdict: a QName needs the bindings in scope where it was
-        // written, and a complex type has no value space to check against.
-        Err(ValidationError::NeedsNamespaceContext | ValidationError::NotSimple) => {}
+        // Not a verdict: a complex type has no value space to check against.
+        Err(ValidationError::NotSimple) => {}
         Err(e) => {
             let name = schemas[ty]
                 .name()

@@ -46,18 +46,34 @@ the list is short enough to be worked through.
 
 | | |
 |---|---|
-| valid documents accepted | **95.8%** (11,405 / 11,907) |
-| invalid documents rejected | **94.6%** (9,146 / 9,668) |
-| overall correct | **95.3%** (20,551 / 21,575) |
+| valid documents accepted | **97.8%** (11,644 / 11,907) |
+| invalid documents rejected | **94.6%** (9,145 / 9,668) |
+| overall correct | **96.4%** (20,789 / 21,575) |
 
 Here the two rows are much closer, because validating a document against a
 model you already built is the part that is finished.
 
-The remaining false alarms cluster in the NIST datatype sets and in a handful
-of feature areas — wildcards, `xsi:type` edge cases, XSD 1.1 conditional type
-assignment. The false *acceptances* are dominated by the two unimplemented 1.1
-features and by identity constraints (`xs:key`, `xs:keyref`, `xs:unique`),
-which are read into the model but not enforced.
+The 263 remaining false alarms are not 263 separate bugs. Grouped by cause:
+
+| Cause | Documents |
+|---|---|
+| `xlink:href` undeclared, because the suite's own catalogue schema imports `xlink.xsd` over the network and we refuse to fetch it | 112 |
+| `xsi:type` prefix resolution | 41 |
+| `xs:all` content matching | 35 |
+| `xs:enumeration` over QNames, which needs the *schema*'s namespace bindings rather than the document's | 25 |
+| Character data in element-only content | 11 |
+| Scattered | ~39 |
+
+The first is not a defect at all: `schemaLocation` is a hint, network fetching
+is off by default (see [Security](security.md)), and a processor is expected
+to have the well-known W3C schemas locally. The harness does not supply one,
+so 91 `introspection` documents and 21 others fail for a reason that has
+nothing to do with validation.
+
+The false *acceptances* are dominated by the two unimplemented XSD 1.1
+features — assertions and conditional type assignment — and by identity
+constraints (`xs:key`, `xs:keyref`, `xs:unique`), which are read into the
+model but not enforced.
 
 ## Running it yourself
 

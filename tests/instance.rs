@@ -704,3 +704,199 @@ fn an_undeclared_root_against_an_element_less_schema_reports_rather_than_panics(
         "expected a diagnostic naming the undeclared root, got:\n{d}"
     );
 }
+
+// ---------------------------------------------------------------------------
+// xs:QName — the one datatype whose value depends on the document
+// ---------------------------------------------------------------------------
+
+/// A QName's value is the namespace its prefix is bound to plus the local
+/// part, so validating one needs the bindings in scope where it was written.
+/// Those live in the instance, not in the schema, which is why value parsing
+/// takes a resolver at all.
+#[test]
+fn qname_content_resolves_against_the_documents_namespaces() {
+    let s = schema(r#"<xs:element name="e" type="xs:QName"/>"#);
+
+    // A prefix declared on the element itself.
+    valid(
+        &s,
+        &format!(r#"<e xmlns="{NS}" xmlns:p="urn:p">p:thing</e>"#),
+    );
+    // The default namespace, for an unprefixed name.
+    valid(&s, &format!(r#"<e xmlns="{NS}">thing</e>"#));
+    // No default namespace in scope: still a value, just in no namespace.
+    valid(&s, &format!(r#"<e xmlns="{NS}" xmlns:p="urn:p">thing</e>"#));
+    // The `xml` prefix is bound everywhere without being declared.
+    valid(&s, &format!(r#"<e xmlns="{NS}">xml:lang</e>"#));
+
+    // A prefix bound to nothing is not a value.
+    invalid(
+        &s,
+        &format!(r#"<e xmlns="{NS}">nope:thing</e>"#),
+        DiagCode::InvalidValue,
+    );
+    // Two colons is not a QName.
+    invalid(
+        &s,
+        &format!(r#"<e xmlns="{NS}">a:b:c</e>"#),
+        DiagCode::InvalidValue,
+    );
+}
+
+/// The bindings are a *stack*: a prefix declared on an ancestor is in scope on
+/// every descendant. Resolving against the current element's attributes alone
+/// would pass the common case and fail this one.
+#[test]
+fn a_qname_resolves_a_prefix_declared_on_an_ancestor() {
+    let s = schema(
+        r#"<xs:element name="outer"><xs:complexType><xs:sequence>
+             <xs:element name="inner" type="xs:QName"/>
+           </xs:sequence></xs:complexType></xs:element>"#,
+    );
+    valid(
+        &s,
+        &format!(r#"<outer xmlns="{NS}" xmlns:p="urn:p"><inner>p:thing</inner></outer>"#),
+    );
+}
+
+/// The resolved value, not merely the verdict.
+///
+/// Validity alone cannot tell `p:thing` in `urn:p` from `thing` in no
+/// namespace — both are valid QNames — so the PSVI is where the work is
+/// visible. The prefix is deliberately absent from the value: it is a
+/// document detail, and `a:x` and `b:x` are the same value when `a` and `b`
+/// name the same namespace.
+#[test]
+fn a_qname_reaches_the_psvi_resolved() {
+    let s = schema(r#"<xs:element name="e" type="xs:QName"/>"#);
+
+    let value_of = |xml: &str| {
+        let mut found = None;
+        let report = s.instance_validator().validate_with(xml, |ev| {
+            if let PsviEvent::Text { value: Some(v), .. } = ev {
+                found = Some(v);
+            }
+        });
+        assert!(report.is_valid(), "{}", report.diagnostics);
+        found.expect("a text event")
+    };
+
+    let qname = |ns: Option<&str>, local: &str| {
+        Value::QName(xsdkit::values::QNameValue {
+            namespace: ns.map(str::to_string),
+            local: local.into(),
+        })
+    };
+
+    // Two different prefixes for one namespace are one value.
+    assert_eq!(
+        value_of(&format!(r#"<e xmlns="{NS}" xmlns:a="urn:p">a:thing</e>"#)),
+        value_of(&format!(r#"<e xmlns="{NS}" xmlns:b="urn:p">b:thing</e>"#)),
+    );
+    assert_eq!(
+        value_of(&format!(r#"<e xmlns="{NS}" xmlns:a="urn:p">a:thing</e>"#)),
+        qname(Some("urn:p"), "thing"),
+    );
+    // An unprefixed name takes the default namespace...
+    assert_eq!(
+        value_of(&format!(r#"<e xmlns="{NS}">thing</e>"#)),
+        qname(Some(NS), "thing"),
+    );
+    // The default namespace applies whatever prefix the element itself used.
+    assert_eq!(
+        value_of(&format!(r#"<p:e xmlns:p="{NS}" xmlns="urn:d">thing</p:e>"#)),
+        qname(Some("urn:d"), "thing"),
+    );
+}
+
+/// `xmlns=""` undeclares the default namespace rather than binding it to the
+/// empty string, so an unprefixed QName beneath it is in *no* namespace — a
+/// different value from one in the namespace the ancestor declared.
+#[test]
+fn an_undeclared_default_namespace_leaves_a_qname_unqualified() {
+    let s = schema(
+        r#"<xs:element name="outer"><xs:complexType><xs:sequence>
+             <xs:element name="inner" type="xs:QName"/>
+           </xs:sequence></xs:complexType></xs:element>"#,
+    );
+
+    let mut found = None;
+    let report = s.instance_validator().validate_with(
+        &format!(
+            r#"<p:outer xmlns:p="{NS}" xmlns="urn:d">
+                 <p:inner xmlns="">thing</p:inner>
+               </p:outer>"#
+        ),
+        |ev| {
+            if let PsviEvent::Text { value: Some(v), .. } = ev {
+                found = Some(v);
+            }
+        },
+    );
+    assert!(report.is_valid(), "{}", report.diagnostics);
+    assert_eq!(
+        found.expect("a text event"),
+        Value::QName(xsdkit::values::QNameValue {
+            namespace: None,
+            local: "thing".into(),
+        }),
+        "`xmlns=\"\"` undeclares, it does not bind to the empty string",
+    );
+}
+
+/// `length`, `minLength` and `maxLength` do not constrain a QName. The value
+/// space is a pair, not a string, and the specification's errata deprecate
+/// these facets there — which is what the W3C suite asserts, with valid
+/// instances 1 to 61 characters long against `length="7"`.
+#[test]
+fn length_facets_do_not_constrain_a_qname() {
+    let s = schema(
+        r#"<xs:element name="e" type="tns:Q"/>
+           <xs:simpleType name="Q">
+             <xs:restriction base="xs:QName"><xs:length value="7"/></xs:restriction>
+           </xs:simpleType>"#,
+    );
+    valid(&s, &format!(r#"<e xmlns="{NS}">a</e>"#));
+    valid(
+        &s,
+        &format!(r#"<e xmlns="{NS}">considerably_longer_than_seven</e>"#),
+    );
+}
+
+/// A list of QNames resolves every item, so the resolver has to reach the
+/// item type rather than stopping at the list.
+#[test]
+fn a_list_of_qnames_resolves_every_item() {
+    let s = schema(
+        r#"<xs:element name="e" type="tns:Qs"/>
+           <xs:simpleType name="Qs"><xs:list itemType="xs:QName"/></xs:simpleType>"#,
+    );
+    valid(
+        &s,
+        &format!(r#"<e xmlns="{NS}" xmlns:p="urn:p">p:one p:two three</e>"#),
+    );
+    invalid(
+        &s,
+        &format!(r#"<e xmlns="{NS}" xmlns:p="urn:p">p:one nope:two</e>"#),
+        DiagCode::InvalidValue,
+    );
+}
+
+/// A QName-typed attribute resolves in its element's scope too.
+#[test]
+fn a_qname_attribute_resolves_against_the_element_it_is_on() {
+    let s = schema(
+        r#"<xs:element name="e"><xs:complexType>
+             <xs:attribute name="ref" type="xs:QName"/>
+           </xs:complexType></xs:element>"#,
+    );
+    valid(
+        &s,
+        &format!(r#"<e xmlns="{NS}" xmlns:p="urn:p" ref="p:thing"/>"#),
+    );
+    invalid(
+        &s,
+        &format!(r#"<e xmlns="{NS}" ref="nope:thing"/>"#),
+        DiagCode::InvalidValue,
+    );
+}

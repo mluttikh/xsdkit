@@ -600,6 +600,22 @@ has the wrong number of particles.
 
 ## Planned, not present
 
+**Namespace bindings on the schema side.** `xs:QName` and `xs:NOTATION` are the
+only datatypes whose value depends on something outside the lexical form, and
+the instance validator resolves them against a namespace stack it keeps as it
+walks. The *schema* side has no equivalent: a prefix written into an
+`xs:enumeration` literal, or into a `default`/`fixed` value, binds in the schema
+document, and the loader does not carry those bindings into the compiled model.
+
+So both are skipped rather than guessed — `check_value` returns early for
+QName-typed constraints, and a QName enumeration cannot match. Resolving them
+against the *instance*'s bindings would be right whenever the two documents
+happen to agree on a prefix and quietly wrong otherwise, which is worse than
+not checking. Fixing it means keeping the bindings in scope at each facet, not
+per document: a schema may rebind a prefix on an inner element, and the W3C
+suite has one that does.
+
+
 Deliberately out of scope until their phase (see `DESIGN.md` §3.11): XSD 1.1
 assertions and conditional type assignment (P5, next).
 

@@ -44,6 +44,10 @@ Instance = str | bytes
 #: Durations and gregorian fragments stay as their canonical lexical strings —
 #: ``xs:duration`` has no lossless Python counterpart, since months and seconds
 #: are not commensurable. ``xs:dayTimeDuration`` alone becomes a ``timedelta``.
+#:
+#: An ``xs:QName`` arrives as Clark notation (``{namespace}local``) with its
+#: prefix already resolved against the document, since the prefix is a spelling
+#: rather than part of the value.
 XsdValue = (
     str
     | bool

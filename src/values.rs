@@ -21,7 +21,6 @@ use crate::atomic::{
 };
 use crate::datatypes::{Builtin, BuiltinKind, FacetSet};
 use crate::load::Version;
-use crate::names::QName;
 use std::fmt;
 
 /// A value in an XSD value space.
@@ -56,7 +55,7 @@ pub enum Value {
     HexBinary(Vec<u8>),
     Base64Binary(Vec<u8>),
     AnyUri(String),
-    QName(QName),
+    QName(QNameValue),
     /// A list variety's items.
     List(Vec<Value>),
 }
@@ -71,6 +70,8 @@ impl Value {
             Value::String(s) | Value::AnyUri(s) => Some(s.chars().count()),
             Value::HexBinary(b) | Value::Base64Binary(b) => Some(b.len()),
             Value::List(items) => Some(items.len()),
+            // `length` on a QName is not defined by the specification —
+            // the errata deprecate it — so no length facet constrains one.
             Value::QName(_) => None,
             _ => None,
         }
@@ -206,7 +207,7 @@ impl fmt::Display for Value {
                 Ok(())
             }
             Value::Base64Binary(b) => f.write_str(&base64_encode(b)),
-            Value::QName(_) => f.write_str("<QName>"),
+            Value::QName(q) => f.write_str(&q.to_string()),
             Value::List(items) => {
                 for (i, v) in items.iter().enumerate() {
                     if i > 0 {
@@ -263,6 +264,75 @@ pub fn parse(builtin: Builtin, lexical: &str) -> Result<Value, ValueError> {
     parse_in(builtin, lexical, Version::Xsd11)
 }
 
+/// A QName in the *value* space.
+///
+/// The namespace it resolved to, and the local part.
+///
+/// The prefix is deliberately not kept. `a:x` and `b:x` are the **same value**
+/// when `a` and `b` are bound to the same namespace, which is what makes an
+/// `xs:enumeration` over QNames behave as the specification says.
+///
+/// Owned strings rather than interned [`crate::names::QName`] symbols, because the namespace
+/// comes from the document being validated rather than from the schema, and a
+/// compiled `Schemas` cannot intern anything new.
+#[derive(Clone, PartialEq, Eq, Hash, Debug)]
+pub struct QNameValue {
+    /// The namespace the prefix resolved to, or `None` for an unprefixed name
+    /// with no default namespace in scope.
+    pub namespace: Option<String>,
+    pub local: String,
+}
+
+impl fmt::Display for QNameValue {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match &self.namespace {
+            Some(ns) => write!(f, "{{{ns}}}{}", self.local),
+            None => f.write_str(&self.local),
+        }
+    }
+}
+
+/// Resolves namespace prefixes as of one point in a document.
+///
+/// `xs:QName` and `xs:NOTATION` are the only datatypes whose value depends on
+/// something outside the lexical form, so this is the only context value
+/// parsing ever needs.
+pub trait Namespaces {
+    /// The URI bound to `prefix`, or to the default namespace when `None`.
+    fn resolve(&self, prefix: Option<&str>) -> Option<&str>;
+}
+
+/// No bindings at all.
+///
+/// An unprefixed QName still parses — it is simply in no namespace, which is a
+/// legal value — while a prefixed one cannot be resolved and is rejected.
+#[derive(Copy, Clone, Debug)]
+pub struct NoNamespaces;
+
+impl Namespaces for NoNamespaces {
+    fn resolve(&self, _prefix: Option<&str>) -> Option<&str> {
+        None
+    }
+}
+
+/// Splits a lexical QName into prefix and local part, checking both are NCNames.
+fn split_qname(s: &str) -> Result<(Option<&str>, &str), ValueError> {
+    let bad = |m: &str| err(Builtin::QName, s, m);
+    let (prefix, local) = match s.split_once(':') {
+        Some((p, l)) => (Some(p), l),
+        None => (None, s),
+    };
+    if local.contains(':') {
+        return Err(bad("a QName has at most one colon"));
+    }
+    for part in [prefix.unwrap_or("x"), local] {
+        if !is_ncname(part) {
+            return Err(bad("both parts of a QName must be NCNames"));
+        }
+    }
+    Ok((prefix, local))
+}
+
 /// Parses a lexical form in a particular version of XSD.
 ///
 /// The two languages differ in exactly two places among the built-ins, both
@@ -271,9 +341,22 @@ pub fn parse(builtin: Builtin, lexical: &str) -> Result<Value, ValueError> {
 /// - the year `0000`, which 1.1 admits as 1 BCE and 1.0 prohibits outright;
 /// - `+INF`, which 1.1 added to the special values and 1.0 does not have.
 pub fn parse_in(builtin: Builtin, lexical: &str, version: Version) -> Result<Value, ValueError> {
+    parse_qualified(builtin, lexical, version, &NoNamespaces)
+}
+
+/// [`parse_in`], with the namespace bindings a QName needs.
+///
+/// Only `xs:QName` and `xs:NOTATION` consult `ns`; every other datatype's
+/// value is a function of its lexical form alone.
+pub fn parse_qualified(
+    builtin: Builtin,
+    lexical: &str,
+    version: Version,
+    ns: &dyn Namespaces,
+) -> Result<Value, ValueError> {
     let normalized = builtin.white_space().normalize(lexical);
     let s = normalized.as_ref();
-    parse_normalized(builtin, s, lexical, version)
+    parse_normalized(builtin, s, lexical, version, ns)
 }
 
 /// Parses an already-whitespace-normalised lexical form.
@@ -284,6 +367,7 @@ fn parse_normalized(
     s: &str,
     raw: &str,
     version: Version,
+    ns: &dyn Namespaces,
 ) -> Result<Value, ValueError> {
     use Builtin as B;
 
@@ -291,7 +375,7 @@ fn parse_normalized(
     if let BuiltinKind::List(item) = builtin.kind() {
         let items = s
             .split_whitespace()
-            .map(|tok| parse_in(item, tok, version))
+            .map(|tok| parse_qualified(item, tok, version, ns))
             .collect::<Result<Vec<_>, _>>()?;
         return Ok(Value::List(items));
     }
@@ -411,12 +495,27 @@ fn parse_normalized(
 
         B::AnyUri => Value::AnyUri(s.to_string()),
 
-        // A QName needs the in-scope namespace bindings, which live in the
-        // document rather than the type. The validator resolves these.
+        // The only datatypes whose value depends on something outside the
+        // lexical form: the prefix binds in the document, not in the type.
         B::QName | B::Notation => {
-            return Err(bad(
-                "QName values must be resolved against the document's namespaces",
-            ));
+            let (prefix, local) = split_qname(s)?;
+            let namespace = match ns.resolve(prefix) {
+                Some(uri) => Some(uri.to_string()),
+                // An unprefixed name with no default namespace is in no
+                // namespace, which is a value. A prefix that binds to nothing
+                // is not.
+                None if prefix.is_none() => None,
+                None => {
+                    return Err(bad(&format!(
+                        "prefix `{}` is not bound to a namespace here",
+                        prefix.unwrap_or_default()
+                    )));
+                }
+            };
+            Value::QName(QNameValue {
+                namespace,
+                local: local.to_string(),
+            })
         }
 
         // The ur-types accept anything; `anyType` is not a simple type at all.

@@ -2541,6 +2541,10 @@ fn value_to_py<'py>(py: Python<'py>, v: &Value) -> PyResult<Bound<'py, PyAny>> {
             }
             list.into_bound_py_any(py)
         }
+        // Clark notation, the same spelling names take everywhere else in this
+        // API: `schemas["{urn:example}report"]`. The prefix is deliberately
+        // gone — it is a document detail, not part of the value.
+        Value::QName(q) => q.to_string().into_bound_py_any(py),
         // No lossless Python type; the canonical lexical form is exact.
         other => other.to_string().into_bound_py_any(py),
     }
