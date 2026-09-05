@@ -200,7 +200,7 @@ crate:
 | | |
 |---|---|
 | valid schemas accepted | **98.9%** — it reads real schemas |
-| invalid schemas rejected | **48.5%** — it does not enforce most validity constraints |
+| invalid schemas rejected | **50.4%** — particle subsumption is the big rule still missing |
 
 That asymmetry is by construction, not neglect: the Schema Component
 Constraints and the Derivation Valid rules are largely unimplemented (see §7).
@@ -211,7 +211,7 @@ annotation placement, `block`/`final` keywords, `default` beside `fixed`, the
 shape of a group definition. Those last live in `check_representation` in the
 loader, as one sweep of the document tree: they are answerable from the XML
 alone, with nothing resolved, and several concern elements the loader
-otherwise never visits.
+otherwise never visits. `final` is enforced too (`src/derivation.rs`).
 
 `examples/w3c_gap.rs` is how to pick what to implement next: it clusters the
 invalid schemas we accept by test-group family, so a family with fifty misses
@@ -389,9 +389,17 @@ pass silently:
 - An `xs:restriction` that widens — base `use="required"`, derived omitting
   `use` and so defaulting to `optional` — is illegal, and we accept it.
 
-Both belong with the other derivation constraints (Derivation Valid
-(Extension) / (Restriction, Complex)), none of which are implemented. Do not
-add them piecemeal; do the set, or leave the gap documented.
+Both belong with *Derivation Valid (Extension)* and *(Restriction, Complex)*,
+which are unimplemented. Do not add them piecemeal; do the set, or leave the
+gap documented.
+
+The sealing rule is the exception, and it is done (`src/derivation.rs`): a
+type's `final` is complete on its own, needing only the base's `final` and the
+method used. What remains is **particle subsumption** — whether a restriction's
+content model actually accepts a subset of its base's — which is the single
+biggest thing standing between the invalid-schema figure and 100%. It is worth
+about 50 of the ~236 cases still accepted; `examples/w3c_gap.rs` names them
+(the `all`, `simple`, `complex` and `over` families).
 
 ### 8. Input encoding
 

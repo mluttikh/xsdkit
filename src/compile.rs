@@ -18,6 +18,8 @@
 //!    datatype admits, and that their values are legal.
 //! 8. [`crate::declarations`] checks each declaration's `default` or `fixed`
 //!    against the type it belongs to.
+//! 9. [`crate::derivation`] checks that no type derives from a base whose
+//!    `final` forbids it.
 
 use crate::datatypes::Builtin;
 use crate::diagnostics::{DiagCode, Diagnostic, Diagnostics, Severity, Span};
@@ -80,6 +82,7 @@ pub(crate) fn compile(mut loader: Loader<'_>, mode: Conformance) -> (Schemas, Di
     // and the declaration rules need the composed facet set on top of that.
     diags.extend(crate::facets::check_all(&schemas));
     diags.extend(crate::declarations::check_all(&schemas, version));
+    diags.extend(crate::derivation::check_all(&schemas));
 
     (schemas, diags)
 }

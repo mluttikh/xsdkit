@@ -51,6 +51,7 @@ pub(crate) mod compile;
 pub mod content;
 pub mod datatypes;
 pub(crate) mod declarations;
+pub(crate) mod derivation;
 pub mod diagnostics;
 pub mod encoding;
 pub(crate) mod facets;

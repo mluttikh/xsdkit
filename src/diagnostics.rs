@@ -135,6 +135,8 @@ pub enum DiagCode {
     /// A `default` or `fixed` value its own type rejects, or one on a
     /// declaration that cannot carry one at all.
     InvalidValueConstraint,
+    /// A type derives from a base whose `final` forbids that derivation.
+    DerivationBlocked,
 
     // 2000-2099 — instance documents
     /// No global element declaration matches the document's root.
@@ -188,6 +190,7 @@ impl DiagCode {
             DiagCode::InvalidFacetValue => "XSD1306",
             DiagCode::ConflictingFacets => "XSD1307",
             DiagCode::InvalidValueConstraint => "XSD1308",
+            DiagCode::DerivationBlocked => "XSD1309",
 
             DiagCode::ElementNotDeclared => "XSD2001",
             DiagCode::UnexpectedElement => "XSD2002",
