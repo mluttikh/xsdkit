@@ -250,6 +250,9 @@ struct DocCtx {
     /// Whether the default open content also reaches types with empty
     /// content.
     default_open_applies_to_empty: bool,
+    /// Which XSD this document is being read as, so that every descend point
+    /// can apply conditional inclusion (`vc:`).
+    version: Version,
 }
 
 /// Accumulates components while documents are read.
@@ -548,6 +551,14 @@ impl<'r> Loader<'r> {
             return;
         }
 
+        // The conditions can sit on `xs:schema` itself, which excludes the
+        // whole document — the idiom for shipping one file that a processor of
+        // another version reads as empty. Nothing is wrong with it, so there is
+        // nothing to report either.
+        if !vc_included(&root, self.version()) {
+            return;
+        }
+
         let declared_ns = root.attribute("targetNamespace");
         let target_ns = match (declared_ns, coerce_ns) {
             // Chameleon include: no targetNamespace of its own, so the
@@ -573,6 +584,7 @@ impl<'r> Loader<'r> {
             default_attributes: None,
             default_open_content: None,
             default_open_applies_to_empty: false,
+            version: self.version(),
         };
         let ctx = self.read_document_defaults(&doc, root, ctx);
 
@@ -595,7 +607,7 @@ impl<'r> Loader<'r> {
 
         // Composition first: everything a later reference might name has to
         // exist before the references are collected.
-        for child in root.children().filter(is_xs_element) {
+        for child in root.children().filter(|n| reads(n, ctx.version)) {
             match child.tag_name().name() {
                 "include" => self.read_include(doc, child, ctx),
                 "import" => self.read_import(doc, child, ctx),
@@ -605,7 +617,7 @@ impl<'r> Loader<'r> {
             }
         }
 
-        for child in root.children().filter(is_xs_element) {
+        for child in root.children().filter(|n| reads(n, ctx.version)) {
             let span = Span::new(&ctx.uri, line_of(doc, child));
             match child.tag_name().name() {
                 "include" | "import" | "redefine" | "override" | "annotation" => {}
@@ -677,7 +689,7 @@ impl<'r> Loader<'r> {
         }
         if let Some(n) = root
             .children()
-            .filter(is_xs_element)
+            .filter(|n| reads(n, ctx.version))
             .find(|c| c.tag_name().name() == "defaultOpenContent")
         {
             let span = Span::new(&ctx.uri, line_of(doc, n));
@@ -711,7 +723,7 @@ impl<'r> Loader<'r> {
         };
         let any = node
             .children()
-            .filter(is_xs_element)
+            .filter(|n| reads(n, ctx.version))
             .find(|c| c.tag_name().name() == "any")?;
         Some(OpenContent {
             mode,
@@ -787,7 +799,7 @@ impl<'r> Loader<'r> {
     /// self-references can still reach them.
     fn capture_originals(&mut self, node: roxmltree::Node, ctx: &DocCtx) -> Originals {
         let mut out = Originals::default();
-        for c in node.children().filter(is_xs_element) {
+        for c in node.children().filter(|n| reads(n, ctx.version)) {
             let Some(local) = c.attribute("name") else {
                 continue;
             };
@@ -826,7 +838,7 @@ impl<'r> Loader<'r> {
         // Replacing a name the included document declared is the point here,
         // not a duplicate-global error.
         let outer = std::mem::replace(&mut self.in_redefine, true);
-        for c in node.children().filter(is_xs_element) {
+        for c in node.children().filter(|n| reads(n, ctx.version)) {
             let span = Span::new(&ctx.uri, line_of(doc, c));
             let before = self.fixups.len();
             let kind = c.tag_name().name();
@@ -1100,7 +1112,7 @@ impl<'r> Loader<'r> {
         // type="..." or an inline simpleType/complexType, never both.
         let inline = node
             .children()
-            .filter(is_xs_element)
+            .filter(|n| reads(n, ctx.version))
             .find(|c| matches!(c.tag_name().name(), "simpleType" | "complexType"));
         match (node.attribute("type"), inline) {
             (Some(t), None) => {
@@ -1161,7 +1173,7 @@ impl<'r> Loader<'r> {
         owner: ElementId,
     ) -> Vec<IdcId> {
         let mut out = Vec::new();
-        for c in node.children().filter(is_xs_element) {
+        for c in node.children().filter(|n| reads(n, ctx.version)) {
             let kind = match c.tag_name().name() {
                 "unique" => IdcKind::Unique,
                 "key" => IdcKind::Key,
@@ -1214,14 +1226,14 @@ impl<'r> Loader<'r> {
             let name = self.qualified_name(c.attribute("name").unwrap_or_default(), true, ctx);
             let selector = c
                 .children()
-                .filter(is_xs_element)
+                .filter(|n| reads(n, ctx.version))
                 .find(|n| n.tag_name().name() == "selector")
                 .and_then(|n| n.attribute("xpath"))
                 .unwrap_or_default()
                 .to_string();
             let fields = c
                 .children()
-                .filter(is_xs_element)
+                .filter(|n| reads(n, ctx.version))
                 .filter(|n| n.tag_name().name() == "field")
                 .filter_map(|n| n.attribute("xpath"))
                 .map(str::to_string)
@@ -1290,7 +1302,7 @@ impl<'r> Loader<'r> {
 
         let inline = node
             .children()
-            .filter(is_xs_element)
+            .filter(|n| reads(n, ctx.version))
             .find(|c| c.tag_name().name() == "simpleType");
         match (node.attribute("type"), inline) {
             (Some(t), _) => {
@@ -1327,7 +1339,7 @@ impl<'r> Loader<'r> {
         let mut groups = Vec::new();
         let mut wildcard = None;
 
-        for c in parent.children().filter(is_xs_element) {
+        for c in parent.children().filter(|n| reads(n, ctx.version)) {
             let span = Span::new(&ctx.uri, line_of(doc, c));
             match c.tag_name().name() {
                 "attribute" => {
@@ -1411,7 +1423,7 @@ impl<'r> Loader<'r> {
 
         let derivations: Vec<_> = node
             .children()
-            .filter(is_xs_element)
+            .filter(|n| reads(n, ctx.version))
             .filter(|c| matches!(c.tag_name().name(), "restriction" | "list" | "union"))
             .collect();
 
@@ -1445,7 +1457,7 @@ impl<'r> Loader<'r> {
                     None => {
                         if let Some(inner) = d
                             .children()
-                            .filter(is_xs_element)
+                            .filter(|n| reads(n, ctx.version))
                             .find(|c| c.tag_name().name() == "simpleType")
                         {
                             let b = self.read_simple_type(doc, inner, ctx, false);
@@ -1471,7 +1483,7 @@ impl<'r> Loader<'r> {
                     None => {
                         if let Some(inner) = d
                             .children()
-                            .filter(is_xs_element)
+                            .filter(|n| reads(n, ctx.version))
                             .find(|c| c.tag_name().name() == "simpleType")
                         {
                             let it = self.read_simple_type(doc, inner, ctx, false);
@@ -1498,7 +1510,7 @@ impl<'r> Loader<'r> {
                 }
                 for inner in d
                     .children()
-                    .filter(is_xs_element)
+                    .filter(|n| reads(n, ctx.version))
                     .filter(|c| c.tag_name().name() == "simpleType")
                 {
                     members.push(self.read_simple_type(doc, inner, ctx, false));
@@ -1528,7 +1540,7 @@ impl<'r> Loader<'r> {
         ctx: &DocCtx,
     ) -> Vec<Facet> {
         let mut out = Vec::new();
-        for c in node.children().filter(is_xs_element) {
+        for c in node.children().filter(|n| reads(n, ctx.version)) {
             let v = c.attribute("value").unwrap_or_default();
             let span = || Span::new(&ctx.uri, line_of(doc, c));
             let facet = match c.tag_name().name() {
@@ -1672,14 +1684,14 @@ impl<'r> Loader<'r> {
 
         let content_wrapper = node
             .children()
-            .filter(is_xs_element)
+            .filter(|n| reads(n, ctx.version))
             .find(|c| matches!(c.tag_name().name(), "simpleContent" | "complexContent"));
 
         let (body, derivation_node) = match content_wrapper {
             Some(w) => {
                 let d = w
                     .children()
-                    .filter(is_xs_element)
+                    .filter(|n| reads(n, ctx.version))
                     .find(|c| matches!(c.tag_name().name(), "extension" | "restriction"));
                 (w, d)
             }
@@ -1725,7 +1737,7 @@ impl<'r> Loader<'r> {
             // base in, and `Schemas::simple_content_type` follows it.
             let inline = derivation_node.and_then(|d| {
                 d.children()
-                    .filter(is_xs_element)
+                    .filter(|n| reads(n, ctx.version))
                     .find(|c| c.tag_name().name() == "simpleType")
             });
             match inline {
@@ -1763,7 +1775,7 @@ impl<'r> Loader<'r> {
         let open_content = if self.version == Version::Xsd11 {
             match member_node
                 .children()
-                .filter(is_xs_element)
+                .filter(|n| reads(n, ctx.version))
                 .find(|c| c.tag_name().name() == "openContent")
             {
                 Some(n) => self.read_open_content(n, ctx),
@@ -1801,7 +1813,7 @@ impl<'r> Loader<'r> {
     ) -> Option<ParticleId> {
         let c = node
             .children()
-            .filter(is_xs_element)
+            .filter(|n| reads(n, ctx.version))
             .find(|c| matches!(c.tag_name().name(), "sequence" | "choice" | "all" | "group"))?;
         self.read_particle(doc, c, ctx, scope)
     }
@@ -1861,7 +1873,7 @@ impl<'r> Loader<'r> {
                     _ => Compositor::All,
                 };
                 let mut particles = Vec::new();
-                for c in node.children().filter(is_xs_element) {
+                for c in node.children().filter(|n| reads(n, ctx.version)) {
                     if matches!(
                         c.tag_name().name(),
                         "element" | "group" | "sequence" | "choice" | "all" | "any"
@@ -1991,7 +2003,7 @@ impl<'r> Loader<'r> {
         let mut compositor = Compositor::Sequence;
         if let Some(c) = node
             .children()
-            .filter(is_xs_element)
+            .filter(|n| reads(n, ctx.version))
             .find(|c| matches!(c.tag_name().name(), "sequence" | "choice" | "all"))
         {
             compositor = match c.tag_name().name() {
@@ -1999,7 +2011,7 @@ impl<'r> Loader<'r> {
                 "choice" => Compositor::Choice,
                 _ => Compositor::All,
             };
-            for gc in c.children().filter(is_xs_element) {
+            for gc in c.children().filter(|n| reads(n, ctx.version)) {
                 if let Some(p) = self.read_particle(doc, gc, ctx, Scope::Global) {
                     particles.push(p);
                 }
@@ -2094,14 +2106,14 @@ impl<'r> Loader<'r> {
     ///
     /// The raw XML is what the units layer will need: a unit written into
     /// `appinfo` cannot be recovered from a summary.
-    fn read_annotation(&mut self, node: roxmltree::Node, _ctx: &DocCtx) -> Option<AnnotationId> {
+    fn read_annotation(&mut self, node: roxmltree::Node, ctx: &DocCtx) -> Option<AnnotationId> {
         let ann = node
             .children()
-            .filter(is_xs_element)
+            .filter(|n| reads(n, ctx.version))
             .find(|c| c.tag_name().name() == "annotation")?;
 
         let mut out = Annotation::default();
-        for c in ann.children().filter(is_xs_element) {
+        for c in ann.children().filter(|n| reads(n, ctx.version)) {
             match c.tag_name().name() {
                 "documentation" => {
                     let text = c.text().unwrap_or_default().trim();
@@ -2220,7 +2232,7 @@ fn check_representation(
 ) {
     check_annotation_placement(doc, root, ctx, diags);
 
-    for node in root.descendants().filter(is_xs_element) {
+    for node in root.descendants().filter(|n| reads(n, ctx.version)) {
         let name = node.tag_name().name();
         let span = || Span::new(&ctx.uri, line_of(doc, node));
 
@@ -2329,7 +2341,7 @@ fn check_representation(
         if name == "group" && node.has_attribute("name") {
             let groups = node
                 .children()
-                .filter(is_xs_element)
+                .filter(|n| reads(n, ctx.version))
                 .filter(|c| matches!(c.tag_name().name(), "all" | "choice" | "sequence"))
                 .count();
             if groups != 1 {
@@ -2389,7 +2401,7 @@ fn check_annotation_placement(
     ctx: &DocCtx,
     diags: &mut Diagnostics,
 ) {
-    for node in root.descendants().filter(is_xs_element) {
+    for node in root.descendants().filter(|n| reads(n, ctx.version)) {
         if matches!(
             node.tag_name().name(),
             "schema" | "redefine" | "override" | "annotation"
@@ -2397,7 +2409,11 @@ fn check_annotation_placement(
             continue;
         }
         let mut seen = false;
-        for (i, child) in node.children().filter(is_xs_element).enumerate() {
+        for (i, child) in node
+            .children()
+            .filter(|n| reads(n, ctx.version))
+            .enumerate()
+        {
             if child.tag_name().name() != "annotation" {
                 continue;
             }
@@ -2422,6 +2438,86 @@ fn check_annotation_placement(
             }
             seen = true;
         }
+    }
+}
+
+/// The XSD namespace for conditional inclusion, XSD 1.1 §4.2.2.
+const VC: &str = "http://www.w3.org/2007/XMLSchema-versioning";
+
+/// An XSD element this processor should read.
+///
+/// Conditional inclusion lets one document serve processors of different
+/// versions: an element whose `vc:` conditions this processor does not meet is
+/// *ignored*, subtree and all, as though it were not written. That is why the
+/// test belongs on every descend point rather than at the places components
+/// are created — a skipped element's children must never be looked at either,
+/// and two alternatives for the same name must not both be registered.
+fn reads(n: &roxmltree::Node, version: Version) -> bool {
+    is_xs_element(n) && vc_included(n, version)
+}
+
+/// Whether this processor meets an element's `vc:` conditions.
+fn vc_included(n: &roxmltree::Node, version: Version) -> bool {
+    // The version this processor claims to be. Conditional inclusion compares
+    // against it numerically, so a document can say "1.1 and later".
+    let ours = match version {
+        Version::Xsd10 => 1.0_f64,
+        Version::Xsd11 => 1.1_f64,
+    };
+    let num = |name: &str| {
+        n.attribute((VC, name))
+            .and_then(|v| v.trim().parse::<f64>().ok())
+    };
+    if num("minVersion").is_some_and(|m| ours < m) {
+        return false;
+    }
+    // `maxVersion` is exclusive: it names the first version that must ignore
+    // the element, not the last that may read it.
+    if num("maxVersion").is_some_and(|m| ours >= m) {
+        return false;
+    }
+
+    // The availability tests name components a processor may or may not have.
+    // Every built-in type and facet this crate knows is exactly what
+    // `Builtin::from_local_name` and the facet reader accept, so the answers
+    // are the same for both versions except where the type itself is 1.1.
+    let all_available = |list: &str| {
+        list.split_whitespace()
+            .all(|q| component_available(q, version))
+    };
+    if let Some(list) = n.attribute((VC, "typeAvailable")) {
+        if !all_available(list) {
+            return false;
+        }
+    }
+    if let Some(list) = n.attribute((VC, "typeUnavailable")) {
+        if all_available(list) {
+            return false;
+        }
+    }
+    true
+}
+
+/// Whether a `vc:typeAvailable` entry names a type this build supports.
+///
+/// Only the XSD namespace is answerable: a user-defined type's availability is
+/// a question about the schema being assembled, not about the processor, and
+/// answering "no" would drop constructs that are perfectly readable. So
+/// anything else counts as available.
+fn component_available(qname: &str, version: Version) -> bool {
+    let local = qname.rsplit(':').next().unwrap_or(qname);
+    match crate::datatypes::Builtin::from_local_name(local) {
+        Some(b) => {
+            version == Version::Xsd11
+                || !matches!(
+                    b,
+                    crate::datatypes::Builtin::YearMonthDuration
+                        | crate::datatypes::Builtin::DayTimeDuration
+                        | crate::datatypes::Builtin::DateTimeStamp
+                        | crate::datatypes::Builtin::AnyAtomicType
+                )
+        }
+        None => true,
     }
 }
 

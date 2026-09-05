@@ -199,7 +199,7 @@ crate:
 
 | | |
 |---|---|
-| valid schemas accepted | **99.1%** — it reads real schemas |
+| valid schemas accepted | **99.2%** — it reads real schemas |
 | invalid schemas rejected | **59.4%** — partial: see `src/restriction.rs` |
 
 That asymmetry is by construction, not neglect: the Schema Component
@@ -468,12 +468,16 @@ has the wrong number of particles.
    canonical forms and orderings, where "did not panic" says nothing about "is
    right". And `content.rs` is where the four UPA false positives in P1.3
    live, which is not a coincidence worth ignoring.
-5. **`vc:` conditional inclusion** (XSD 1.1 §4.2.2), and whatever else is
-   left in the `VC`, `Override` and `Assert` sets. The `vc:` cases report
-   `duplicate global element` — the symptom of loading both branches of
-   something meant to be chosen between. Around 5 rejections once the identity
-   constraint bug above is out of the same `XSD1202` bucket; check with
-   `w3c_why` rather than trusting that figure.
+5. ~~**`vc:` conditional inclusion**~~ **Done.** The test is on `reads`, the
+   filter every descend point in the loader now uses — *not* at the places
+   components are created. An excluded element takes its subtree with it, and
+   two alternatives for one name must never both be registered, which is what
+   the failures looked like (`duplicate global element`). The conditions may
+   also sit on `xs:schema` itself, excluding a whole document; that is checked
+   where the root is validated.
+
+   **Any new descend point must use `reads`, not `is_xs_element`** — the latter
+   is what `reads` is built from and does not apply the conditions.
 
 ### P4 — optional, and genuinely optional
 

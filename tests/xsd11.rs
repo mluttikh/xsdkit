@@ -494,3 +494,105 @@ fn a_local_target_namespace_is_constrained() {
     );
     assert!(!d.has_errors(), "{d}");
 }
+
+// ---------------------------------------------------------------------------
+// Conditional inclusion (vc:)
+// ---------------------------------------------------------------------------
+
+/// One document can serve processors of different versions: an element whose
+/// `vc:` conditions this processor does not meet is ignored, subtree and all.
+/// Without that, the two alternatives for a name both load and collide.
+#[test]
+fn conditional_inclusion_picks_one_alternative() {
+    let body = r#"<xs:element name="e" vc:minVersion="1.1" type="xs:dateTimeStamp"/>
+                  <xs:element name="e" vc:maxVersion="1.1" type="xs:string"/>"#;
+    for (version, expected) in [
+        (Version::Xsd11, "dateTimeStamp"),
+        (Version::Xsd10, "string"),
+    ] {
+        let xsd = format!(
+            r#"<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema"
+                          xmlns:vc="http://www.w3.org/2007/XMLSchema-versioning"
+                          xmlns:tns="{NS}" targetNamespace="{NS}">{body}</xs:schema>"#
+        );
+        let s = SchemaSetBuilder::new()
+            .version(version)
+            .text(xsd, "mem://main.xsd")
+            .build()
+            .unwrap_or_else(|d| panic!("{version:?}: {d}"));
+        let e = s.element(Some(NS), "e").expect("element");
+        assert!(
+            s[s[e].type_id]
+                .name()
+                .map(|n| s.display_name(n))
+                .unwrap_or_default()
+                .ends_with(expected),
+            "{version:?} should have kept the {expected} alternative"
+        );
+    }
+}
+
+/// `maxVersion` names the first version that must ignore the element, not the
+/// last that may read it.
+#[test]
+fn max_version_is_exclusive() {
+    let xsd = format!(
+        r#"<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema"
+                      xmlns:vc="http://www.w3.org/2007/XMLSchema-versioning"
+                      xmlns:tns="{NS}" targetNamespace="{NS}">
+             <xs:element name="only10" vc:maxVersion="1.1" type="xs:string"/>
+           </xs:schema>"#
+    );
+    let read_as = |v: Version| {
+        SchemaSetBuilder::new()
+            .version(v)
+            .text(xsd.clone(), "mem://main.xsd")
+            .build()
+            .unwrap()
+            .element(Some(NS), "only10")
+            .is_some()
+    };
+    assert!(read_as(Version::Xsd10), "1.0 is below the ceiling");
+    assert!(!read_as(Version::Xsd11), "1.1 is the ceiling itself");
+}
+
+/// A skipped element's children are never looked at either — the conditions
+/// remove a subtree, not just a declaration.
+#[test]
+fn an_excluded_element_takes_its_subtree_with_it() {
+    let xsd = format!(
+        r#"<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema"
+                      xmlns:vc="http://www.w3.org/2007/XMLSchema-versioning"
+                      xmlns:tns="{NS}" targetNamespace="{NS}">
+             <xs:complexType name="T" vc:minVersion="9.9">
+               <xs:sequence><xs:element name="nope" type="xs:notAType"/></xs:sequence>
+             </xs:complexType>
+             <xs:element name="e" type="xs:string"/>
+           </xs:schema>"#
+    );
+    let s = SchemaSetBuilder::new()
+        .version(Version::Xsd11)
+        .text(xsd, "mem://main.xsd")
+        .build()
+        .unwrap_or_else(|d| panic!("the unread subtree should raise nothing:\n{d}"));
+    assert!(s.type_(Some(NS), "T").is_none());
+}
+
+/// The conditions can sit on `xs:schema` itself, which is the idiom for a
+/// document another version reads as empty.
+#[test]
+fn a_whole_document_can_be_excluded() {
+    let xsd = format!(
+        r#"<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema"
+                      xmlns:vc="http://www.w3.org/2007/XMLSchema-versioning"
+                      xmlns:tns="{NS}" targetNamespace="{NS}" vc:maxVersion="0.9">
+             <xs:element name="gone" type="xs:string"/>
+           </xs:schema>"#
+    );
+    let s = SchemaSetBuilder::new()
+        .version(Version::Xsd11)
+        .text(xsd, "mem://main.xsd")
+        .build()
+        .unwrap_or_else(|d| panic!("{d}"));
+    assert!(s.element(Some(NS), "gone").is_none());
+}
