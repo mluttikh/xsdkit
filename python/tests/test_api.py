@@ -255,10 +255,10 @@ def test_the_schema_for_schemas_is_queryable(schema_for_schemas):
 
 
 def test_globals_are_listed_and_sorted(schema_for_schemas):
-    names = [n for n, _ in schema_for_schemas.elements]
+    names = [e.qname for e in schema_for_schemas.elements]
     assert names == sorted(names)
     assert f"{{{XS}}}schema" in names
-    assert dict(schema_for_schemas.counts)["types"] > 100
+    assert schema_for_schemas.counts["types"] > 100
 
 
 # --- ergonomics -------------------------------------------------------------
@@ -397,3 +397,68 @@ def test_facets_are_the_ones_in_force():
     # What this step wrote, for a tool rendering the schema back out.
     assert b.declared_facets.min_length is None
     assert b.declared_facets.max_length == 8
+
+
+def test_browsing_needs_no_index_arithmetic():
+    """The shape a reader actually walks a schema in.
+
+    `elements` used to hand back `(name, element)` pairs and every child hop
+    went through `.type`, so reaching a grandchild read
+    `x.elements[0][1].type.children[1].type.children[0]`.
+    """
+    s = build(
+        '<xs:element name="report"><xs:complexType><xs:sequence>'
+        '<xs:element name="title" type="xs:string"/>'
+        '<xs:element name="item" maxOccurs="unbounded"><xs:complexType><xs:sequence>'
+        '<xs:element name="price" type="xs:decimal"/>'
+        '<xs:element name="note" type="xs:string" minOccurs="0"/>'
+        '</xs:sequence><xs:attribute name="sku" type="xs:string" use="required"/>'
+        "</xs:complexType></xs:element></xs:sequence></xs:complexType></xs:element>"
+    )
+    report = s.elements[0]
+    assert report.local_name == "report"
+    assert report.children[1].children[0].qname == f"{{{NS}}}price"
+    # Or by name, which is what browsing usually means.
+    assert s[f"{{{NS}}}report"]["item"]["price"].qname == f"{{{NS}}}price"
+    assert report["item"]["note"].local_name == "note"
+
+    # An element is its children: iterable, sized, subscriptable.
+    assert [c.local_name for c in report] == ["title", "item"]
+    assert len(report) == 2
+    assert report.attributes == report.type.attributes
+    with pytest.raises(KeyError):
+        report["nope"]
+
+    # Occurrence is still a fact about the pair, not the child.
+    assert report.repeats(report["item"])
+    assert report["item"].optional(report["item"]["note"])
+
+    # `types` yields types, not pairs.
+    assert all(hasattr(t, "is_simple") for t in s.types)
+
+
+def test_tree_renders_a_schema_for_reading():
+    s = build(
+        '<xs:element name="report"><xs:complexType><xs:sequence>'
+        '<xs:element name="item" maxOccurs="unbounded"><xs:complexType><xs:sequence>'
+        '<xs:element name="note" type="xs:string" minOccurs="0"/>'
+        '</xs:sequence><xs:attribute name="sku" type="xs:string" use="required"/>'
+        "</xs:complexType></xs:element></xs:sequence></xs:complexType></xs:element>"
+    )
+    lines = s.elements[0].tree().splitlines()
+    assert lines[0] == "report"
+    assert "item+" in lines[1], "one or more"
+    assert "@sku" in lines[2], "required attributes carry no marker"
+    assert "note?: xs:string" in lines[3], "optional, and the built-in is abbreviated"
+
+
+def test_a_recursive_schema_prints_once():
+    s = build(
+        '<xs:complexType name="Node"><xs:sequence>'
+        '<xs:element name="child" type="tns:Node" minOccurs="0"/>'
+        "</xs:sequence></xs:complexType>"
+        '<xs:element name="root" type="tns:Node"/>'
+    )
+    out = s[f"{{{NS}}}root"].tree(depth=50)
+    assert out.count("child") < 10, "recursion has to stop where the shape repeats"
+    assert "..." in out

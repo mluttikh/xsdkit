@@ -174,6 +174,52 @@ class AttributeUse:
     def default(self) -> str | None: ...
 
 class Element:
+    """An element declaration: a name, a type, and how it may appear.
+
+    An element behaves as its children — iterable, sized, and subscriptable by
+    name — so a schema is walked without a ``.type`` hop at every level::
+
+        report["item"]["price"].qname
+        [child.local_name for child in report]
+    """
+
+    def __len__(self) -> int:
+        """How many children this element may have, by name."""
+    def __iter__(self) -> Iterator[Element]:
+        """The children, so ``for child in element`` reads."""
+    def __getitem__(self, name: Name, /) -> Element:
+        """The child of that name, raising ``KeyError`` when there is none.
+
+        A local name is enough, since a child is almost always in its parent's
+        namespace.
+        """
+    @property
+    def children(self) -> list[Element]:
+        """Elements that may appear directly inside this one.
+
+        The same as ``element.type.children``, without the hop.
+        """
+    @property
+    def attributes(self) -> list[AttributeUse]:
+        """The attributes this element may carry, with how it may carry them."""
+    def repeats(self, child: Element, /) -> bool:
+        """Whether ``child`` may appear here more than once."""
+    def optional(self, child: Element, /) -> bool:
+        """Whether ``child`` may be left out."""
+    def tree(self, depth: int = ...) -> str:
+        """A readable tree of what may appear inside.
+
+        ``?`` optional, ``+`` one or more, ``*`` any number, nothing for
+        exactly once; ``@name`` for attributes. Recursion stops where the shape
+        repeats::
+
+            report
+              title: xs:string
+              item+
+                @sku
+                price: xs:decimal
+                note?: xs:string
+        """
     @property
     def name(self) -> tuple[str | None, str]: ...
     @property
@@ -206,6 +252,12 @@ class Element:
     def appinfo(self) -> list[AppInfo]: ...
 
 class Type:
+    """A type definition, simple or complex."""
+
+    def __len__(self) -> int: ...
+    def __iter__(self) -> Iterator[Element]: ...
+    def __getitem__(self, name: Name, /) -> Element:
+        """The child element of that name, raising ``KeyError`` when absent."""
     @property
     def name(self) -> tuple[str | None, str] | None: ...
     @property
@@ -321,6 +373,11 @@ class PsviEvents:
         """The outcome, available before the events are consumed as well as
         after — a document can be read for its values and still be invalid."""
 
+class ElementIterator:
+    def __iter__(self) -> Iterator[Element]: ...
+    def __next__(self) -> Element: ...
+    def __len__(self) -> int: ...
+
 class NameIterator:
     def __iter__(self) -> Iterator[str]: ...
     def __next__(self) -> str: ...
@@ -396,9 +453,16 @@ class SchemaSet:
     @property
     def documents(self) -> list[Document]: ...
     @property
-    def elements(self) -> list[tuple[str, Element]]: ...
+    def elements(self) -> list[Element]:
+        """Every global element declaration, by name.
+
+        The declarations themselves, not ``(name, declaration)`` pairs — the
+        name is on the declaration, and pairs made every caller write
+        ``[0][1]``.
+        """
     @property
-    def types(self) -> list[tuple[str, Type]]: ...
+    def types(self) -> list[Type]:
+        """Every global type *this schema* declares, by name."""
     @property
     def counts(self) -> dict[str, int]:
         """Component tallies — types, elements, particles and the rest. Counts

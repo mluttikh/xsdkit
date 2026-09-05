@@ -75,17 +75,22 @@ pip install xsdkit
 import xsdkit
 
 schemas = xsdkit.SchemaSet.from_file("report.xsd", search_paths=["schemas/"])
-report = schemas.element("urn:example", "report")
+report = schemas["{urn:example}report"]
 
-len(schemas)                       # globals this schema declares, built-ins aside
-"{urn:example}report" in schemas
-schemas["{urn:example}report"]     # KeyError when absent, unlike .element()
-for name in schemas: ...           # a mapping, so dict(schemas) works too
+print(report.tree())
+# report
+#   title: xs:string
+#   item+
+#     @sku
+#     price: xs:decimal
+#     note?: xs:string
 
-for child in report.type.children:
-    print(child.local_name,
-          "repeats" if report.type.repeats(child) else "once",
-          "optional" if report.type.optional(child) else "required")
+report["item"]["price"].type.qname   # walk by name, no `.type` hop
+[child.local_name for child in report]
+report.repeats(report["item"])       # occurrence belongs to the pair
+
+len(schemas)                         # globals this schema declares
+"{urn:example}report" in schemas     # a mapping: dict(schemas) works too
 
 # Does a child sequence satisfy the content model?
 report.type.accepts(["{urn:example}title", "{urn:example}count"])

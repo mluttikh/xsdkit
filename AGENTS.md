@@ -601,6 +601,13 @@ practice, since each was a real complaint:
 - **Every Rust knob needs a keyword.** `version=` was missing for a long time,
   which made the whole XSD 1.1 implementation unreachable from Python without
   anyone noticing.
+- **A component is what it contains.** An `Element` is iterable, sized and
+  subscriptable by child name, and carries `children`/`attributes` directly, so
+  walking a schema does not say `.type` at every level. Collections hand back
+  the components themselves rather than `(name, component)` pairs — the name is
+  on the component, and pairs made every caller write `[0][1]`. The complaint
+  that produced all of this was one line of real code:
+  `x.elements[0][1].type.children[1].type.children[0].qname`.
 - **Every public name carries a docstring**, and `test_stubs.py` fails without
   one. A `#[getter]` with no `///` above it produces an *empty* docstring
   rather than an error, so nothing else notices — coverage had drifted to 51%,

@@ -503,33 +503,38 @@ impl PySchemaSet {
         let mut names: Vec<String> = self
             .elements()
             .into_iter()
-            .map(|(n, _)| n)
-            .chain(self.types().into_iter().map(|(n, _)| n))
+            .map(|e| clark(&self.inner, self.inner[e.id].name))
+            .chain(
+                self.types()
+                    .into_iter()
+                    .filter_map(|t| self.inner[t.id].name().map(|n| clark(&self.inner, n))),
+            )
             .collect();
         names.dedup();
         Python::attach(|py| Py::new(py, PyNameIter { names, at: 0 }))
     }
 
-    /// Every global element declaration, keyed by Clark-notation name.
+    /// Every global element declaration, by name.
+    ///
+    /// The declarations themselves, not `(name, declaration)` pairs — the name
+    /// is on the declaration, and pairs made every caller write `[0][1]`. Look
+    /// one up by name with `schemas["{ns}name"]` or `element()`.
     #[getter]
-    fn elements(&self) -> Vec<(String, PyElement)> {
+    fn elements(&self) -> Vec<PyElement> {
         let mut v: Vec<_> = self
             .inner
             .globals()
             .elements
             .iter()
-            .map(|(q, id)| {
-                (
-                    clark(&self.inner, *q),
-                    PyElement {
-                        s: self.inner.clone(),
-                        id: *id,
-                    },
-                )
-            })
+            .map(|(q, id)| (clark(&self.inner, *q), *id))
             .collect();
         v.sort_by(|a, b| a.0.cmp(&b.0));
-        v
+        v.into_iter()
+            .map(|(_, id)| PyElement {
+                s: self.inner.clone(),
+                id,
+            })
+            .collect()
     }
 
     /// Every global type definition *this schema* declares, keyed by
@@ -539,21 +544,18 @@ impl PySchemaSet {
     /// excludes them: they are in every schema set and would bury the ones the
     /// document actually wrote. `type("{...}string")` still resolves them.
     #[getter]
-    fn types(&self) -> Vec<(String, PyType_)> {
+    fn types(&self) -> Vec<PyType_> {
         let mut v: Vec<_> = self
             .declared_types()
-            .map(|(q, id)| {
-                (
-                    clark(&self.inner, *q),
-                    PyType_ {
-                        s: self.inner.clone(),
-                        id: *id,
-                    },
-                )
-            })
+            .map(|(q, id)| (clark(&self.inner, *q), *id))
             .collect();
         v.sort_by(|a, b| a.0.cmp(&b.0));
-        v
+        v.into_iter()
+            .map(|(_, id)| PyType_ {
+                s: self.inner.clone(),
+                id,
+            })
+            .collect()
     }
 
     /// Looks up a global element. `None` if there is none.
@@ -1007,6 +1009,108 @@ impl PyElement {
         annotation_appinfo(&self.s, self.s[self.id].annotation)
     }
 
+    /// Elements that may appear directly inside this one.
+    ///
+    /// The same as `element.type.children`, without the hop — an element's
+    /// children are its type's, and browsing a schema should not have to say
+    /// so at every level. Empty for a simple type.
+    #[getter]
+    fn children(&self) -> Vec<PyElement> {
+        self.r#type().children()
+    }
+
+    /// The attributes this element may carry, with how it may carry them.
+    ///
+    /// The same as `element.type.attributes`, without the hop.
+    #[getter]
+    fn attributes(&self) -> Vec<PyAttributeUse> {
+        self.r#type().attributes()
+    }
+
+    /// The child of that name, raising `KeyError` when there is none.
+    ///
+    /// Takes a local name as readily as a full one, because a child is almost
+    /// always in its parent's namespace and `report["item"]["price"]` is what
+    /// browsing a schema should look like. A Clark-notation or
+    /// `(namespace, local)` name resolves exactly, for the case where it is
+    /// not.
+    fn __getitem__(&self, name: &Bound<'_, PyAny>) -> PyResult<PyElement> {
+        let wanted: Option<String> = name.extract().ok();
+        let children = self.children();
+        // Exact first: a local name that happens to look like a full one
+        // should not be second-guessed.
+        if let Ok(Some(q)) = parse_name(&self.s, name) {
+            if let Some(c) = children.iter().find(|c| self.s[c.id].name == q) {
+                return Ok(c.clone());
+            }
+        }
+        if let Some(w) = &wanted {
+            if let Some(c) = children.iter().find(|c| &c.local_name() == w) {
+                return Ok(c.clone());
+            }
+        }
+        Err(pyo3::exceptions::PyKeyError::new_err(format!(
+            "{} has no child {}",
+            self.qname(),
+            name.repr()?
+        )))
+    }
+
+    /// Iterates the children, so `for child in element` reads.
+    fn __iter__(&self) -> PyResult<Py<PyElementIter>> {
+        Python::attach(|py| {
+            Py::new(
+                py,
+                PyElementIter {
+                    items: self.children(),
+                    at: 0,
+                },
+            )
+        })
+    }
+
+    /// How many children this element may have, by name.
+    fn __len__(&self) -> usize {
+        self.children().len()
+    }
+
+    /// Whether `child` may appear here more than once.
+    ///
+    /// The same as `element.type.repeats(child)`. Occurrence belongs to the
+    /// pair, not to the child: one declaration may be used by several types
+    /// with different bounds.
+    fn repeats(&self, child: &PyElement) -> bool {
+        self.r#type().repeats(child)
+    }
+
+    /// Whether `child` may be left out.
+    fn optional(&self, child: &PyElement) -> bool {
+        self.r#type().optional(child)
+    }
+
+    /// A readable tree of what may appear inside, for looking at a schema.
+    ///
+    /// Regular-expression markers for how often a child may appear — `?`
+    /// optional, `+` one or more, `*` any number, nothing for exactly once —
+    /// and `@name` for attributes, `?` when they are not required. Recursion
+    /// stops where the shape repeats, so a section containing sections prints
+    /// once rather than to the depth limit.
+    ///
+    ///     >>> print(schemas["{urn:example}report"].tree())
+    ///     report
+    ///       title: xs:string
+    ///       item+
+    ///         @sku
+    ///         price: xs:decimal
+    ///         note?: xs:string
+    #[pyo3(signature = (depth=3))]
+    fn tree(&self, depth: usize) -> String {
+        let mut out = String::new();
+        let mut seen = Vec::new();
+        self.write_tree(&mut out, 0, depth, &mut seen, "");
+        out
+    }
+
     fn __repr__(&self) -> String {
         format!("<Element {}>", self.qname())
     }
@@ -1017,6 +1121,103 @@ impl PyElement {
 
     fn __hash__(&self) -> u64 {
         self.id.index() as u64
+    }
+}
+
+/// `{ns}local` shortened to `local` for a built-in, left alone otherwise.
+fn short(qname: &str) -> String {
+    match qname.strip_prefix("{http://www.w3.org/2001/XMLSchema}") {
+        Some(local) => format!("xs:{local}"),
+        None => qname.to_string(),
+    }
+}
+
+impl PyElement {
+    /// One line per element, indented, stopping where the shape repeats.
+    fn write_tree(
+        &self,
+        out: &mut String,
+        indent: usize,
+        left: usize,
+        seen: &mut Vec<ElementId>,
+        // Supplied by the parent: how often a child may appear is a fact about
+        // the pair, not about the declaration, which several parents may share
+        // with different bounds.
+        occurrence: &str,
+    ) {
+        use std::fmt::Write;
+        let t = self.r#type();
+        // Local names and occurrence, not qualified names and type names: at a
+        // glance what matters is what may appear and how often, and almost
+        // everything is in one namespace. A named type is worth saying; an
+        // anonymous one has no name to say.
+        let named = t
+            .qname()
+            .map(|n| format!(": {}", short(&n)))
+            .unwrap_or_default();
+        let _ = writeln!(
+            out,
+            "{}{}{}{}",
+            "  ".repeat(indent),
+            self.local_name(),
+            occurrence,
+            named
+        );
+
+        // A recursive schema — a section containing sections — would otherwise
+        // print until the depth ran out, saying nothing new each time.
+        if seen.contains(&self.id) {
+            let _ = writeln!(out, "{}  ...", "  ".repeat(indent));
+            return;
+        }
+        if left == 0 {
+            return;
+        }
+        seen.push(self.id);
+        for u in t.attributes() {
+            let _ = writeln!(
+                out,
+                "{}  @{}{}",
+                "  ".repeat(indent),
+                u.local_name(),
+                if u.required() { "" } else { "?" }
+            );
+        }
+        for c in self.children() {
+            let marker = match (t.repeats(&c), t.optional(&c)) {
+                (true, true) => "*",
+                (true, false) => "+",
+                (false, true) => "?",
+                (false, false) => "",
+            };
+            c.write_tree(out, indent + 1, left - 1, seen, marker);
+        }
+        seen.pop();
+    }
+}
+
+/// Walks an element's children.
+#[pyclass(name = "ElementIterator", module = "xsdkit")]
+pub struct PyElementIter {
+    items: Vec<PyElement>,
+    at: usize,
+}
+
+#[pymethods]
+impl PyElementIter {
+    fn __iter__(slf: PyRef<'_, Self>) -> PyRef<'_, Self> {
+        slf
+    }
+
+    fn __next__(mut slf: PyRefMut<'_, Self>) -> Option<PyElement> {
+        let out = slf.items.get(slf.at).cloned();
+        slf.at += 1;
+        out
+    }
+
+    /// How many children are left.
+    fn __len__(&self) -> usize {
+        self.items.len().saturating_sub(self.at)
     }
 }
 
@@ -1516,6 +1717,46 @@ impl PyType_ {
             TypeDefinition::Complex(t) => t.annotation,
         };
         annotation_appinfo(&self.s, ann)
+    }
+
+    /// The child element of that name, raising `KeyError` when there is none.
+    ///
+    /// Local names are accepted, as on `Element`.
+    fn __getitem__(&self, name: &Bound<'_, PyAny>) -> PyResult<PyElement> {
+        let children = self.children();
+        if let Ok(Some(q)) = parse_name(&self.s, name) {
+            if let Some(c) = children.iter().find(|c| self.s[c.id].name == q) {
+                return Ok(c.clone());
+            }
+        }
+        if let Ok(w) = name.extract::<String>() {
+            if let Some(c) = children.iter().find(|c| c.local_name() == w) {
+                return Ok(c.clone());
+            }
+        }
+        Err(pyo3::exceptions::PyKeyError::new_err(format!(
+            "{} has no child {}",
+            self.qname().unwrap_or_else(|| "(anonymous)".into()),
+            name.repr()?
+        )))
+    }
+
+    /// Iterates the children, so `for child in type_` reads.
+    fn __iter__(&self) -> PyResult<Py<PyElementIter>> {
+        Python::attach(|py| {
+            Py::new(
+                py,
+                PyElementIter {
+                    items: self.children(),
+                    at: 0,
+                },
+            )
+        })
+    }
+
+    /// How many children this type may have, by name.
+    fn __len__(&self) -> usize {
+        self.children().len()
     }
 
     fn __repr__(&self) -> String {
@@ -2224,6 +2465,7 @@ fn xsdkit_module(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add("SchemaError", schema_error)?;
     m.add_class::<PySchemaSet>()?;
     m.add_class::<PyNameIter>()?;
+    m.add_class::<PyElementIter>()?;
     m.add_class::<PyPsviEvents>()?;
     m.add_class::<PyElement>()?;
     m.add_class::<PyAttribute>()?;
