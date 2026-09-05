@@ -253,6 +253,10 @@ struct DocCtx {
     /// Which XSD this document is being read as, so that every descend point
     /// can apply conditional inclusion (`vc:`).
     version: Version,
+    /// Line starts for this document, shared rather than copied: a derived
+    /// context (a chameleon include, the document defaults) is the same
+    /// document.
+    lines: std::sync::Arc<LineIndex>,
 }
 
 /// Accumulates components while documents are read.
@@ -546,7 +550,10 @@ impl<'r> Loader<'r> {
                         root.tag_name().name()
                     ),
                 )
-                .at(Span::new(uri, line_of(&doc, root))),
+                .at(Span::new(
+                    uri,
+                    LineIndex::build(text).line(root.range().start),
+                )),
             );
             return;
         }
@@ -585,8 +592,9 @@ impl<'r> Loader<'r> {
             default_open_content: None,
             default_open_applies_to_empty: false,
             version: self.version(),
+            lines: std::sync::Arc::new(LineIndex::build(text)),
         };
-        let ctx = self.read_document_defaults(&doc, root, ctx);
+        let ctx = self.read_document_defaults(root, ctx);
 
         self.documents.push(SourceDocument {
             uri: uri.to_string(),
@@ -596,50 +604,50 @@ impl<'r> Loader<'r> {
         });
 
         self.depth += 1;
-        self.read_schema_body(&doc, root, &ctx);
+        self.read_schema_body(root, &ctx);
         self.depth -= 1;
     }
 
     // -- schema body -------------------------------------------------------
 
-    fn read_schema_body(&mut self, doc: &roxmltree::Document, root: roxmltree::Node, ctx: &DocCtx) {
-        check_representation(doc, root, ctx, &mut self.diags);
+    fn read_schema_body(&mut self, root: roxmltree::Node, ctx: &DocCtx) {
+        check_representation(root, ctx, &mut self.diags);
 
         // Composition first: everything a later reference might name has to
         // exist before the references are collected.
         for child in root.children().filter(|n| reads(n, ctx.version)) {
             match child.tag_name().name() {
-                "include" => self.read_include(doc, child, ctx),
-                "import" => self.read_import(doc, child, ctx),
-                "redefine" => self.read_redefine(doc, child, ctx),
-                "override" => self.read_override(doc, child, ctx),
+                "include" => self.read_include(child, ctx),
+                "import" => self.read_import(child, ctx),
+                "redefine" => self.read_redefine(child, ctx),
+                "override" => self.read_override(child, ctx),
                 _ => {}
             }
         }
 
         for child in root.children().filter(|n| reads(n, ctx.version)) {
-            let span = Span::new(&ctx.uri, line_of(doc, child));
+            let span = Span::new(&ctx.uri, line_of(ctx, child));
             match child.tag_name().name() {
                 "include" | "import" | "redefine" | "override" | "annotation" => {}
                 "element" => {
-                    let id = self.read_element_decl(doc, child, ctx, Scope::Global, true);
+                    let id = self.read_element_decl(child, ctx, Scope::Global, true);
                     self.register_global_element(id, span);
                 }
                 "attribute" => {
-                    let id = self.read_attribute_decl(doc, child, ctx, Scope::Global, true);
+                    let id = self.read_attribute_decl(child, ctx, Scope::Global, true);
                     self.register_global_attribute(id, span);
                 }
                 "simpleType" => {
-                    let id = self.read_simple_type(doc, child, ctx, true);
+                    let id = self.read_simple_type(child, ctx, true);
                     self.register_global_type(id, span);
                 }
                 "complexType" => {
-                    let id = self.read_complex_type(doc, child, ctx, true);
+                    let id = self.read_complex_type(child, ctx, true);
                     self.register_global_type(id, span);
                 }
-                "group" => self.read_group_def(doc, child, ctx),
-                "attributeGroup" => self.read_attribute_group_def(doc, child, ctx),
-                "notation" => self.read_notation(doc, child, ctx),
+                "group" => self.read_group_def(child, ctx),
+                "attributeGroup" => self.read_attribute_group_def(child, ctx),
+                "notation" => self.read_notation(child, ctx),
                 other => self.diags.push(
                     Diagnostic::warning(
                         DiagCode::UnknownSchemaElement,
@@ -651,14 +659,14 @@ impl<'r> Loader<'r> {
         }
     }
 
-    fn read_include(&mut self, doc: &roxmltree::Document, node: roxmltree::Node, ctx: &DocCtx) {
+    fn read_include(&mut self, node: roxmltree::Node, ctx: &DocCtx) {
         let Some(loc) = node.attribute("schemaLocation") else {
             self.diags.push(
                 Diagnostic::error(
                     DiagCode::MissingAttribute,
                     "`xs:include` needs a schemaLocation",
                 )
-                .at(Span::new(&ctx.uri, line_of(doc, node))),
+                .at(Span::new(&ctx.uri, line_of(ctx, node))),
             );
             return;
         };
@@ -666,7 +674,7 @@ impl<'r> Loader<'r> {
             // The includer's namespace is passed down so a document with no
             // targetNamespace of its own is absorbed into it.
             Ok((uri, bytes)) => self.load_bytes(&bytes, &uri, ctx.target_ns),
-            Err(e) => self.push_resolution_failure(e, doc, node, ctx),
+            Err(e) => self.push_resolution_failure(e, node, ctx),
         }
     }
 
@@ -676,14 +684,9 @@ impl<'r> Loader<'r> {
     /// Both are declared once on `xs:schema` and apply to every complex type
     /// in that document, which is why they live on the per-document context
     /// rather than being looked up per type.
-    fn read_document_defaults(
-        &mut self,
-        doc: &roxmltree::Document,
-        root: roxmltree::Node,
-        mut ctx: DocCtx,
-    ) -> DocCtx {
+    fn read_document_defaults(&mut self, root: roxmltree::Node, mut ctx: DocCtx) -> DocCtx {
         if let Some(v) = root.attribute("defaultAttributes") {
-            let span = Span::new(&ctx.uri, line_of(doc, root));
+            let span = Span::new(&ctx.uri, line_of(&ctx, root));
             self.require_xsd11("defaultAttributes", &span);
             ctx.default_attributes = self.attr_qname(root, v, &ctx, &span);
         }
@@ -692,7 +695,7 @@ impl<'r> Loader<'r> {
             .filter(|n| reads(n, ctx.version))
             .find(|c| c.tag_name().name() == "defaultOpenContent")
         {
-            let span = Span::new(&ctx.uri, line_of(doc, n));
+            let span = Span::new(&ctx.uri, line_of(&ctx, n));
             self.require_xsd11("defaultOpenContent", &span);
             ctx.default_open_applies_to_empty = n.attribute("appliesToEmpty") == Some("true");
             ctx.default_open_content = self.read_open_content(n, &ctx);
@@ -743,12 +746,12 @@ impl<'r> Loader<'r> {
     /// any reference a redefinition makes to a name it is itself redefining is
     /// resolved immediately against that capture, before the new component
     /// takes the name.
-    fn read_redefine(&mut self, doc: &roxmltree::Document, node: roxmltree::Node, ctx: &DocCtx) {
-        if !self.include_target(doc, node, ctx) {
+    fn read_redefine(&mut self, node: roxmltree::Node, ctx: &DocCtx) {
+        if !self.include_target(node, ctx) {
             return;
         }
         let originals = self.capture_originals(node, ctx);
-        self.read_modifications(doc, node, ctx, Some(&originals));
+        self.read_modifications(node, ctx, Some(&originals));
     }
 
     /// `xs:override` — include a document, then replace some of its
@@ -758,20 +761,15 @@ impl<'r> Loader<'r> {
     /// components, so nothing needs capturing. XSD 1.1 also applies overrides
     /// transitively through the included document's own includes; that part is
     /// not implemented, and is reported rather than assumed.
-    fn read_override(&mut self, doc: &roxmltree::Document, node: roxmltree::Node, ctx: &DocCtx) {
-        if !self.include_target(doc, node, ctx) {
+    fn read_override(&mut self, node: roxmltree::Node, ctx: &DocCtx) {
+        if !self.include_target(node, ctx) {
             return;
         }
-        self.read_modifications(doc, node, ctx, None);
+        self.read_modifications(node, ctx, None);
     }
 
     /// Loads the document a `redefine`/`override` names, as an include would.
-    fn include_target(
-        &mut self,
-        doc: &roxmltree::Document,
-        node: roxmltree::Node,
-        ctx: &DocCtx,
-    ) -> bool {
+    fn include_target(&mut self, node: roxmltree::Node, ctx: &DocCtx) -> bool {
         let Some(loc) = node.attribute("schemaLocation") else {
             let what = node.tag_name().name();
             self.diags.push(
@@ -779,7 +777,7 @@ impl<'r> Loader<'r> {
                     DiagCode::MissingAttribute,
                     format!("`xs:{what}` needs a schemaLocation"),
                 )
-                .at(Span::new(&ctx.uri, line_of(doc, node))),
+                .at(Span::new(&ctx.uri, line_of(ctx, node))),
             );
             return false;
         };
@@ -789,7 +787,7 @@ impl<'r> Loader<'r> {
                 true
             }
             Err(e) => {
-                self.push_resolution_failure(e, doc, node, ctx);
+                self.push_resolution_failure(e, node, ctx);
                 false
             }
         }
@@ -830,7 +828,6 @@ impl<'r> Loader<'r> {
     /// whatever the included document declared.
     fn read_modifications(
         &mut self,
-        doc: &roxmltree::Document,
         node: roxmltree::Node,
         ctx: &DocCtx,
         originals: Option<&Originals>,
@@ -839,16 +836,16 @@ impl<'r> Loader<'r> {
         // not a duplicate-global error.
         let outer = std::mem::replace(&mut self.in_redefine, true);
         for c in node.children().filter(|n| reads(n, ctx.version)) {
-            let span = Span::new(&ctx.uri, line_of(doc, c));
+            let span = Span::new(&ctx.uri, line_of(ctx, c));
             let before = self.fixups.len();
             let kind = c.tag_name().name();
 
             match kind {
                 "simpleType" | "complexType" => {
                     let id = if kind == "simpleType" {
-                        self.read_simple_type(doc, c, ctx, true)
+                        self.read_simple_type(c, ctx, true)
                     } else {
-                        self.read_complex_type(doc, c, ctx, true)
+                        self.read_complex_type(c, ctx, true)
                     };
                     if let Some(o) = originals {
                         self.pin_self_references(before, o);
@@ -858,13 +855,13 @@ impl<'r> Loader<'r> {
                     }
                 }
                 "group" => {
-                    self.read_group_def(doc, c, ctx);
+                    self.read_group_def(c, ctx);
                     if let Some(o) = originals {
                         self.pin_self_references(before, o);
                     }
                 }
                 "attributeGroup" => {
-                    self.read_attribute_group_def(doc, c, ctx);
+                    self.read_attribute_group_def(c, ctx);
                     if let Some(o) = originals {
                         self.pin_self_references(before, o);
                     }
@@ -977,7 +974,7 @@ impl<'r> Loader<'r> {
         self.globals.types.insert(name, id);
     }
 
-    fn read_import(&mut self, doc: &roxmltree::Document, node: roxmltree::Node, ctx: &DocCtx) {
+    fn read_import(&mut self, node: roxmltree::Node, ctx: &DocCtx) {
         let Some(loc) = node.attribute("schemaLocation") else {
             // Legal: schemaLocation is a hint, and a namespace may already be
             // present from another document or be supplied by the caller.
@@ -985,18 +982,12 @@ impl<'r> Loader<'r> {
         };
         match self.resolver.resolve(loc, Some(&ctx.uri)) {
             Ok((uri, bytes)) => self.load_bytes(&bytes, &uri, None),
-            Err(e) => self.push_resolution_failure(e, doc, node, ctx),
+            Err(e) => self.push_resolution_failure(e, node, ctx),
         }
     }
 
-    fn push_resolution_failure(
-        &mut self,
-        e: String,
-        doc: &roxmltree::Document,
-        node: roxmltree::Node,
-        ctx: &DocCtx,
-    ) {
-        let span = Span::new(&ctx.uri, line_of(doc, node));
+    fn push_resolution_failure(&mut self, e: String, node: roxmltree::Node, ctx: &DocCtx) {
+        let span = Span::new(&ctx.uri, line_of(ctx, node));
         let d = Diagnostic::error(DiagCode::UnresolvedSchemaLocation, e)
             .at(span)
             .with_help("`schemaLocation` is a hint; add a search path or a custom Resolver");
@@ -1064,13 +1055,12 @@ impl<'r> Loader<'r> {
 
     fn read_element_decl(
         &mut self,
-        doc: &roxmltree::Document,
         node: roxmltree::Node,
         ctx: &DocCtx,
         scope: Scope,
         global: bool,
     ) -> ElementId {
-        let span = Span::new(&ctx.uri, line_of(doc, node));
+        let span = Span::new(&ctx.uri, line_of(ctx, node));
         let local = node.attribute("name").unwrap_or_default();
         if local.is_empty() {
             self.diags.push(
@@ -1126,9 +1116,9 @@ impl<'r> Loader<'r> {
             }
             (None, Some(c)) => {
                 let tid = if c.tag_name().name() == "simpleType" {
-                    self.read_simple_type(doc, c, ctx, false)
+                    self.read_simple_type(c, ctx, false)
                 } else {
-                    self.read_complex_type(doc, c, ctx, false)
+                    self.read_complex_type(c, ctx, false)
                 };
                 self.elements.get_mut(id.0).type_id = tid;
             }
@@ -1160,14 +1150,13 @@ impl<'r> Loader<'r> {
             }
         }
 
-        let idcs = self.read_identity_constraints(doc, node, ctx, id);
+        let idcs = self.read_identity_constraints(node, ctx, id);
         self.elements.get_mut(id.0).identity_constraints = idcs;
         id
     }
 
     fn read_identity_constraints(
         &mut self,
-        doc: &roxmltree::Document,
         node: roxmltree::Node,
         ctx: &DocCtx,
         owner: ElementId,
@@ -1180,7 +1169,7 @@ impl<'r> Loader<'r> {
                 "keyref" => IdcKind::KeyRef,
                 _ => continue,
             };
-            let span = Span::new(&ctx.uri, line_of(doc, c));
+            let span = Span::new(&ctx.uri, line_of(ctx, c));
 
             // XSD 1.1 lets a constraint be *referenced* rather than defined:
             // `<xs:unique ref="a:u1"/>` hangs the constraint named there off
@@ -1278,13 +1267,12 @@ impl<'r> Loader<'r> {
 
     fn read_attribute_decl(
         &mut self,
-        doc: &roxmltree::Document,
         node: roxmltree::Node,
         ctx: &DocCtx,
         scope: Scope,
         global: bool,
     ) -> AttributeId {
-        let span = Span::new(&ctx.uri, line_of(doc, node));
+        let span = Span::new(&ctx.uri, line_of(ctx, node));
         let local = node.attribute("name").unwrap_or_default();
         let qualified =
             global || ctx.attribute_form_qualified || node.attribute("form") == Some("qualified");
@@ -1315,7 +1303,7 @@ impl<'r> Loader<'r> {
                 }
             }
             (None, Some(c)) => {
-                let tid = self.read_simple_type(doc, c, ctx, false);
+                let tid = self.read_simple_type(c, ctx, false);
                 self.attributes.get_mut(id.0).type_id = tid;
             }
             (None, None) => {
@@ -1329,7 +1317,6 @@ impl<'r> Loader<'r> {
     /// returning the wildcard if an `xs:anyAttribute` was present.
     fn read_attribute_uses(
         &mut self,
-        doc: &roxmltree::Document,
         parent: roxmltree::Node,
         ctx: &DocCtx,
         owner: AttrOwner,
@@ -1340,7 +1327,7 @@ impl<'r> Loader<'r> {
         let mut wildcard = None;
 
         for c in parent.children().filter(|n| reads(n, ctx.version)) {
-            let span = Span::new(&ctx.uri, line_of(doc, c));
+            let span = Span::new(&ctx.uri, line_of(ctx, c));
             match c.tag_name().name() {
                 "attribute" => {
                     let kind = match c.attribute("use") {
@@ -1360,7 +1347,7 @@ impl<'r> Loader<'r> {
                             }
                             AttributeId::PLACEHOLDER
                         }
-                        None => self.read_attribute_decl(doc, c, ctx, scope, false),
+                        None => self.read_attribute_decl(c, ctx, scope, false),
                     };
                     uses.push(AttributeUse {
                         attribute,
@@ -1390,14 +1377,8 @@ impl<'r> Loader<'r> {
 
     // -- simple types ------------------------------------------------------
 
-    fn read_simple_type(
-        &mut self,
-        doc: &roxmltree::Document,
-        node: roxmltree::Node,
-        ctx: &DocCtx,
-        global: bool,
-    ) -> TypeId {
-        let span = Span::new(&ctx.uri, line_of(doc, node));
+    fn read_simple_type(&mut self, node: roxmltree::Node, ctx: &DocCtx, global: bool) -> TypeId {
+        let span = Span::new(&ctx.uri, line_of(ctx, node));
         let name = global
             .then(|| self.qualified_name(node.attribute("name").unwrap_or_default(), true, ctx));
         let annotation = self.read_annotation(node, ctx);
@@ -1460,12 +1441,12 @@ impl<'r> Loader<'r> {
                             .filter(|n| reads(n, ctx.version))
                             .find(|c| c.tag_name().name() == "simpleType")
                         {
-                            let b = self.read_simple_type(doc, inner, ctx, false);
+                            let b = self.read_simple_type(inner, ctx, false);
                             self.simple_mut(id).base = b;
                         }
                     }
                 }
-                let facets = self.read_facets(doc, d, ctx);
+                let facets = self.read_facets(d, ctx);
                 self.simple_mut(id).facets = FacetSet::new().restrict(&facets);
             }
             "list" => {
@@ -1486,7 +1467,7 @@ impl<'r> Loader<'r> {
                             .filter(|n| reads(n, ctx.version))
                             .find(|c| c.tag_name().name() == "simpleType")
                         {
-                            let it = self.read_simple_type(doc, inner, ctx, false);
+                            let it = self.read_simple_type(inner, ctx, false);
                             self.simple_mut(id).item_type = Some(it);
                         }
                     }
@@ -1513,7 +1494,7 @@ impl<'r> Loader<'r> {
                     .filter(|n| reads(n, ctx.version))
                     .filter(|c| c.tag_name().name() == "simpleType")
                 {
-                    members.push(self.read_simple_type(doc, inner, ctx, false));
+                    members.push(self.read_simple_type(inner, ctx, false));
                 }
                 self.simple_mut(id).member_types = members;
             }
@@ -1533,16 +1514,11 @@ impl<'r> Loader<'r> {
         self.simple_mut(id).variety = v;
     }
 
-    fn read_facets(
-        &mut self,
-        doc: &roxmltree::Document,
-        node: roxmltree::Node,
-        ctx: &DocCtx,
-    ) -> Vec<Facet> {
+    fn read_facets(&mut self, node: roxmltree::Node, ctx: &DocCtx) -> Vec<Facet> {
         let mut out = Vec::new();
         for c in node.children().filter(|n| reads(n, ctx.version)) {
             let v = c.attribute("value").unwrap_or_default();
-            let span = || Span::new(&ctx.uri, line_of(doc, c));
+            let span = || Span::new(&ctx.uri, line_of(ctx, c));
             let facet = match c.tag_name().name() {
                 "length" => v.parse().ok().map(Facet::Length),
                 "minLength" => v.parse().ok().map(Facet::MinLength),
@@ -1601,7 +1577,7 @@ impl<'r> Loader<'r> {
                 }
             }
         }
-        self.check_step_facets(&out, &Span::new(&ctx.uri, line_of(doc, node)));
+        self.check_step_facets(&out, &Span::new(&ctx.uri, line_of(ctx, node)));
         out
     }
 
@@ -1648,14 +1624,8 @@ impl<'r> Loader<'r> {
 
     // -- complex types -----------------------------------------------------
 
-    fn read_complex_type(
-        &mut self,
-        doc: &roxmltree::Document,
-        node: roxmltree::Node,
-        ctx: &DocCtx,
-        global: bool,
-    ) -> TypeId {
-        let span = Span::new(&ctx.uri, line_of(doc, node));
+    fn read_complex_type(&mut self, node: roxmltree::Node, ctx: &DocCtx, global: bool) -> TypeId {
+        let span = Span::new(&ctx.uri, line_of(ctx, node));
         let name = global
             .then(|| self.qualified_name(node.attribute("name").unwrap_or_default(), true, ctx));
         let annotation = self.read_annotation(node, ctx);
@@ -1735,7 +1705,7 @@ impl<'r> Loader<'r> {
             }
         }
 
-        let particle = self.read_content_particle(doc, member_node, ctx, scope);
+        let particle = self.read_content_particle(member_node, ctx, scope);
         let content = if simple_content {
             // The effective simple type is the base's; resolution fills the
             // base in, and `Schemas::simple_content_type` follows it.
@@ -1745,7 +1715,7 @@ impl<'r> Loader<'r> {
                     .find(|c| c.tag_name().name() == "simpleType")
             });
             match inline {
-                Some(c) => ContentType::Simple(self.read_simple_type(doc, c, ctx, false)),
+                Some(c) => ContentType::Simple(self.read_simple_type(c, ctx, false)),
                 None => ContentType::Simple(TypeId::PLACEHOLDER),
             }
         } else {
@@ -1758,7 +1728,7 @@ impl<'r> Loader<'r> {
         };
 
         let (uses, mut groups, wildcard) =
-            self.read_attribute_uses(doc, member_node, ctx, AttrOwner::ComplexType(id), scope);
+            self.read_attribute_uses(member_node, ctx, AttrOwner::ComplexType(id), scope);
 
         // `xs:defaultAttributes` reaches every complex type in the document,
         // as though each had named the group itself.
@@ -1810,7 +1780,6 @@ impl<'r> Loader<'r> {
     /// Reads the single content particle of a complex type body, if present.
     fn read_content_particle(
         &mut self,
-        doc: &roxmltree::Document,
         node: roxmltree::Node,
         ctx: &DocCtx,
         scope: Scope,
@@ -1819,17 +1788,16 @@ impl<'r> Loader<'r> {
             .children()
             .filter(|n| reads(n, ctx.version))
             .find(|c| matches!(c.tag_name().name(), "sequence" | "choice" | "all" | "group"))?;
-        self.read_particle(doc, c, ctx, scope)
+        self.read_particle(c, ctx, scope)
     }
 
     fn read_particle(
         &mut self,
-        doc: &roxmltree::Document,
         node: roxmltree::Node,
         ctx: &DocCtx,
         scope: Scope,
     ) -> Option<ParticleId> {
-        let span = Span::new(&ctx.uri, line_of(doc, node));
+        let span = Span::new(&ctx.uri, line_of(ctx, node));
         let (min, max) = self.occurrences(node, &span);
 
         let term = match node.tag_name().name() {
@@ -1849,7 +1817,7 @@ impl<'r> Loader<'r> {
                     });
                     return Some(pid);
                 }
-                None => Term::Element(self.read_element_decl(doc, node, ctx, scope, false)),
+                None => Term::Element(self.read_element_decl(node, ctx, scope, false)),
             },
             "group" => {
                 // A `<xs:group>` particle is always a reference; an inline
@@ -1882,7 +1850,7 @@ impl<'r> Loader<'r> {
                         c.tag_name().name(),
                         "element" | "group" | "sequence" | "choice" | "all" | "any"
                     ) {
-                        if let Some(p) = self.read_particle(doc, c, ctx, scope) {
+                        if let Some(p) = self.read_particle(c, ctx, scope) {
                             particles.push(p);
                         }
                     }
@@ -1998,8 +1966,8 @@ impl<'r> Loader<'r> {
 
     // -- group definitions -------------------------------------------------
 
-    fn read_group_def(&mut self, doc: &roxmltree::Document, node: roxmltree::Node, ctx: &DocCtx) {
-        let span = Span::new(&ctx.uri, line_of(doc, node));
+    fn read_group_def(&mut self, node: roxmltree::Node, ctx: &DocCtx) {
+        let span = Span::new(&ctx.uri, line_of(ctx, node));
         let name = self.qualified_name(node.attribute("name").unwrap_or_default(), true, ctx);
         let annotation = self.read_annotation(node, ctx);
 
@@ -2016,7 +1984,7 @@ impl<'r> Loader<'r> {
                 _ => Compositor::All,
             };
             for gc in c.children().filter(|n| reads(n, ctx.version)) {
-                if let Some(p) = self.read_particle(doc, gc, ctx, Scope::Global) {
+                if let Some(p) = self.read_particle(gc, ctx, Scope::Global) {
                     particles.push(p);
                 }
             }
@@ -2043,13 +2011,8 @@ impl<'r> Loader<'r> {
         }
     }
 
-    fn read_attribute_group_def(
-        &mut self,
-        doc: &roxmltree::Document,
-        node: roxmltree::Node,
-        ctx: &DocCtx,
-    ) {
-        let span = Span::new(&ctx.uri, line_of(doc, node));
+    fn read_attribute_group_def(&mut self, node: roxmltree::Node, ctx: &DocCtx) {
+        let span = Span::new(&ctx.uri, line_of(ctx, node));
         let name = self.qualified_name(node.attribute("name").unwrap_or_default(), true, ctx);
         let annotation = self.read_annotation(node, ctx);
 
@@ -2063,7 +2026,7 @@ impl<'r> Loader<'r> {
         }));
 
         let (uses, groups, wildcard) =
-            self.read_attribute_uses(doc, node, ctx, AttrOwner::AttributeGroup(id), Scope::Global);
+            self.read_attribute_uses(node, ctx, AttrOwner::AttributeGroup(id), Scope::Global);
         let g = self.attribute_groups.get_mut(id.0);
         g.attribute_uses = uses;
         g.attribute_group_refs = groups;
@@ -2081,8 +2044,8 @@ impl<'r> Loader<'r> {
         }
     }
 
-    fn read_notation(&mut self, doc: &roxmltree::Document, node: roxmltree::Node, ctx: &DocCtx) {
-        let span = Span::new(&ctx.uri, line_of(doc, node));
+    fn read_notation(&mut self, node: roxmltree::Node, ctx: &DocCtx) {
+        let span = Span::new(&ctx.uri, line_of(ctx, node));
         let name = self.qualified_name(node.attribute("name").unwrap_or_default(), true, ctx);
         let annotation = self.read_annotation(node, ctx);
         let id = NotationId(self.notations.push(NotationDecl {
@@ -2228,17 +2191,12 @@ impl<'r> Loader<'r> {
 /// these are about the XML the schema for schemas describes, not about the
 /// components it produces — and several of them concern elements this loader
 /// otherwise never visits.
-fn check_representation(
-    doc: &roxmltree::Document,
-    root: roxmltree::Node,
-    ctx: &DocCtx,
-    diags: &mut Diagnostics,
-) {
-    check_annotation_placement(doc, root, ctx, diags);
+fn check_representation(root: roxmltree::Node, ctx: &DocCtx, diags: &mut Diagnostics) {
+    check_annotation_placement(root, ctx, diags);
 
     for node in root.descendants().filter(|n| reads(n, ctx.version)) {
         let name = node.tag_name().name();
-        let span = || Span::new(&ctx.uri, line_of(doc, node));
+        let span = || Span::new(&ctx.uri, line_of(ctx, node));
 
         // `block` and `final` name derivation methods. Which subset is legal
         // depends on where the attribute sits, but a token outside the whole
@@ -2399,12 +2357,7 @@ fn within_restriction_of_a_named_type(node: roxmltree::Node) -> bool {
 ///
 /// This is a Schema Representation Constraint: answerable from the document
 /// alone, which is why it runs here rather than on the assembled model.
-fn check_annotation_placement(
-    doc: &roxmltree::Document,
-    root: roxmltree::Node,
-    ctx: &DocCtx,
-    diags: &mut Diagnostics,
-) {
+fn check_annotation_placement(root: roxmltree::Node, ctx: &DocCtx, diags: &mut Diagnostics) {
     for node in root.descendants().filter(|n| reads(n, ctx.version)) {
         if matches!(
             node.tag_name().name(),
@@ -2421,7 +2374,7 @@ fn check_annotation_placement(
             if child.tag_name().name() != "annotation" {
                 continue;
             }
-            let span = Span::new(&ctx.uri, line_of(doc, child));
+            let span = Span::new(&ctx.uri, line_of(ctx, child));
             let owner = node.tag_name().name();
             if seen {
                 diags.push(
@@ -2529,8 +2482,42 @@ fn is_xs_element(n: &roxmltree::Node) -> bool {
     n.is_element() && n.tag_name().namespace() == Some(XS)
 }
 
-fn line_of(doc: &roxmltree::Document, node: roxmltree::Node) -> u32 {
-    doc.text_pos_at(node.range().start).row
+/// Where every line of a document starts, so a byte offset becomes a line
+/// number without rescanning.
+///
+/// `roxmltree`'s own `text_pos_at` counts newlines from the beginning of the
+/// document on every call. That is fine once and quadratic when a span is
+/// built for each declaration, which is what this loader does — a schema with
+/// three thousand types spent almost all of its time here. Built once per
+/// document, it turns each lookup into a binary search.
+#[derive(Debug, Default)]
+pub(crate) struct LineIndex {
+    /// Byte offset of the first character of each line, ascending.
+    starts: Vec<usize>,
+}
+
+impl LineIndex {
+    fn build(text: &str) -> Self {
+        let mut starts = vec![0];
+        starts.extend(
+            text.bytes()
+                .enumerate()
+                .filter(|(_, b)| *b == b'\n')
+                .map(|(i, _)| i + 1),
+        );
+        Self { starts }
+    }
+
+    /// The one-based line holding `offset`.
+    fn line(&self, offset: usize) -> u32 {
+        // `partition_point` gives the number of starts at or before the
+        // offset, which is the line number already.
+        self.starts.partition_point(|&s| s <= offset).max(1) as u32
+    }
+}
+
+fn line_of(ctx: &DocCtx, node: roxmltree::Node) -> u32 {
+    ctx.lines.line(node.range().start)
 }
 
 fn value_constraint(node: roxmltree::Node) -> Option<ValueConstraint> {
@@ -2597,4 +2584,47 @@ fn escape_attr(s: &str) -> String {
     s.replace('&', "&amp;")
         .replace('<', "&lt;")
         .replace('"', "&quot;")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::LineIndex;
+
+    /// `LineIndex` replaced `roxmltree::Document::text_pos_at` for speed, so it
+    /// has to agree with it everywhere — including the awkward offsets: the
+    /// very first byte, a byte just past a newline, a blank line, and the end
+    /// of the document.
+    #[test]
+    fn the_line_index_agrees_with_roxmltree() {
+        let src = "<a>\n  <b/>\n\n\t<c\n     x='1'/>\r\n<!--k-->\n</a>";
+        let doc = roxmltree::Document::parse(src).expect("valid XML");
+        let index = LineIndex::build(src);
+
+        for node in doc.descendants() {
+            let offset = node.range().start;
+            assert_eq!(
+                index.line(offset),
+                doc.text_pos_at(offset).row,
+                "line disagreed at byte {offset} ({node:?})"
+            );
+        }
+        // Every byte, not just the ones a node happens to start at.
+        for offset in 0..=src.len() {
+            assert_eq!(
+                index.line(offset),
+                doc.text_pos_at(offset).row,
+                "line disagreed at byte {offset}"
+            );
+        }
+    }
+
+    /// A document with no newline at all is one line, and an empty one is
+    /// still line 1 — never 0, which would render as a span with no position.
+    #[test]
+    fn the_line_index_is_one_based_at_the_edges() {
+        assert_eq!(LineIndex::build("").line(0), 1);
+        assert_eq!(LineIndex::build("<a/>").line(3), 1);
+        assert_eq!(LineIndex::build("\n").line(0), 1);
+        assert_eq!(LineIndex::build("\n").line(1), 2);
+    }
 }

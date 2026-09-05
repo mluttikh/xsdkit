@@ -169,6 +169,16 @@ cannot express this.
   because `roxmltree` performs no I/O. Do not "harden" this by rejecting
   DTDs — it would reject the W3C's own schema.
 
+### 5. Performance
+- **A line number must never cost a scan.** Every component carries a `Span`,
+  so the loader asks for a line once per declaration. `roxmltree`'s
+  `text_pos_at` counts newlines from the start of the document on each call,
+  which turns that into O(n²) — a 1600-element schema took **2.8 s**, and
+  8 ms once `LineIndex` (built once per document, binary-searched per lookup)
+  replaced it. `tests/performance.rs` pins the shape: 4× the input must not
+  cost more than 8× the time. If you add a per-node query to the loader, check
+  what it costs on the *whole* document, not on one node.
+
 ### 9. Security
 - Network fetching is **opt-in**: `FileResolver` refuses `http(s)://`.
 - Every graph walk needs a bound: `MAX_DEPTH` for includes, `nodes_limit` per
