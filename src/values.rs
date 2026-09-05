@@ -97,10 +97,96 @@ impl Value {
             (GMonth(a), GMonth(b)) => a.partial_cmp(b),
             (YearMonthDuration(a), YearMonthDuration(b)) => a.partial_cmp(b),
             (DayTimeDuration(a), DayTimeDuration(b)) => a.partial_cmp(b),
-            (Duration(a), Duration(b)) => a.partial_cmp(b),
+            (Duration(a), Duration(b)) => duration_cmp(a, b),
             _ => None,
         }
     }
+}
+
+/// Orders two `xs:duration` values without walking the calendar.
+///
+/// The specification orders durations by adding both to four reference
+/// dateTimes chosen to cover every combination of month length and leap year;
+/// if all four comparisons agree the durations are ordered, and otherwise they
+/// are genuinely incomparable — `P1M` against `P30D` has no answer until you
+/// say which month.
+///
+/// `oxsdatatypes` implements that rule, but its date normalization walks the
+/// calendar one month at a time. `PT424206887777785H` is a perfectly
+/// well-formed duration that an untrusted instance document can carry into a
+/// `maxInclusive` check, and normalizing it takes on the order of 10^11
+/// iterations — a hang, not a slow answer. Found by fuzzing.
+///
+/// Both operands are added to the *same* reference date, so all the calendar
+/// work reduces to turning a year and month into a day number, which the civil
+/// calendar formula does in constant time.
+fn duration_cmp(
+    a: &oxsdatatypes::Duration,
+    b: &oxsdatatypes::Duration,
+) -> Option<std::cmp::Ordering> {
+    // From the datatypes specification. Note the first is 1696, not the 1969
+    // `oxsdatatypes` uses: 1696 is a leap year and 1969 is not, so the two
+    // disagree on durations reaching back across February.
+    const REFERENCES: [(i128, i128); 4] = [(1696, 9), (1697, 2), (1903, 3), (1903, 7)];
+
+    let mut agreed = None;
+    for r in REFERENCES {
+        let ord = instant(r, a)?.cmp(&instant(r, b)?);
+        match agreed {
+            None => agreed = Some(ord),
+            Some(prev) if prev == ord => {}
+            Some(_) => return None,
+        }
+    }
+    agreed
+}
+
+/// The instant reached by adding `d` to a reference date, as whole seconds
+/// since the civil epoch and a remainder in units of 10^-18 seconds.
+///
+/// Two integers rather than one because the whole-second count runs to about
+/// 10^25 and scaling that by the decimal's 10^18 would overflow. Splitting at
+/// the second keeps the remainder non-negative, which is what makes comparing
+/// the pair lexicographically the same as comparing the instants.
+fn instant(reference: (i128, i128), d: &oxsdatatypes::Duration) -> Option<(i128, i128)> {
+    // `years`/`months` and `days`/`hours`/`minutes`/`seconds` are the
+    // normalized components: everything below the leading one is bounded, so
+    // recombining them recovers the totals exactly.
+    let months = i128::from(d.years())
+        .checked_mul(12)?
+        .checked_add(d.months().into())?;
+    let total = reference
+        .0
+        .checked_mul(12)?
+        .checked_add(reference.1 - 1)?
+        .checked_add(months)?;
+    let day = days_from_civil(total.div_euclid(12), total.rem_euclid(12) + 1)?;
+
+    // The decimal is a fixed-point i128 scaled by 10^18, and holds less than a
+    // minute, so splitting it at the second is exact.
+    const SCALE: i128 = 1_000_000_000_000_000_000;
+    let scaled = i128::from_be_bytes(d.seconds().to_be_bytes());
+
+    let seconds = day
+        .checked_mul(86_400)?
+        .checked_add(i128::from(d.days()).checked_mul(86_400)?)?
+        .checked_add(i128::from(d.hours()).checked_mul(3_600)?)?
+        .checked_add(i128::from(d.minutes()).checked_mul(60)?)?
+        .checked_add(scaled.div_euclid(SCALE))?;
+    Some((seconds, scaled.rem_euclid(SCALE)))
+}
+
+/// Days from 1970-01-01 to the first of the given month, proleptic Gregorian.
+///
+/// Hinnant's civil-calendar formula, with the day fixed at 1 — every reference
+/// date is the first of a month, so there is no end-of-month clamping to do.
+fn days_from_civil(year: i128, month: i128) -> Option<i128> {
+    let y = year - i128::from(month <= 2);
+    let era = if y >= 0 { y } else { y - 399 }.div_euclid(400);
+    let yoe = y - era * 400;
+    let doy = (153 * (month + if month > 2 { -3 } else { 9 }) + 2) / 5;
+    let doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
+    era.checked_mul(146_097)?.checked_add(doe - 719_468)
 }
 
 impl fmt::Display for Value {
@@ -890,5 +976,74 @@ mod tests {
         let e = parse(Builtin::Int, " nope ").unwrap_err();
         assert_eq!(e.lexical, " nope ", "the raw form, not the normalised one");
         assert!(e.to_string().contains("xs:int"), "{e}");
+    }
+
+    fn dur_cmp(a: &str, b: &str) -> Option<std::cmp::Ordering> {
+        v(Builtin::Duration, a).partial_cmp_value(&v(Builtin::Duration, b))
+    }
+
+    /// The ordering examples from the datatypes specification. A duration is
+    /// ordered against another only when adding both to all four reference
+    /// dateTimes agrees; `P1M` against `P30D` genuinely has no answer.
+    #[test]
+    fn durations_are_ordered_by_the_four_reference_dates() {
+        use std::cmp::Ordering::*;
+
+        assert_eq!(dur_cmp("P1Y", "P364D"), Some(Greater));
+        assert_eq!(dur_cmp("P1Y", "P367D"), Some(Less));
+        assert_eq!(dur_cmp("P1Y", "P365D"), None, "leap years disagree");
+
+        assert_eq!(dur_cmp("P1M", "P27D"), Some(Greater));
+        assert_eq!(dur_cmp("P1M", "P32D"), Some(Less));
+        for d in ["P28D", "P29D", "P30D", "P31D"] {
+            assert_eq!(dur_cmp("P1M", d), None, "P1M vs {d}");
+        }
+
+        assert_eq!(dur_cmp("P5M", "P149D"), Some(Greater));
+        assert_eq!(dur_cmp("P5M", "P154D"), Some(Less));
+        assert_eq!(dur_cmp("P5M", "P150D"), None);
+
+        // Equality, and the sub-second end where the seconds field is a
+        // fixed-point decimal rather than an integer.
+        assert_eq!(dur_cmp("P1Y", "P12M"), Some(Equal));
+        assert_eq!(dur_cmp("PT1S", "PT0.999999999999999999S"), Some(Greater));
+        assert_eq!(dur_cmp("PT0.5S", "PT0.5S"), Some(Equal));
+
+        // Negatives, including the case that breaks a naive split of the
+        // seconds at the minute: the sub-minute remainder carries a sign, so
+        // the whole-second part alone orders these wrongly.
+        assert_eq!(dur_cmp("-P1Y", "P1Y"), Some(Less));
+        assert_eq!(dur_cmp("-PT0.1S", "PT0.1S"), Some(Less));
+        assert_eq!(dur_cmp("PT1M", "PT59S"), Some(Greater));
+        assert_eq!(dur_cmp("-PT1M", "-PT59S"), Some(Less));
+        assert_eq!(dur_cmp("-P1M", "-P30D"), None);
+    }
+
+    /// `oxsdatatypes` compares durations by normalising a dateTime one month at
+    /// a time, so a large but perfectly legal duration — the kind an untrusted
+    /// instance can carry into a `maxInclusive` check — takes ~10^11 iterations.
+    /// Ours is constant time. Found by fuzzing.
+    #[test]
+    fn comparing_a_huge_duration_terminates() {
+        let big = v(Builtin::Duration, "P12MT424206887777785H506M");
+        let start = std::time::Instant::now();
+        assert_eq!(big.partial_cmp_value(&big), Some(std::cmp::Ordering::Equal));
+        assert_eq!(
+            big.partial_cmp_value(&v(Builtin::Duration, "P1D")),
+            Some(std::cmp::Ordering::Greater)
+        );
+        assert!(start.elapsed().as_secs() < 5, "{:?}", start.elapsed());
+    }
+
+    /// The year is unbounded in the lexical space, so the arithmetic has to
+    /// answer rather than overflow. Every step is checked, and an unanswerable
+    /// comparison degrades to "incomparable".
+    #[test]
+    fn an_unrepresentable_duration_is_incomparable_not_a_panic() {
+        let huge = format!("P{}Y", "9".repeat(30));
+        let a = parse(Builtin::Duration, &huge);
+        if let Ok(a) = a {
+            let _ = a.partial_cmp_value(&v(Builtin::Duration, "P1D"));
+        }
     }
 }
