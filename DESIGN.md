@@ -916,7 +916,15 @@ binding shapes are already reachable through the public API in fifteen lines
    is where date-time implementations traditionally get XSD wrong. Its only
    dependency is `thiserror`, so there is no weight argument either.
 
-   Three problems surfaced, and none of them is a reason to leave:
+   One finding *is* a wrongness rather than a slowness, and it is the first:
+   `--02-29` is rejected as an `xs:gMonthDay`. A gMonthDay names no year, so
+   February has 29 days in it — the day exists, just not every year — and the
+   W3C suite says so (`msData/datatypes/gMonthDay004` expects valid).
+   `src/atomic.rs` now implements that one type outright, which is the
+   incremental path the roadmap describes: one type at a time, behind the
+   wrapper that already exists, each landing with the suite green.
+
+   The other three are not reasons to leave:
 
    - `impl PartialOrd for Duration` normalises a date one month at a time, so
      a legal duration hangs rather than answers. Real, but a *performance*

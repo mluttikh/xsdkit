@@ -458,16 +458,20 @@ has the wrong number of particles.
 
 ### P3 — finishing the hardening pass
 
-4. **Coverage in the two thin modules.** `cargo llvm-cov --summary-only`
-   puts the crate at 87.4% of regions; the floor is `values.rs` at **79.7%**
-   and `content.rs` at **80.2%** (and 82.6% of lines, the lowest there), with
-   everything else above 85%.
+4. ~~**Coverage in the two thin modules.**~~ **Largely done.**
+   `cargo llvm-cov --summary-only` now puts the crate at **88.9%** of regions,
+   with `values.rs` up from 79.7% to **87.5%** — `tests/canonical.rs` covers
+   the canonical forms and orderings, which is precisely the half fuzzing
+   cannot judge. Ten million runs establish that nothing panics; none of them
+   can say whether `--02-29` is a date.
 
-   Both gaps are the kind fuzzing cannot close. `values.rs` is the module the
-   fuzzer has hit hardest — ten million runs — so what is left untested is
-   canonical forms and orderings, where "did not panic" says nothing about "is
-   right". And `content.rs` is where the four UPA false positives in P1.3
-   live, which is not a coincidence worth ignoring.
+   It found one, and it was in the backend rather than here: see
+   `DESIGN.md` §3.15.4 and `src/atomic.rs`. **Write expectations from the
+   specification, not from what the code prints** — a test that records
+   current output asserts nothing.
+
+   `content.rs` is at 84.0% and is the remaining floor along with
+   `atomic.rs` (82.6%, mostly component accessors).
 5. ~~**`vc:` conditional inclusion**~~ **Done.** The test is on `reads`, the
    filter every descend point in the loader now uses — *not* at the places
    components are created. An excluded element takes its subtree with it, and
@@ -500,10 +504,10 @@ has the wrong number of particles.
    - **`precisionDecimal`** (item 8) needs a decimal type it does not have.
      That is additive, and writing one is the natural first step of a
      replacement if a replacement is ever wanted.
-   - A finding in the date-time family that is *wrong* rather than slow. The
-     W3C instance suite and the `parse_value` fuzz target are the oracle now,
-     which is the thing this project did not have when the decision was first
-     made.
+   - A finding in the date-time family that is *wrong* rather than slow. **One
+     has now fired**: `--02-29` was rejected as an `xs:gMonthDay`, and that
+     type is implemented here as a result. Two more of the same kind would be
+     a reason to reconsider the whole family; one is a reason to own one type.
 
    Do it one type at a time, each behind its existing wrapper, each landing
    with the suite and the fuzzer green. A big-bang rewrite of the date-time
