@@ -1922,20 +1922,29 @@ impl<'r> Loader<'r> {
     }
 
     fn read_wildcard(&mut self, node: roxmltree::Node, ctx: &DocCtx) -> Wildcard {
-        let namespace = match node.attribute("namespace").unwrap_or("##any").trim() {
-            "##any" => NamespaceConstraint::Any,
-            "##other" => NamespaceConstraint::Not(vec![ctx.target_ns]),
-            list => {
-                let mut out = Vec::new();
-                for tok in list.split_whitespace() {
-                    match tok {
-                        "##targetNamespace" => out.push(ctx.target_ns),
-                        "##local" => out.push(None),
-                        uri => out.push(self.names.opt_namespace(uri)),
-                    }
-                }
-                NamespaceConstraint::Enumeration(out)
-            }
+        // Reads a namespace list: URIs plus the two keywords that stand for
+        // "this document's namespace" and "no namespace at all".
+        let list = |this: &mut Self, v: &str| -> Vec<Option<Namespace>> {
+            v.split_whitespace()
+                .map(|tok| match tok {
+                    "##targetNamespace" => ctx.target_ns,
+                    "##local" => None,
+                    uri => this.names.opt_namespace(uri),
+                })
+                .collect()
+        };
+
+        // XSD 1.1's `notNamespace` is the inverse of `namespace`, and the two
+        // are alternatives. `##other` is 1.0's one-namespace special case of
+        // the same idea.
+        let namespace = match (node.attribute("namespace"), node.attribute("notNamespace")) {
+            (Some(v), _) => match v.trim() {
+                "##any" => NamespaceConstraint::Any,
+                "##other" => NamespaceConstraint::Not(vec![ctx.target_ns]),
+                other => NamespaceConstraint::Enumeration(list(self, other)),
+            },
+            (None, Some(v)) => NamespaceConstraint::Not(list(self, v)),
+            (None, None) => NamespaceConstraint::Any,
         };
         let process_contents = match node.attribute("processContents") {
             Some("skip") => ProcessContents::Skip,
@@ -2220,6 +2229,22 @@ fn check_representation(
                 )
                 .at(span())
                 .with_help("`default` may be overridden and `fixed` may not, so only one applies"),
+            );
+        }
+
+        // `namespace` says which namespaces a wildcard admits and
+        // `notNamespace` says which it refuses. Both at once names no set.
+        if matches!(name, "any" | "anyAttribute")
+            && node.has_attribute("namespace")
+            && node.has_attribute("notNamespace")
+        {
+            diags.push(
+                Diagnostic::error(
+                    DiagCode::InvalidAttributeValue,
+                    format!("`xs:{name}` has both `namespace` and `notNamespace`"),
+                )
+                .at(span())
+                .with_help("they are alternatives: one admits namespaces, the other refuses them"),
             );
         }
 

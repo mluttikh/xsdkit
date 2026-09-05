@@ -200,7 +200,7 @@ crate:
 | | |
 |---|---|
 | valid schemas accepted | **99.0%** — it reads real schemas |
-| invalid schemas rejected | **53.8%** — particle subsumption is the big rule still missing |
+| invalid schemas rejected | **54.4%** — particle subsumption is the big rule still missing |
 
 That asymmetry is by construction, not neglect: the Schema Component
 Constraints and the Derivation Valid rules are largely unimplemented (see §7).
@@ -306,6 +306,13 @@ conda active, maturin refuses to run while both `VIRTUAL_ENV` and
 Adding a schema feature? Add: a synthetic test for the feature alone, a
 failure test for its malformed form, and a check that it survives the real
 fixture.
+
+**Raw strings and `##`.** Schema fixtures are written as raw strings, and XSD
+is full of `##any`, `##other`, `##local`. An attribute value that opens with
+them puts `"##` in the text, which closes an `r##"…"##` literal early — the
+errors it produces name a *prefix* or a "reserved multi-hash token" and point
+nowhere near the cause. Count the longest run of `#` after a `"` in the
+content and use one more: `namespace="##any"` needs `r###"…"###`.
 
 ## Fuzzing
 

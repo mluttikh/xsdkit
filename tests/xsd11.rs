@@ -1,6 +1,7 @@
 //! XSD 1.1 structural features: open content, default attributes, and the
 //! relaxed Unique Particle Attribution rule.
 
+use xsdkit::model::Term;
 use xsdkit::*;
 
 const NS: &str = "urn:example";
@@ -262,4 +263,68 @@ fn xsd11_only_constructs_warn_when_read_as_xsd10() {
         "reading 1.1 syntax as 1.0 should say so:\n{d}"
     );
     assert!(!d.has_errors(), "but it is a warning, not an error:\n{d}");
+}
+
+/// `notNamespace` is the inverse of `namespace`: XSD 1.0 could only exclude
+/// one namespace, with `##other`. Without it the wildcard fell back to
+/// `##any`, so two wildcards that partition the namespaces looked like they
+/// overlapped and UPA rejected a valid schema.
+#[test]
+fn not_namespace_excludes_rather_than_admits() {
+    let s = build(
+        r###"<xs:complexType name="T">
+             <xs:sequence>
+               <xs:any namespace="##local" processContents="skip"/>
+               <xs:any notNamespace="##local" processContents="skip"/>
+             </xs:sequence>
+           </xs:complexType>
+           <xs:element name="e" type="tns:T"/>"###,
+        Version::Xsd11,
+    );
+    let t = s.type_(Some(NS), "T").expect("type");
+    let p = s[t].as_complex().unwrap().content.particle().unwrap();
+    let kids = s.child_particles(p);
+    assert_eq!(kids.len(), 2);
+
+    let Term::Wildcard(w) = &s[kids[1]].term else {
+        panic!("expected a wildcard");
+    };
+    // Everything but the absent namespace.
+    assert!(!w.namespace.admits(None));
+    // Anything that is not the absent namespace, including a URI this schema
+    // has never seen — which is the whole point of a wildcard.
+    assert!(
+        w.namespace
+            .admits_uri(s.names(), Some("urn:never-mentioned"))
+    );
+    assert!(!w.namespace.admits_uri(s.names(), None));
+
+    // The first one is its inverse.
+    let Term::Wildcard(first) = &s[kids[0]].term else {
+        panic!("expected a wildcard");
+    };
+    assert!(first.namespace.admits(None));
+    assert!(
+        !first
+            .namespace
+            .admits_uri(s.names(), Some("urn:never-mentioned"))
+    );
+}
+
+/// The two are alternatives — together they name no set at all.
+#[test]
+fn namespace_and_not_namespace_are_alternatives() {
+    let d = diagnostics(
+        r###"<xs:complexType name="T">
+             <xs:sequence>
+               <xs:any namespace="##any" notNamespace="##local"/>
+             </xs:sequence>
+           </xs:complexType>"###,
+        Version::Xsd11,
+    );
+    assert!(
+        d.errors()
+            .any(|x| x.code == DiagCode::InvalidAttributeValue),
+        "{d}"
+    );
 }
