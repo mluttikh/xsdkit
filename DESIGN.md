@@ -905,6 +905,34 @@ binding shapes are already reachable through the public API in fifteen lines
    validation semantics. Do read its resolver design — that part is right.
 4. **Reuse `oxsdatatypes`?** Yes. Decimal, duration and the date-time family
    are weeks of subtle work already done and battle-tested in Oxigraph.
+
+   *Revisited after the W3C suite and the fuzzers were in place, which is the
+   first point at which an implementation of our own could have been judged.*
+   The answer is still yes. It gets the parts that are actually hard right —
+   probed directly: `24:00` normalises to the next midnight, `2000-02-30` is
+   rejected, leap seconds are rejected, `1E3` is not an `xs:decimal`, and the
+   timezone partial order is correct (a value with no timezone against one
+   with is *indeterminate* inside 14 hours and ordered outside it). That last
+   is where date-time implementations traditionally get XSD wrong. Its only
+   dependency is `thiserror`, so there is no weight argument either.
+
+   Three problems surfaced, and none of them is a reason to leave:
+
+   - `impl PartialOrd for Duration` normalises a date one month at a time, so
+     a legal duration hangs rather than answers. Real, but a *performance*
+     bug, and `src/values.rs` no longer calls that path.
+   - It uses the reference dateTime 1969-09-01 where the specification says
+     1696-09-01. Real, but in the same path we no longer call.
+   - It accepts `+INF` and the year `0000`. **Not bugs** — both are legal XSD
+     1.1 and illegal XSD 1.0. `oxsdatatypes` implements the 1.1 lexical
+     spaces; we apply them in 1.0 mode because `values::parse` never receives
+     the version. That one is ours (see AGENTS.md, road to 1.0, P1.2).
+
+   What *did* change is the API judgement. `Value` exposes these types
+   publicly, which pins every downstream user to our exact version of the
+   library. That has to be wrapped before 1.0 — not to leave `oxsdatatypes`,
+   but so that leaving it later would be an internal change rather than a
+   breaking one.
 5. **Codegen?** No — see §3.1. This is the load-bearing exclusion.
 6. **One package or three?** Three (§3.0b). `xsdkit` stays a generic XSD
    reader with almost no dependencies; `xsd2arrow` and the unit-conversion

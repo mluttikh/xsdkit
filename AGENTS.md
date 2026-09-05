@@ -248,6 +248,8 @@ off `ComplexType::content` with nothing to be pruned from.
   real schema gets a repro here**, in addition to a unit test. Three of the
   first four bugs in this crate were found by loading it once.
 - The full suite runs in under a second — run it often.
+- `cargo llvm-cov --summary-only` for coverage. 87.4% of regions overall; see
+  the road to 1.0 for where the floor is and why it is there.
 
 CI (`.github/workflows/ci.yml`) gates on four things: `cargo fmt --check`,
 `cargo clippy --all-targets -D warnings`, tests on Linux/macOS/Windows, and
@@ -330,6 +332,103 @@ of the repository; only the targets and their manifest are committed. **A crash
 gets a named regression test in `tests/` or a `mod tests`, not an artifact file
 checked in** — the artifact is an opaque blob, the test says what was wrong.
 Fuzz findings are marked `Found by fuzzing` at the fix site.
+
+## The road to 1.0
+
+Ordered by what gets more expensive the longer it waits, not by size.
+
+The 58 valid schemas still rejected break down, by diagnostic code, as: **40**
+`precisionDecimal` (27 unresolved `xs:precisionDecimal`, 13 `minScale`), **7**
+the identity-constraint `ref` bug below, **4** UPA false positives, **5** or so
+`vc:` conditional inclusion, and **2** that are correct behaviour — the
+entity-reference-loop guard firing on `ElementDeclarations.xsd`, and
+`FileResolver` refusing to fetch `xlink.xsd` over the network.
+
+Regenerate that with `examples/w3c_why.rs` (why we reject valid schemas, by
+code) and `examples/w3c_gap.rs` (which invalid schemas we accept, clustered by
+test-group family, so a family with fifty misses is fifty cases one rule buys).
+Both need `XSDTESTS`. Re-run them before trusting any number here.
+
+### P0 — the irreversible one
+
+**Get `oxsdatatypes` out of the public API.** `Value` is public and holds its
+types directly:
+
+```rust
+pub enum Value { Decimal(Decimal), DateTime(DateTime), Duration(Duration), … }
+```
+
+Anyone who matches on `Value::DateTime(dt)` has to add `oxsdatatypes` to their
+own `Cargo.toml` and is pinned to our exact version — so every bump of it is a
+breaking change for them. Wrap the 14 datatypes in our own types (or newtypes
+exposing `Display`, `PartialOrd` and the accessors) before 1.0.
+
+The point is not to leave the library. It is that after 1.0 this cannot be
+changed, and doing it now turns "should we replace `oxsdatatypes`?" from a
+one-shot breaking decision into an internal, per-type one we can take later on
+evidence — or never. See `DESIGN.md` §3.15.4 for why the answer today is
+"keep it".
+
+### P1 — correctness bugs, all small, all with repros
+
+1. **Identity-constraint `ref`.** XSD 1.1 lets an identity constraint be a
+   reference rather than a definition: `<unique ref="a:u1"/>`. The loader
+   reads `name` unconditionally, so a `ref` form gets the empty local name and
+   the second one collides with the first — reported as
+   `duplicate identity constraint {a}`. Costs 7 false rejections
+   (`IdentityConstraint/s2_2_4v01`-`v03`, the matching `ii` cases,
+   `saxonData/Id/id044`).
+2. **`values::parse` does not know the version.** It takes a `Builtin` and a
+   lexical form, so it always applies the XSD 1.1 lexical spaces.
+   `+INF` and the year `0000` are legal in 1.1 and illegal in 1.0, and we
+   accept both in either mode. Thread `Version` through and tighten 1.0.
+3. **Four UPA false positives** (`XSD1304`). Three are named by `w3c_why`:
+   `saxonData/Wild/wild050`, `wildcard/s3_10_1ii08` and `ii09` — wildcards
+   the checker believes overlap and the specification does not.
+
+### P2 — the one large item
+
+**Particle subsumption**, i.e. *Derivation Valid (Restriction, Complex)*:
+whether a restriction's content model actually accepts a subset of its base's.
+Worth roughly 50 of the invalid schemas still accepted — the `all`, `simple`,
+`complex` and `over` families in `w3c_gap`. Everything else on this list is
+days at most; this one is not.
+
+The facet-level reading of the same idea is done (`src/facets.rs`, rule 4), so
+the shape is familiar: compare what this step declares against what it
+inherits, and reject anything that widens.
+
+### P3 — finishing the hardening pass
+
+4. **Coverage in the two thin modules.** `cargo llvm-cov --summary-only`
+   puts the crate at 87.4% of regions; the floor is `values.rs` at **79.7%**
+   and `content.rs` at **80.2%** (and 82.6% of lines, the lowest there), with
+   everything else above 85%.
+
+   Both gaps are the kind fuzzing cannot close. `values.rs` is the module the
+   fuzzer has hit hardest — ten million runs — so what is left untested is
+   canonical forms and orderings, where "did not panic" says nothing about "is
+   right". And `content.rs` is where the four UPA false positives in P1.3
+   live, which is not a coincidence worth ignoring.
+5. **`vc:` conditional inclusion** (XSD 1.1 §4.2.2), and whatever else is
+   left in the `VC`, `Override` and `Assert` sets. The `vc:` cases report
+   `duplicate global element` — the symptom of loading both branches of
+   something meant to be chosen between. Around 5 rejections once the identity
+   constraint bug above is out of the same `XSD1202` bucket; check with
+   `w3c_why` rather than trusting that figure.
+
+### P4 — optional, and genuinely optional
+
+6. Report the two `oxsdatatypes` findings upstream: the month-at-a-time
+   `normalize_day` (a hang on a legal duration, not a slow answer) and the
+   1969-09-01 reference date where the specification says 1696-09-01.
+7. **`precisionDecimal`.** 40 of the 58 remaining false rejections — 27
+   unresolved `xs:precisionDecimal` plus 13 `minScale`/`maxScale` facets. It is
+   the largest single cluster *and* an optional XSD 1.1 feature that did not
+   survive into the required conformance set, so it buys a number rather than
+   correctness. It also needs a decimal type of our own, which makes it the one
+   item on this list that argues for writing a datatype ourselves — additively,
+   not as a replacement.
 
 ## Planned, not present
 
