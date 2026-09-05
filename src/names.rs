@@ -38,10 +38,31 @@ pub struct QName {
     pub local: Symbol,
 }
 
+impl Symbol {
+    /// The empty string, present in every [`Interner`] from construction.
+    ///
+    /// A `Symbol` cannot be made without an interner, and an interner cannot
+    /// be written to after compilation — so code that meets a name the schema
+    /// never declared has nothing to fall back on. This is that fallback.
+    pub const EMPTY: Symbol = Symbol(0);
+}
+
 impl QName {
     pub fn new(ns: Option<Namespace>, local: Symbol) -> Self {
         Self { ns, local }
     }
+
+    /// A stand-in for a name the schema does not declare.
+    ///
+    /// The instance validator has to key its element stack on *something* even
+    /// when a document uses a name no declaration mentions, and it cannot
+    /// intern the real one. Naming it after some unrelated global — which is
+    /// what this replaced — was worse than admitting the name is unknown, and
+    /// panicked outright on a schema with no global elements to borrow from.
+    pub const UNKNOWN: QName = QName {
+        ns: None,
+        local: Symbol::EMPTY,
+    };
 }
 
 impl Namespace {
@@ -56,10 +77,26 @@ impl Namespace {
 }
 
 /// Interns strings so names compare and hash as integers.
-#[derive(Clone, Debug, Default)]
+///
+/// Every interner holds the empty string at [`Symbol::EMPTY`] from the moment
+/// it is created, so a `Symbol` can always be produced without interning —
+/// which matters because interning is impossible once a schema is compiled.
+#[derive(Clone, Debug)]
 pub struct Interner {
     map: FxHashMap<Box<str>, u32>,
     vec: Vec<Box<str>>,
+}
+
+impl Default for Interner {
+    fn default() -> Self {
+        let mut i = Self {
+            map: FxHashMap::default(),
+            vec: Vec::new(),
+        };
+        // Reserve slot 0 so `Symbol::EMPTY` resolves in every interner.
+        i.intern("");
+        i
+    }
 }
 
 impl Interner {
@@ -149,7 +186,22 @@ mod tests {
         assert_eq!(a, b);
         assert_ne!(a, c);
         assert_eq!(i.resolve(a), "well");
-        assert_eq!(i.len(), 2);
+        // Two distinct strings, plus the empty string every interner reserves
+        // at slot 0 so `Symbol::EMPTY` always resolves.
+        assert_eq!(i.len(), 3);
+    }
+
+    /// `Symbol::EMPTY` has to resolve in *any* interner, however it was made,
+    /// because it is the fallback for a name that cannot be interned any more.
+    #[test]
+    fn the_empty_symbol_resolves_in_every_interner() {
+        for i in [Interner::new(), Interner::default()] {
+            assert_eq!(i.resolve(Symbol::EMPTY), "");
+        }
+        let mut i = Interner::new();
+        i.intern("well");
+        assert_eq!(i.resolve(Symbol::EMPTY), "", "interning must not move it");
+        assert_eq!(i.display(QName::UNKNOWN), "");
     }
 
     #[test]

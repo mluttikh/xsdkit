@@ -113,8 +113,13 @@ fn main() {
                 })) {
                     Ok(r) => r,
                     Err(_) => {
+                        // Name the document. A panic count with no example is
+                        // a number you cannot act on.
                         let e = by_code.entry("PANIC".into()).or_default();
                         e.0 += 1;
+                        if e.1.len() < samples {
+                            e.1.push(format!("{}  |  panicked", path.display()));
+                        }
                         continue;
                     }
                 };

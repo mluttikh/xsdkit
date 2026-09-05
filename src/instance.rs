@@ -353,18 +353,15 @@ impl<'a, S: FnMut(PsviEvent)> Run<'a, '_, S> {
             .flatten();
 
         let name = qname.unwrap_or_else(|| {
-            // An undeclared name still needs a key for the stack; interning is
-            // not possible after compilation, so the parent's stands in.
-            self.stack.last().map(|f| f.name).unwrap_or_else(|| {
-                *self
-                    .v
-                    .schemas
-                    .globals()
-                    .elements
-                    .keys()
-                    .next()
-                    .expect("a schema has names")
-            })
+            // An undeclared name still needs a key for the stack, and interning
+            // is not possible after compilation. The parent's name stands in
+            // where there is one; at the root there is not, and reaching for
+            // some arbitrary global instead used to panic on a schema that
+            // declares no elements at all.
+            self.stack
+                .last()
+                .map(|f| f.name)
+                .unwrap_or(crate::names::QName::UNKNOWN)
         });
 
         (self.sink)(PsviEvent::StartElement {

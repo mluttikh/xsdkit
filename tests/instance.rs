@@ -627,3 +627,80 @@ fn a_prohibited_attribute_is_not_supplied() {
         });
     assert!(attrs.is_empty(), "a prohibited attribute is not supplied");
 }
+
+/// `simpleContent` restricting a *complex* base, with the base declared after
+/// the type that derives from it.
+///
+/// Resolving the simple type a `simpleContent` validates against used to be a
+/// single forward pass over the arena that followed exactly one link. Both
+/// assumptions were wrong. A base may be declared below its derived type, in
+/// which case its own content is still a placeholder when the derived type is
+/// reached, and the pass fell back to naming the *complex* base as the simple
+/// target — so the text was then checked against a type with no value space.
+///
+/// The symptom was that declaration order decided whether a document
+/// validated, silently, and it cost the W3C suite hundreds of valid documents.
+#[test]
+fn simple_content_resolves_whatever_the_declaration_order() {
+    let derived = r#"<xs:element name="x"><xs:complexType><xs:simpleContent>
+           <xs:restriction base="tns:Base">
+             <xs:attribute name="a" type="xs:integer"/>
+           </xs:restriction>
+         </xs:simpleContent></xs:complexType></xs:element>"#;
+    let base = r#"<xs:complexType name="Base"><xs:simpleContent>
+           <xs:extension base="xs:string"><xs:anyAttribute/></xs:extension>
+         </xs:simpleContent></xs:complexType>"#;
+
+    for (order, body) in [
+        ("derived first", format!("{derived}{base}")),
+        ("base first", format!("{base}{derived}")),
+    ] {
+        let s = schema(&body);
+        let d = check(&s, &format!(r#"<x xmlns="{NS}" a="2">Hello</x>"#));
+        assert!(!d.has_errors(), "{order}: expected valid, got:\n{d}");
+    }
+}
+
+/// The same, three links deep, so the fix cannot be one extra hop.
+#[test]
+fn a_simple_content_chain_resolves_through_every_link() {
+    let s = schema(
+        r#"<xs:element name="z"><xs:complexType><xs:simpleContent>
+             <xs:restriction base="tns:Mid"/>
+           </xs:simpleContent></xs:complexType></xs:element>
+           <xs:complexType name="Mid"><xs:simpleContent>
+             <xs:restriction base="tns:Base"/>
+           </xs:simpleContent></xs:complexType>
+           <xs:complexType name="Base"><xs:simpleContent>
+             <xs:extension base="xs:int"/>
+           </xs:simpleContent></xs:complexType>"#,
+    );
+    valid(&s, &format!(r#"<z xmlns="{NS}">42</z>"#));
+    // And the base's type is still enforced through the whole chain.
+    invalid(
+        &s,
+        &format!(r#"<z xmlns="{NS}">not-an-int</z>"#),
+        DiagCode::InvalidValue,
+    );
+}
+
+/// A document whose root is undeclared, against a schema with no global
+/// elements at all.
+///
+/// The validator keys its element stack on an interned name, and interning is
+/// impossible after compilation. For an undeclared root there is no parent
+/// name to borrow, so it used to reach for the first global element — and
+/// `expect`ed one to exist. A schema that declares only types has none, and
+/// the whole validator panicked on an ordinary invalid document. Untrusted
+/// input must produce a diagnostic, never a crash.
+#[test]
+fn an_undeclared_root_against_an_element_less_schema_reports_rather_than_panics() {
+    let s =
+        schema(r#"<xs:simpleType name="Only"><xs:restriction base="xs:string"/></xs:simpleType>"#);
+
+    let d = check(&s, r#"<whatever xmlns="urn:nowhere"><child/></whatever>"#);
+    assert!(
+        d.errors().any(|e| e.code == DiagCode::ElementNotDeclared),
+        "expected a diagnostic naming the undeclared root, got:\n{d}"
+    );
+}

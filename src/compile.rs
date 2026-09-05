@@ -620,20 +620,52 @@ fn resolve_simple_content(l: &mut Loader<'_>) {
         if !needs {
             continue;
         }
-        // The base is either a simple type (use it) or a complex type with
-        // simple content (use that type's own simple content).
-        let resolved = match l.types.get(base.0) {
-            TypeDefinition::Simple(_) => base,
-            TypeDefinition::Complex(bc) => match bc.content {
-                ContentType::Simple(t) if !t.is_placeholder() => t,
-                _ => base,
-            },
-        };
+        let resolved = simple_content_of(l, base);
         if let TypeDefinition::Complex(c) = l.types.get_mut(i) {
             c.content = ContentType::Simple(resolved);
         }
     }
 }
+
+/// The simple type a `simpleContent` chain ultimately validates against.
+///
+/// The base is either a simple type — use it — or a complex type with simple
+/// content of its own, whose base may in turn be another such complex type.
+/// Following one link is not enough, and neither is resolving the arena in
+/// index order: a base may be declared *after* the type deriving from it, in
+/// which case its own content is still a placeholder when we get here. That
+/// made validation depend on declaration order, silently, which is how
+/// `<x>` restricting a complex `Base` declared below it came to report that a
+/// complex type has no value space.
+///
+/// Walking the chain per type removes the ordering assumption. Anything that
+/// is not a simple-content link ends the walk and is returned unchanged, so a
+/// `simpleContent` over element-only content still reports the error it
+/// should.
+fn simple_content_of(l: &Loader<'_>, start: TypeId) -> TypeId {
+    let mut id = start;
+    // `check_cycles` runs after this pass, so a circular base chain is still
+    // representable here and the walk needs its own bound.
+    for _ in 0..MAX_SIMPLE_CONTENT_CHAIN {
+        match l.types.get(id.0) {
+            TypeDefinition::Simple(_) => return id,
+            TypeDefinition::Complex(c) => match c.content {
+                // Already resolved by an earlier iteration: it is a simple type.
+                ContentType::Simple(t) if !t.is_placeholder() => return t,
+                // Unresolved simple content — keep climbing.
+                ContentType::Simple(_) if c.base != id => id = c.base,
+                _ => return id,
+            },
+        }
+    }
+    id
+}
+
+/// How far `simple_content_of` will climb before giving up.
+///
+/// A real `simpleContent` chain is a handful of links; sixty-four is far past
+/// anything a person writes and stops a cyclic schema from spinning.
+const MAX_SIMPLE_CONTENT_CHAIN: usize = 64;
 
 // ---------------------------------------------------------------------------
 // 5. Cycle detection
