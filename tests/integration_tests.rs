@@ -630,6 +630,51 @@ fn keyref_resolves_to_the_key_it_refers_to() {
     assert_eq!(s[*keyref].refer, Some(*key));
 }
 
+/// The invariant `Schemas` carries is that no placeholder survives compilation
+/// *anywhere*. Elements and attributes were repaired; the four places one type
+/// points at another were not, so a walk over a derivation chain met one and
+/// panicked. Found by fuzzing, like the particle case below it.
+#[test]
+fn an_unresolved_type_reference_never_reaches_schemas() {
+    let (s, d) = SchemaSetBuilder::new()
+        .conformance(Conformance::Lax)
+        .text(
+            schema(
+                r#"<xs:simpleType name="R">
+                     <xs:restriction base="tns:Missing"><xs:maxLength value="3"/></xs:restriction>
+                   </xs:simpleType>
+                   <xs:simpleType name="L"><xs:list itemType="tns:AlsoMissing"/></xs:simpleType>
+                   <xs:simpleType name="U">
+                     <xs:union memberTypes="xs:int tns:StillMissing"/>
+                   </xs:simpleType>
+                   <xs:complexType name="C">
+                     <xs:complexContent>
+                       <xs:restriction base="tns:GoneToo">
+                         <xs:sequence><xs:element name="a" type="xs:int"/></xs:sequence>
+                       </xs:restriction>
+                     </xs:complexContent>
+                   </xs:complexType>"#,
+            ),
+            "mem://main.xsd",
+        )
+        .build_with_warnings();
+    assert!(d.iter().any(|x| x.code == DiagCode::UnresolvedReference));
+
+    // Every type in the arena, and everything each one points at, resolves.
+    for (id, def) in s.iter_types() {
+        assert!(s.get_type(def.base()).is_some(), "base of {id:?}");
+        let _ = s.base_chain(id);
+        if let Some(t) = def.as_simple() {
+            if let Some(item) = t.item_type {
+                assert!(s.get_type(item).is_some(), "item type of {id:?}");
+            }
+            for m in &t.member_types {
+                assert!(s.get_type(*m).is_some(), "member of {id:?}");
+            }
+        }
+    }
+}
+
 /// XSD 1.1 lets a constraint be *referenced* rather than defined, so one
 /// definition can apply to several elements. There is no new component: both
 /// elements end up pointing at the same one.

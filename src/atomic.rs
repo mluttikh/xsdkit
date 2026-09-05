@@ -302,20 +302,22 @@ impl GMonthDay {
         let rest = s
             .strip_prefix("--")
             .ok_or_else(|| "expected `--MM-DD`".to_string())?;
-        if rest.len() < 5 || rest.as_bytes()[2] != b'-' {
+        // On bytes, and the shape is checked before anything is sliced: the
+        // input is arbitrary text, so `&rest[..5]` would panic on a multi-byte
+        // character rather than reject it.
+        let b = rest.as_bytes();
+        let shaped = b.len() >= 5
+            && b[0].is_ascii_digit()
+            && b[1].is_ascii_digit()
+            && b[2] == b'-'
+            && b[3].is_ascii_digit()
+            && b[4].is_ascii_digit();
+        if !shaped {
             return Err("expected `--MM-DD`".into());
         }
-        let (mm, tail) = rest.split_at(2);
-        let (dd, tz) = tail[1..].split_at(2.min(tail.len() - 1));
-        let two = |v: &str, what: &str| -> Result<u8, String> {
-            if v.len() == 2 && v.bytes().all(|b| b.is_ascii_digit()) {
-                Ok(v.parse().expect("two ascii digits"))
-            } else {
-                Err(format!("{what} must be two digits"))
-            }
-        };
-        let month = two(mm, "the month")?;
-        let day = two(dd, "the day")?;
+        let two = |hi: u8, lo: u8| (hi - b'0') * 10 + (lo - b'0');
+        let month = two(b[0], b[1]);
+        let day = two(b[3], b[4]);
         if !(1..=12).contains(&month) {
             return Err(format!("{month} is not a month"));
         }
@@ -325,7 +327,8 @@ impl GMonthDay {
         Ok(Self {
             month,
             day,
-            offset: parse_offset(tz)?,
+            // Byte 5 is a character boundary: the five before it are ASCII.
+            offset: parse_offset(&rest[5..])?,
         })
     }
 
@@ -378,23 +381,26 @@ fn parse_offset(s: &str) -> Result<Option<i16>, String> {
     if s == "Z" {
         return Ok(Some(0));
     }
-    let sign = match s.as_bytes()[0] {
+    // Bytes again, and shape before value: `s` is whatever the document said.
+    let b = s.as_bytes();
+    let sign: i16 = match b[0] {
         b'+' => 1,
         b'-' => -1,
         _ => return Err("expected a timezone such as `Z` or `+02:00`".into()),
     };
-    let body = &s[1..];
-    if body.len() != 5 || body.as_bytes()[2] != b':' {
+    let shaped = b.len() == 6
+        && b[1].is_ascii_digit()
+        && b[2].is_ascii_digit()
+        && b[3] == b':'
+        && b[4].is_ascii_digit()
+        && b[5].is_ascii_digit();
+    if !shaped {
         return Err("expected a timezone such as `Z` or `+02:00`".into());
     }
-    let hh: i16 = body[..2]
-        .parse()
-        .map_err(|_| "the timezone hour must be two digits".to_string())?;
-    let mm: i16 = body[3..]
-        .parse()
-        .map_err(|_| "the timezone minute must be two digits".to_string())?;
+    let two = |hi: u8, lo: u8| i16::from(hi - b'0') * 10 + i16::from(lo - b'0');
+    let (hh, mm) = (two(b[1], b[2]), two(b[4], b[5]));
     let total = sign * (hh * 60 + mm);
-    if !(-840..=840).contains(&total) || mm > 59 {
+    if mm > 59 || !(-840..=840).contains(&total) {
         return Err("a timezone must be between -14:00 and +14:00".into());
     }
     Ok(Some(total))

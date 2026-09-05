@@ -339,6 +339,37 @@ fn prune_placeholders(l: &mut Loader<'_>) {
             e.type_id = TypeId::from_index(0); // xs:anyType, installed first
         }
     }
+    // A type reference that never resolved. Elements and attributes get their
+    // own repair below; these are the four places a *type* can point at
+    // another one, and none of them was patched — so `iter_types` handed a
+    // caller a placeholder and anything that walked a derivation chain
+    // panicked. Same shape of bug as the dangling particle below, and found
+    // the same way.
+    let any_type = l.builtins[&Builtin::AnyType];
+    let any_simple_type = l.builtins[&Builtin::AnySimpleType];
+    for i in 0..l.types.len() as u32 {
+        match l.types.get_mut(i) {
+            TypeDefinition::Simple(s) => {
+                if s.base.is_placeholder() {
+                    s.base = any_simple_type;
+                }
+                if s.item_type.is_some_and(|t| t.is_placeholder()) {
+                    s.item_type = Some(any_simple_type);
+                }
+                for m in &mut s.member_types {
+                    if m.is_placeholder() {
+                        *m = any_simple_type;
+                    }
+                }
+            }
+            TypeDefinition::Complex(c) => {
+                if c.base.is_placeholder() {
+                    c.base = any_type;
+                }
+            }
+        }
+    }
+
     // An identity constraint reached by `ref` that never resolved. Unlike a
     // type there is no sensible substitute — the constraint simply is not
     // there — so the slot goes away rather than pointing at something wrong.

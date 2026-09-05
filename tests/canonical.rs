@@ -252,3 +252,26 @@ fn every_builtin_round_trips_its_canonical_form() {
         );
     }
 }
+
+/// A lexical form is arbitrary text, so the parser slices it on bytes and
+/// checks the shape before it slices anything. Indexing `&s[..5]` on a
+/// multi-byte character panics rather than rejecting the value. Found by
+/// fuzzing, minutes after the type was written.
+#[test]
+fn a_malformed_gmonthday_is_rejected_not_panicked() {
+    for s in [
+        "r--06-0\u{db}",
+        "--06-0\u{db}",
+        "--\u{db}\u{db}-01",
+        "--06-\u{db}\u{db}",
+        "--06-01\u{db}",
+        "--06-01+0\u{db}:00",
+        "--",
+        "--06",
+        "--06-",
+        "",
+        "\u{db}",
+    ] {
+        assert!(parse(B::GMonthDay, s).is_err(), "{s:?} should be rejected");
+    }
+}
