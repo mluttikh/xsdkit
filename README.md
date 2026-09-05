@@ -14,8 +14,6 @@ reference and the full rustdoc.
 > resolution, content-model compilation, instance validation and the Python
 > bindings work, and are measured against the W3C XML Schema Test Suite on
 > every change. XSD 1.1 assertions and conditional type assignment come next.
-> A units layer was planned and **cut on evidence** — see
-> [DESIGN.md](DESIGN.md) §3.7.
 
 ## Why
 
@@ -201,28 +199,7 @@ cargo run --example inspect -- schemas/report.xsd --lax
 
 Code generation is permanently out of scope.
 
-### Units of measure
-
-There is no unit layer, on purpose. No standard says *where* a unit lives in
-an XSD — it was proposed to the XML Schema WG in 1999 and not adopted, and
-UnitsML has been a committee draft since 2011. Only the vocabulary is
-standardised (UCUM, UN/CEFACT Rec. 20), never the slot.
-
-`xsdkit` exposes the facts instead: attribute uses folded down the derivation
-chain, `fixed` and `default` values, enumeration facets, `appinfo` verbatim,
-and schema-supplied attribute values flagged in the PSVI. Turning those into
-your schema family's convention is about fifteen lines — see
-[`examples/units.rs`](examples/units.rs):
-
-```bash
-cargo run --example units -- schemas/measures.xsd
-# {urn:rig}Depth      fixed        m
-# {urn:rig}Pressure   enumerated   ["Pa", "hPa", "bar"]
-# {gml}MeasureType    per-instance @uom
-```
-
-A built-in heuristic would be right most of the time and silently wrong the
-rest, and a wrong unit is worse than no unit.
+### Encodings
 
 Document encodings are detected from a byte-order mark, then the XML
 declaration, then UTF-8; bytes that contradict the encoding they claim are an

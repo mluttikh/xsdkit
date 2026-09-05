@@ -3,7 +3,7 @@
 //! XSD is three languages: schema *documents*, schema *components*, and
 //! validation *semantics* over those components. This module is the middle
 //! layer, which the specification defines all its semantics against. Every
-//! consumer — typed reading, unit extraction, config generation — is built on
+//! consumer — typed reading, code generation, anything else — is built on
 //! this and never reaches back into the document syntax.
 //!
 //! # Why arenas
@@ -629,8 +629,8 @@ pub struct NotationDecl {
 
 /// Machine-readable annotation content, kept verbatim.
 ///
-/// This is the seam the units layer hangs on: unit conventions that put the
-/// unit in `appinfo` need the original XML, not a summary of it.
+/// This is the seam a caller's own conventions hang on: whatever a schema
+/// family encodes here needs the original XML, not a summary of it.
 #[derive(Clone, PartialEq, Eq, Debug)]
 pub struct AppInfo {
     pub source: Option<String>,

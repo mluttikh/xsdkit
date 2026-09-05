@@ -173,7 +173,7 @@ schemas["{urn:example}Sku"].doc
 
 `appinfo` is kept **verbatim**, as XML text, because it is where schema
 families put the machine-readable conventions the standard never specified —
-units, database mappings, UI hints. Summarising it would destroy exactly the
+database mappings, code lists, UI hints. Summarising it would destroy exactly the
 information someone reaching for it needs.
 
 ## Next

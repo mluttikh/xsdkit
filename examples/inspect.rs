@@ -115,7 +115,7 @@ fn main() {
         .iter_annotations()
         .filter(|(_, a)| !a.appinfo.is_empty())
         .count();
-    println!("\nannotations w/ appinfo {with_appinfo}  (units-layer candidates)");
+    println!("\nannotations w/ appinfo {with_appinfo}");
 
     if !diags.is_empty() {
         println!("\n--- {} diagnostic(s) ---", diags.len());

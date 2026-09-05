@@ -257,8 +257,8 @@ fn attribute_uses_carry_kind_and_value_constraint() {
     assert!(uom.is_required());
     let decl = &s[uom.attribute];
     assert_eq!(s.names().resolve(decl.name.local), "uom");
-    // A schema-`fixed` unit is exactly the case the units layer can compile
-    // into a constant scale/offset later.
+    // A schema-`fixed` value is known without seeing any document, which is
+    // the whole reason to reach for `fixed`.
     assert_eq!(decl.value_constraint.as_ref().unwrap().value(), "m");
     assert!(decl.value_constraint.as_ref().unwrap().is_fixed());
 
@@ -808,7 +808,7 @@ fn an_identity_constraint_needs_exactly_one_of_name_and_ref() {
 }
 
 // ---------------------------------------------------------------------------
-// Annotations — the seam the units layer will hang on
+// Annotations — the seam a caller's own conventions hang on
 // ---------------------------------------------------------------------------
 
 #[test]

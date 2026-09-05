@@ -223,7 +223,7 @@ def test_malformed_xml_is_a_diagnostic_not_an_exception(schemas):
 
 
 def test_a_fixed_attribute_is_supplied_when_absent():
-    """The pattern a units layer leans on: `<len>3.2</len>` still has a unit."""
+    """`<len>3.2</len>` still carries what the schema pinned with `fixed`."""
     s = build(
         '<xs:element name="len"><xs:complexType><xs:simpleContent>'
         '<xs:extension base="xs:double">'

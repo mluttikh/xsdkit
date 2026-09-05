@@ -43,9 +43,8 @@ python = ["dep:pyo3"]
 # Linking against libpython is only correct when building an actual wheel;
 # `cargo check`/`clippy`/`test` must not. maturin turns this on, CI does not.
 extension-module = ["python", "pyo3/extension-module"]
-# Reserved for later phases; see DESIGN.md §3.12.
+# Reserved for later phases; see DESIGN.md §3.11.
 #   validate = []   # streaming validator + PSVI       (P4)
-#   units    = []   # unit binding extraction          (P5)
 #
 # Generating a config for a particular downstream reader is deliberately NOT a
 # feature here — it belongs in its own package, so that reading a schema never

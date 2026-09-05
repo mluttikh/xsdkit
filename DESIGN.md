@@ -4,8 +4,8 @@
 > Plan revised 2026-09-04 to put Python bindings next.
 >
 > Goal: **`xsdkit`**, a generic XSD reader in Rust with first-class Python
-> bindings — parse a schema, query it as a model, validate and typed-read
-> documents against it, and report the units a schema declares.
+> bindings — parse a schema, query it as a model, and validate and typed-read
+> documents against it.
 
 ---
 
@@ -28,9 +28,9 @@ Python lets you *ask a schema questions* at speed — `xmlschema` can, and is
 
 **The proposal.** Build **`xsdkit`**: a **generic XSD reader**. An
 arena-backed schema component model with an explicit compile step, on top of
-a datatype/facet layer, with a streaming typed reader (PSVI) and a units
-layer over it — and Python bindings, because that is where most schema
-processing actually happens. Skip code generation entirely; `xsd-parser`
+a datatype/facet layer, with a streaming typed reader (PSVI) over it — and
+Python bindings, because that is where most schema processing actually
+happens. Skip code generation entirely; `xsd-parser`
 already does it and it is the single largest sink of effort in this space.
 
 
@@ -44,11 +44,6 @@ Consumers built on top of it belong outside it. A downstream tool has a
 different dependency set and a different release cadence from a schema reader,
 and every dependency it needs would otherwise be paid for by people who never
 asked for it.
-
-Unit *conversion* is outside for the same reason and one more: dimension
-vectors, affine factors and UCUM parsing are not an XSD concern at all. Only
-unit **extraction** — finding the binding a schema declares — is
-introspection, and even that turned out not to need a layer (§3.7).
 
 ### Name
 
@@ -86,8 +81,8 @@ can produce different components depending on who includes it (see chameleon
 includes, §1.5).
 
 **Consequence for design:** the component model is the product. Validation,
-codegen, unit extraction and config generation are all consumers of it, and
-none of them should be allowed to shortcut into the syntax.
+codegen and every other consumer are built on it, and none of them should be
+allowed to shortcut into the syntax.
 
 ### 1.2 The component inventory
 
@@ -232,27 +227,23 @@ an XPath test over the instance's *attributes*); `xs:openContent`;
 relaxed UPA; the `vc:minVersion`/`vc:maxVersion`/`vc:typeAvailable` conditional
 attributes that let one document carry both 1.0 and 1.1 variants.
 
-### 1.9 Annotations — the hook units hang on
+### 1.9 Annotations — the standard's extension point
 
 `xs:annotation` carries `xs:documentation` (human) and `xs:appinfo`
-(machine-readable, arbitrary foreign-namespace XML). Surveying how real
-standards attach units of measure gives five distinct conventions:
+(machine-readable, arbitrary foreign-namespace XML). `appinfo` is the one
+place the specification sets aside for conventions it does not itself define,
+and schema families use it heavily: database mappings, UI hints, code-list
+references, provenance.
 
-| Convention | Example | Unit known at schema-compile time? |
-|---|---|---|
-| **Instance attribute** | GML/WITSML `<length uom="m">3.2</length>` | No — per value |
-| **Schema-fixed attribute** | `<xs:attribute name="uom" type="xs:string" fixed="m"/>` | **Yes** |
-| **`appinfo` annotation** | `<xs:appinfo><u:unit>Pa</u:unit></xs:appinfo>` | **Yes** |
-| **Type naming** | `LengthMeasure`, `md:pressureUom` | Heuristically |
-| **External dictionary** | WITSML `witsmlUnitDict.xml`, GML `gml:UnitDefinition` + `xlink:href="#m"` | Yes, with the dictionary |
+Because the content is foreign XML with no schema-defined meaning, there is
+nothing useful a reader can do with it except **keep it exactly as written**.
+Anything else — normalising it, summarising it, parsing it against a guess at
+the convention — destroys precisely the information the caller reached for it
+to get.
 
-The two "yes" rows are the ones that reduce to a constant scale and offset,
-fixed for the whole column. The instance-attribute row cannot: a `uom` that
-varies per row needs conversion at read time, not a schema-derived constant
-(§3.7).
-
-**Design consequence:** units must be a *pluggable annotation-extraction*
-layer with built-in profiles, not a hardcoded feature.
+**Design consequence:** `appinfo` is stored verbatim, with prefixes resolved
+so no namespace binding is lost. Interpreting it is the caller's job, because
+only the caller knows the convention.
 
 ### 1.10 Practical hazards worth designing against
 
@@ -360,10 +351,6 @@ particular downstream reader belongs in a library of its own: it would drag
 that reader's dependencies into every tree that only wanted to read a
 schema (§3.0b).
 
-**Out of scope — unit conversion arithmetic.** Dimensional analysis is not an
-XSD concern. `xsdkit` reports what the schema *says*; converting is somebody
-else's crate.
-
 ### 3.2 Layout
 
 Follow the `xml2arrow` precedent: one crate, strict internal module boundaries,
@@ -371,7 +358,7 @@ feature-gated consumers, Python bindings behind a `python` feature.
 
 ```
 xsdkit/
-├── Cargo.toml            # features: validate, units, python
+├── Cargo.toml            # features: validate, python
 ├── src/
 │   ├── lib.rs
 │   ├── datatypes/        # value spaces, lexical mappings, facets, XSD regex
@@ -379,7 +366,6 @@ xsdkit/
 │   ├── load/             # documents, resolvers, catalogs, include/import/override
 │   ├── compile/          # resolution, derivation, subst groups, automata, UPA
 │   ├── validate/         # streaming validator + PSVI            (feature)
-│   ├── units/            # binding extraction profiles           (feature)
 │   ├── diagnostics.rs    # codes, spans, severities
 │   └── python.rs         # pyo3                                   (feature)
 └── python/               # maturin project + type stubs
@@ -468,7 +454,7 @@ pub enum Value {
 
 - ~~**Reuse `oxsdatatypes`**~~ for `decimal` / `duration` / the date-time
   family. This was the plan, and it held for most of the project's life; the
-  datatypes are now implemented in `src/atomic.rs` instead. See §3.13.4 for
+  datatypes are now implemented in `src/atomic.rs` instead. See §3.12.4 for
   how that decision was made, defended twice, and finally reversed on
   evidence.
 - **Transpile XSD regex to the `regex` crate** rather than writing an engine
@@ -554,51 +540,7 @@ Three honest limitations, stated up front rather than discovered later:
 | `xs:assert` | ❌ needs the element's whole subtree | requires a buffering mode; document it |
 | `xs:key` / `keyref` | ❌ document-scope state | optional, with a memory cap |
 
-### 3.7 Units — why there is no units layer
-
-**Cut, on evidence.** Earlier drafts of this plan had a units layer with
-per-vendor profiles. Investigating it produced the opposite conclusion.
-
-There is no standard for *where* a unit lives in an XSD. Units were put to the
-XML Schema Working Group in 1999 as an optional facet on scalar datatypes and
-not adopted; UnitsML has been an OASIS Committee Specification Draft since
-2011 and is in any case a language for describing units, not for annotating a
-schema. What *is* standardised is the vocabulary written in the slot — UCUM
-for GML and HL7, UN/CEFACT Rec. 20 for UBL and e-invoicing — never the slot.
-
-Measured over nine shipping schemas (GML 3.2, OGC O&M 2.0, WaterML 2.0,
-CityGML 2.0, SensorML, SWE Common, UBL 2.1) there are five unit-bearing
-attribute declarations, all `use="required"` with a free value, and **none
-uses `fixed`**. Interchange standards leave the unit open on purpose: pinning
-it would force every producer to convert before serialising. `fixed` is a
-closed-schema decision.
-
-#### The decisive argument
-
-Everything a unit reader needs is already public API, and there are only three
-shapes to distinguish:
-
-| Shape | How it is recognised | Compiles to a constant? |
-|---|---|---|
-| **Fixed** | the attribute use has a `fixed` value | **Yes** — the only one that can |
-| **Enumerated** | its type has an `enumeration` facet | No — the document chooses |
-| **Per-instance** | neither | No |
-
-Fifteen lines of consumer code cover all three, and `examples/units.rs` is
-that code, run against real GML and a synthetic fixed-unit schema. A layer
-inside `xsdkit` would add a *heuristic* — "an attribute named `uom`ish on
-simple content over a numeric base" — that is right most of the time and
-silently wrong the rest. For a schema reader that is the worst available
-outcome: a wrong unit is worse than no unit, because nothing downstream can
-tell.
-
-So `xsdkit` exposes the facts and stops: attribute uses folded down the
-derivation chain, `fixed` and `default` values, enumeration facets, `appinfo`
-kept verbatim, and schema-supplied attribute values in the PSVI flagged
-`from_schema`. Interpreting them is a per-schema-family decision, and it
-belongs with whoever knows the schema family.
-
-### 3.8 Diagnostics
+### 3.7 Diagnostics
 
 ```rust
 pub struct Diagnostic {
@@ -618,7 +560,7 @@ feature they will notice first.
 Match the `xml2arrow` house rule: structured enums, never stringly-typed
 errors, and `Display` output treated as a stability surface.
 
-### 3.9 Security model
+### 3.8 Security model
 
 Mirroring `xml2arrow`'s trust-model section, since schemas arrive from
 elsewhere just as often as documents do:
@@ -632,7 +574,7 @@ elsewhere just as often as documents do:
 - **Recursion guards** in every graph walk (derivation chains, substitution
   closure, include/import cycles).
 
-### 3.10 Testing
+### 3.9 Testing
 
 | Layer | Approach |
 |---|---|
@@ -643,7 +585,7 @@ elsewhere just as often as documents do:
 | **Fuzzing** | `cargo-fuzz` on the schema loader and the regex transpiler. |
 | **Bench** | `criterion` + CodSpeed, already in use. Track: compile time for UBL/AUTOSAR, validation throughput MB/s, `Schemas` deserialize time. |
 
-### 3.11 Python bindings
+### 3.10 Python bindings
 
 The reason this moved to the front of the queue: most XSD processing happens
 in Python, and `xmlschema` is the only complete option there — 40–75× slower
@@ -765,11 +707,10 @@ Mechanics:
   binding can never lag the model it wraps.
 
 Deferred to later phases, and named here so the API leaves room: typed
-streaming reads (`schemas.read_typed("doc.xml")`, P4), unit bindings
-(`schemas.units(profile="energistics")`, P5), and caching a compiled
+streaming reads (`schemas.read_typed("doc.xml")`, P4) and caching a compiled
 `Schemas` to disk (§3.3) so repeated interpreter starts do not recompile UBL.
 
-### 3.12 Staging
+### 3.11 Staging
 
 | Phase | Deliverable | Gate |
 |---|---|---|
@@ -778,7 +719,6 @@ streaming reads (`schemas.read_typed("doc.xml")`, P4), unit bindings
 | ~~**P2**~~ | ~~`compile`: derivation, substitution closure, content automata, UPA~~ | **done** — 55 automata, 0 UPA findings on a valid schema |
 | **P3** | **Python bindings** — the component model, Pythonic, on PyPI. Plus the `Resolver` encoding fix (below), which is breaking and must land before the API is wrapped. | wheels on 3.9–3.14; the fixture queried from Python; a Latin-1 schema loads |
 | **P4** | `validate`: streaming validator + PSVI + `TypedReader`, exposed in Python as it lands | W3C instance tests; differential vs. `xmlschema` |
-| ~~**P5**~~ | ~~`units`: extraction profiles~~ | **cut** — no standard to implement, and the public API already suffices (§3.7) |
 | **P5** | XSD 1.1: assertions, conditional type assignment, `openContent`, `override` | W3C 1.1 tests |
 
 **Why Python at P3.** Binding early is cheaper than binding late: it forces
@@ -787,13 +727,7 @@ later phase adds a thin layer rather than a retrofit. It also means every
 phase from here ships something usable to a Python user, rather than three
 phases of Rust-only work before anything is reachable.
 
-**Why units are gone.** They were one of the two original motivating
-features, so cutting the phase took evidence rather than taste: no standard
-exists to implement, real interchange schemas leave units free, and the three
-binding shapes are already reachable through the public API in fifteen lines
-(§3.7). What remains is a worked example, not a subsystem.
-
-### 3.13 Decisions worth making explicitly
+### 3.12 Decisions worth making explicitly
 
 1. **1.0 or 1.1?** Recommend: implement 1.0 semantics first, but shape the
    component model for 1.1 from day one — first-class (optional) slots for
@@ -864,11 +798,11 @@ binding shapes are already reachable through the public API in fifteen lines
    guess, and the original answer was the right one.
 5. **Codegen?** No — see §3.1. This is the load-bearing exclusion.
 6. **How much belongs in one package?** Only the reader (§3.0b). `xsdkit`
-   stays generic and almost dependency-free; consumers built on it, and
-   unit-conversion arithmetic, live outside. The test is simple: would someone
-   who has an XSD problem and no interest in your output format still want
-   this dependency? For the reader, yes — which is the whole argument.
+   stays generic and almost dependency-free; consumers built on it live
+   outside. The test is simple: would someone who has an XSD problem and no
+   interest in your output format still want this dependency? For the reader,
+   yes — which is the whole argument.
 7. **Bind Python early or late?** Early, at P3. The API is small enough now
    that binding it is a day's work and a good forcing function; after
-   validation and units land it would be three times the surface and the
-   ergonomic mistakes would already be baked in.
+   validation lands it would be twice the surface and the ergonomic mistakes
+   would already be baked in.

@@ -3,7 +3,7 @@
 //! All of them are implemented here. They were wrappers around `oxsdatatypes`
 //! until that library was found to reject `--02-29` — a valid `xs:gMonthDay`,
 //! since the type names no year — and owning them turned out to be a few
-//! hundred lines, most of it shared. `DESIGN.md` §3.13.4 records how that
+//! hundred lines, most of it shared. `DESIGN.md` §3.12.4 records how that
 //! decision was reached and reversed.
 //!
 //! Three rules run through everything below, and they are where the subtlety

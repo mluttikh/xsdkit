@@ -2071,8 +2071,8 @@ impl<'r> Loader<'r> {
 
     /// Reads the `xs:annotation` child, keeping `appinfo` content verbatim.
     ///
-    /// The raw XML is what the units layer will need: a unit written into
-    /// `appinfo` cannot be recovered from a summary.
+    /// The raw XML is the point: whatever convention a schema family wrote
+    /// into `appinfo` cannot be recovered from a summary of it.
     fn read_annotation(&mut self, node: roxmltree::Node, ctx: &DocCtx) -> Option<AnnotationId> {
         let ann = node
             .children()

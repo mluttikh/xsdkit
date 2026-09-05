@@ -27,19 +27,18 @@ contract, not an accident.
   downstream reader. That belongs in a library of its own. Never add a
   dependency on one here — someone with an XSD problem and no interest in your
   output format must still want this crate.
-- **Units are out, extraction included.** No standard says where a unit lives
-  in an XSD, so any built-in detection is a heuristic — right most of the
-  time, silently wrong the rest, and a wrong unit is worse than no unit. The
-  crate exposes attribute uses, `fixed`/`default` values, enumerations and
-  `appinfo`; `examples/units.rs` shows the fifteen lines that turn those into
-  one schema family's convention. Do not add a `units` module.
+- **No interpretation of conventions the standard does not define.** Where a
+  schema family encodes something of its own — in `appinfo`, in an attribute
+  name, in a type-naming scheme — the crate exposes the facts and stops. Any
+  built-in detection would be a heuristic: right most of the time, silently
+  wrong the rest, and a silently wrong answer is worse than no answer.
 - **Design rationale:** `DESIGN.md`. Read Part I before touching the model —
   most XSD bugs come from not knowing the spec, not from bad Rust.
 
 **Core philosophy:**
-- **The component model is the product.** Validation, unit extraction and
-  config generation are consumers of it. Nothing may shortcut back into the
-  document syntax.
+- **The component model is the product.** Validation and every other
+  consumer are built on it. Nothing may shortcut back into the document
+  syntax.
 - **Compile once, query many.** `Schemas` is immutable and reusable.
 - **Collect diagnostics, never bail on the first.** A schema author fixing a
   40-file import graph needs the whole list.
@@ -458,7 +457,7 @@ What the wrappers expose is what a consumer actually does with a parsed value:
 build a `chrono::DateTime`, an Arrow column or a Python `datetime`. Add to
 that list rather than handing out the inner value.
 
-This was never about leaving the library; `DESIGN.md` §3.13.4 says why keeping
+This was never about leaving the library; `DESIGN.md` §3.12.4 says why keeping
 it is right. It is that after 1.0 the choice could not be revisited, and now
 replacing any one type is an internal change.
 
@@ -526,7 +525,7 @@ has the wrong number of particles.
    can say whether `--02-29` is a date.
 
    It found one, and it was in the backend rather than here: see
-   `DESIGN.md` §3.13.4 and `src/atomic.rs`. **Write expectations from the
+   `DESIGN.md` §3.12.4 and `src/atomic.rs`. **Write expectations from the
    specification, not from what the code prints** — a test that records
    current output asserts nothing.
 
@@ -547,7 +546,7 @@ has the wrong number of particles.
 
 6. ~~Report the `oxsdatatypes` findings upstream.~~ **Dropped**, deliberately
    rather than forgotten: the crate no longer depends on it. The three
-   findings stay written down in `DESIGN.md` §3.13.4, since they are the
+   findings stay written down in `DESIGN.md` §3.12.4, since they are the
    evidence for the decision recorded there.
 
 7. ~~**Drop `oxsdatatypes` entirely.**~~ **Done.** All 14 datatypes are in
@@ -559,7 +558,7 @@ has the wrong number of particles.
    Kept below is the reasoning that said not to, because it was right up until
    the evidence changed, and because the same judgement will be needed again.
 
-   The evidence *had* said no (`DESIGN.md` §3.13.4): a direct probe found it
+   The evidence *had* said no (`DESIGN.md` §3.12.4): a direct probe found it
    correct on the parts that are genuinely hard, its only dependency was
    `thiserror`, and the problems this crate hit were one performance bug we
    routed around and two version differences that were ours. What changed the
@@ -601,13 +600,12 @@ has the wrong number of particles.
 
 ## Planned, not present
 
-Deliberately out of scope until their phase (see `DESIGN.md` §3.12): XSD 1.1
-assertions and conditional type assignment (P5, next). Units were a planned
-phase and were **cut on evidence** — see `DESIGN.md` §3.7.
+Deliberately out of scope until their phase (see `DESIGN.md` §3.11): XSD 1.1
+assertions and conditional type assignment (P5, next).
 
 Three seams already exist and must not be removed:
 - `Annotation::appinfo` keeps `appinfo` XML **verbatim** — a caller cannot
-  recover a unit, a database mapping or a UI hint from a summary.
+  recover a database mapping or a UI hint from a summary.
 - `Schemas::possible_children` / `child_repeats` / `child_is_optional` answer
   a consumer's table-versus-column and nullability questions from the
   automaton, not from a guess over the particle tree.
@@ -704,9 +702,9 @@ practice, since each was a real complaint:
 ### 7. Schema-supplied values, and checks we do not do
 
 An absent attribute with `fixed` or `default` is **supplied** by the schema
-into the PSVI, flagged `from_schema`. Without that, `<length>3.2</length>`
-appears to have no unit even when the schema pins one — which is the whole
-point of the `fixed` pattern.
+into the PSVI, flagged `from_schema`. Without that, a value whose meaning the
+schema pins with `fixed` would look unqualified in the document — which is the
+whole point of the `fixed` pattern.
 
 Two derivation validity checks are **not** implemented, and both currently
 pass silently:

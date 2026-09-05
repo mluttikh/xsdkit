@@ -61,23 +61,20 @@ This was not the first plan. An existing crate was used, defended twice on
 review, and then removed on evidence when the W3C suite found it rejecting
 `--02-29` as an `xs:gMonthDay`. Conformance went *up* after the removal. The
 decision record, including the two answers that were wrong, is kept in
-`DESIGN.md` §3.13.4 rather than quietly rewritten.
+`DESIGN.md` §3.12.4 rather than quietly rewritten.
 
-## No units layer, on purpose
+## Facts, not interpretation
 
-No standard says *where* a unit of measure lives in an XSD. It was proposed to
-the XML Schema Working Group in 1999 and not adopted; UnitsML has been a
-committee draft since 2011. Only the vocabulary is standardised (UCUM,
-UN/CEFACT Rec. 20) — never the slot.
+Schema families encode conventions the standard never defined — in `appinfo`,
+in attribute names, in type-naming schemes. `xsdkit` exposes the facts and
+stops: attribute uses folded down the derivation chain, `fixed` and `default`
+values, enumeration facets, `appinfo` kept verbatim, and schema-supplied
+values flagged in the PSVI.
 
-So `xsdkit` exposes the facts instead: attribute uses folded down the
-derivation chain, `fixed` and `default` values, enumeration facets, `appinfo`
-kept verbatim, and schema-supplied values flagged in the PSVI. Turning those
-into your schema family's convention is about fifteen lines; see
-[`examples/units.rs`](https://github.com/mluttikh/xsdkit/blob/main/examples/units.rs).
-
-A built-in heuristic would be right most of the time and silently wrong the
-rest, and a wrong unit is worse than no unit.
+Building the interpretation on top is a handful of lines for someone who knows
+the convention. A built-in heuristic would be right most of the time and
+silently wrong the rest — and a silently wrong answer is worse than none,
+because nothing downstream can tell.
 
 ## What is deliberately out of scope
 

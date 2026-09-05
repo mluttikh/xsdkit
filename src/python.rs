@@ -1506,7 +1506,7 @@ impl PyAttribute {
         }
     }
 
-    /// A schema-declared constant value — the case a units layer can resolve
+    /// A schema-declared constant value — the case that can be resolved
     /// without seeing an instance document.
     #[getter]
     fn fixed(&self) -> Option<String> {
@@ -1936,7 +1936,7 @@ impl PyType_ {
     /// The `xs:appinfo` blocks, with their XML kept verbatim.
     ///
     /// Kept as written, because a summary cannot be un-summarised: this is
-    /// where a schema hides units, labels and anything else its authors agreed
+    /// where a schema hides labels, mappings and anything else its authors agreed
     /// on.
     #[getter]
     fn appinfo(&self) -> Vec<PyAppInfo> {

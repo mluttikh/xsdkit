@@ -178,7 +178,10 @@ fn appinfo_survives_a_real_schema() {
         .iter_annotations()
         .filter(|(_, a)| !a.appinfo.is_empty())
         .count();
-    assert!(with_appinfo > 0, "appinfo must be kept for the units layer");
+    assert!(
+        with_appinfo > 0,
+        "appinfo must be kept verbatim, not discarded"
+    );
 }
 
 #[test]

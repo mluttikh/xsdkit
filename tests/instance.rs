@@ -233,8 +233,7 @@ fn a_bad_attribute_value_is_reported() {
     );
 }
 
-/// A `fixed` attribute may be repeated but not contradicted — the case the
-/// units layer will lean on.
+/// A `fixed` attribute may be repeated but not contradicted.
 #[test]
 fn a_fixed_attribute_may_be_repeated_but_not_changed() {
     let s = schema(
