@@ -376,3 +376,24 @@ def test_documents_may_be_bytes():
     assert s.validate(latin.encode("iso-8859-1")).is_valid
     with pytest.raises(ValueError, match="str or bytes"):
         s.validate(42)
+
+
+def test_facets_are_the_ones_in_force():
+    """A restriction inherits what its base constrained.
+
+    Reporting only the declared set disagrees with `validate`, which composes
+    the chain.
+    """
+    s = build(
+        '<xs:simpleType name="A"><xs:restriction base="xs:string">'
+        '<xs:minLength value="2"/></xs:restriction></xs:simpleType>'
+        '<xs:simpleType name="B"><xs:restriction base="tns:A">'
+        '<xs:maxLength value="8"/></xs:restriction></xs:simpleType>'
+    )
+    b = s.type(NS, "B")
+    assert (b.facets.min_length, b.facets.max_length) == (2, 8)
+    assert not b.is_valid("a") and b.is_valid("abc")
+
+    # What this step wrote, for a tool rendering the schema back out.
+    assert b.declared_facets.min_length is None
+    assert b.declared_facets.max_length == 8

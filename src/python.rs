@@ -1397,11 +1397,29 @@ impl PyType_ {
             .unwrap_or_default()
     }
 
+    /// The facets *this type* declares, without its base's.
+    ///
+    /// What the restriction step wrote, which is what a tool rendering a
+    /// schema back wants. [`Self::facets`] is what a validator applies.
+    #[getter]
+    fn declared_facets(&self) -> Option<PyFacets> {
+        self.s[self.id]
+            .as_simple()
+            .map(|t| PyFacets(t.facets.clone()))
+    }
+
+    /// The facets in force, composed down the whole restriction chain.
+    ///
+    /// Not the ones this type declares — those are on
+    /// [`Self::declared_facets`]. A restriction inherits everything its base
+    /// constrained, so a type that says only `maxLength` still has its base's
+    /// `minLength`, and reporting the declared set alone disagrees with what
+    /// `validate` does.
     #[getter]
     fn facets(&self) -> Option<PyFacets> {
         self.s[self.id]
             .as_simple()
-            .map(|t| PyFacets(t.facets.clone()))
+            .map(|_| PyFacets(crate::validate::effective_facets(&self.s, self.id)))
     }
 
     #[getter]
@@ -1443,8 +1461,12 @@ impl PyType_ {
     }
 }
 
-/// The facets in force on a simple type, after composing its whole
-/// restriction chain.
+/// A set of facets on a simple type.
+///
+/// The bounds and enumerations are kept as the lexical forms the schema wrote,
+/// not as typed values: a facet constrains the lexical space as much as the
+/// value space, and the string is what the document said. Pass one through
+/// `Type.validate` to get the value.
 #[pyclass(module = "xsdkit", name = "Facets", frozen, skip_from_py_object)]
 #[derive(Clone)]
 pub struct PyFacets(crate::datatypes::FacetSet);

@@ -319,7 +319,7 @@ impl<'a> Validator<'a> {
 /// A type stores only the facets it declares itself, so the set in force is
 /// the composition from the root down — which is also what keeps patterns
 /// ANDing across steps.
-fn effective_facets(schemas: &Schemas, id: TypeId) -> FacetSet {
+pub(crate) fn effective_facets(schemas: &Schemas, id: TypeId) -> FacetSet {
     let chain = simple_chain(schemas, id);
     let mut out = FacetSet::new();
     for ty in chain.into_iter().rev() {

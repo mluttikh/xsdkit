@@ -101,6 +101,13 @@ class AppInfo:
     xml: str
 
 class Facets:
+    """A set of facets on a simple type.
+
+    Bounds and enumerations are the lexical forms the schema wrote, not typed
+    values: a facet constrains the lexical space as much as the value space.
+    Pass one through ``Type.validate`` for the value.
+    """
+
     @property
     def length(self) -> int | None: ...
     @property
@@ -243,7 +250,17 @@ class Type:
     @property
     def member_types(self) -> list[Type]: ...
     @property
-    def facets(self) -> Facets | None: ...
+    def facets(self) -> Facets | None:
+        """The facets in force, composed down the whole restriction chain.
+
+        A restriction inherits everything its base constrained, so a type that
+        declares only ``maxLength`` still has its base's ``minLength``. This is
+        what ``validate`` applies.
+        """
+    @property
+    def declared_facets(self) -> Facets | None:
+        """The facets *this type* declares, without its base's — what the
+        restriction step wrote."""
     @property
     def doc(self) -> str | None: ...
     @property
