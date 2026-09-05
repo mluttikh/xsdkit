@@ -11,8 +11,8 @@
 //! - **Whether an element may repeat** — whether its position can reach
 //!   itself.
 //!
-//! The last two are the primitives the future `xml2arrow` config generator's
-//! table/column split is built on.
+//! The last two are the primitives a table-versus-column split is built on,
+//! for anything mapping a schema onto a relational or columnar shape.
 //!
 //! # Derivation
 //!

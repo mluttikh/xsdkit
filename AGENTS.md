@@ -23,10 +23,10 @@ zero: `roxmltree` has no transitive dependencies. The risk to watch is that
 the two libraries have subtly different XML-level semantics — entity handling,
 whitespace, DTD acceptance — so where that matters it must be a documented
 contract, not an accident.
-- **Not in this crate:** the `xml2arrow` YAML generator is a **separate
-  package** (`xsd2arrow`). Never add an `arrow` or `xml2arrow` dependency
-  here — someone with an XSD problem and no interest in Arrow must still want
-  this crate.
+- **Not in this crate:** generating a config or a binding for some particular
+  downstream reader. That belongs in a library of its own. Never add a
+  dependency on one here — someone with an XSD problem and no interest in your
+  output format must still want this crate.
 - **Units are out, extraction included.** No standard says where a unit lives
   in an XSD, so any built-in detection is a heuristic — right most of the
   time, silently wrong the rest, and a wrong unit is worse than no unit. The
@@ -458,7 +458,7 @@ What the wrappers expose is what a consumer actually does with a parsed value:
 build a `chrono::DateTime`, an Arrow column or a Python `datetime`. Add to
 that list rather than handing out the inner value.
 
-This was never about leaving the library; `DESIGN.md` §3.15.4 says why keeping
+This was never about leaving the library; `DESIGN.md` §3.13.4 says why keeping
 it is right. It is that after 1.0 the choice could not be revisited, and now
 replacing any one type is an internal change.
 
@@ -526,7 +526,7 @@ has the wrong number of particles.
    can say whether `--02-29` is a date.
 
    It found one, and it was in the backend rather than here: see
-   `DESIGN.md` §3.15.4 and `src/atomic.rs`. **Write expectations from the
+   `DESIGN.md` §3.13.4 and `src/atomic.rs`. **Write expectations from the
    specification, not from what the code prints** — a test that records
    current output asserts nothing.
 
@@ -547,7 +547,7 @@ has the wrong number of particles.
 
 6. ~~Report the `oxsdatatypes` findings upstream.~~ **Dropped**, deliberately
    rather than forgotten: the crate no longer depends on it. The three
-   findings stay written down in `DESIGN.md` §3.15.4, since they are the
+   findings stay written down in `DESIGN.md` §3.13.4, since they are the
    evidence for the decision recorded there.
 
 7. ~~**Drop `oxsdatatypes` entirely.**~~ **Done.** All 14 datatypes are in
@@ -559,7 +559,7 @@ has the wrong number of particles.
    Kept below is the reasoning that said not to, because it was right up until
    the evidence changed, and because the same judgement will be needed again.
 
-   The evidence *had* said no (`DESIGN.md` §3.15.4): a direct probe found it
+   The evidence *had* said no (`DESIGN.md` §3.13.4): a direct probe found it
    correct on the parts that are genuinely hard, its only dependency was
    `thiserror`, and the problems this crate hit were one performance bug we
    routed around and two version differences that were ours. What changed the
@@ -601,17 +601,16 @@ has the wrong number of particles.
 
 ## Planned, not present
 
-Deliberately out of scope until their phase (see `DESIGN.md` §3.14): XSD 1.1
-assertions and conditional type assignment (P5, next). The `xsd2arrow`
-package (P6) lives in its own repository. Units were a planned phase and were
-**cut on evidence** — see `DESIGN.md` §3.7.
+Deliberately out of scope until their phase (see `DESIGN.md` §3.12): XSD 1.1
+assertions and conditional type assignment (P5, next). Units were a planned
+phase and were **cut on evidence** — see `DESIGN.md` §3.7.
 
 Three seams already exist and must not be removed:
-- `Annotation::appinfo` keeps `appinfo` XML **verbatim** — the units layer
-  cannot recover a unit from a summary.
+- `Annotation::appinfo` keeps `appinfo` XML **verbatim** — a caller cannot
+  recover a unit, a database mapping or a UI hint from a summary.
 - `Schemas::possible_children` / `child_repeats` / `child_is_optional` answer
-  the config generator's table-versus-column and nullability questions from
-  the automaton, not from a guess over the particle tree.
+  a consumer's table-versus-column and nullability questions from the
+  automaton, not from a guess over the particle tree.
 - `ContentMatcher` is the validator's core loop; P4 adds typed values and
   attributes around it rather than replacing it.
 

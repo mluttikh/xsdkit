@@ -61,7 +61,7 @@ This was not the first plan. An existing crate was used, defended twice on
 review, and then removed on evidence when the W3C suite found it rejecting
 `--02-29` as an `xs:gMonthDay`. Conformance went *up* after the removal. The
 decision record, including the two answers that were wrong, is kept in
-`DESIGN.md` §3.15.4 rather than quietly rewritten.
+`DESIGN.md` §3.13.4 rather than quietly rewritten.
 
 ## No units layer, on purpose
 
@@ -84,11 +84,12 @@ rest, and a wrong unit is worse than no unit.
 **Code generation.** That is [`xsd-parser`](https://crates.io/crates/xsd-parser)'s
 job, and it does it well. Permanently out of scope.
 
-**`xml2arrow` config generation.** A separate package, `xsd2arrow`, so that
-reading a schema never pulls in `arrow`. Three seams in this crate exist to
-serve it — `Annotation::appinfo` verbatim, the `possible_children` /
-`child_repeats` / `child_is_optional` trio, and `ContentMatcher` — and are not
-to be removed.
+**Config and binding generation for a particular downstream reader.** That
+belongs in a library of its own, so reading a schema never pulls in
+dependencies you did not ask for. Three seams in this crate exist so such a
+consumer can be written against it — `Annotation::appinfo` verbatim, the
+`possible_children` / `child_repeats` / `child_is_optional` trio, and
+`ContentMatcher` — and are not to be removed.
 
 ## Roadmap
 
@@ -102,4 +103,3 @@ to be removed.
 | ✅ | XSD 1.1 open content, default attributes, relaxed UPA | done |
 | → | **XSD 1.1 assertions and conditional type assignment** | next |
 | | Identity constraint enforcement | |
-| | `xsd2arrow`, a separate package | |

@@ -32,9 +32,10 @@ element, and can they repeat?"*
 runs 40–75× slower than lxml.
 
 It is deliberately a *reader*, not a toolchain. Code generation is
-[`xsd-parser`](https://crates.io/crates/xsd-parser)'"'"'s job. Generating
-`xml2arrow` YAML is `xsd2arrow`'"'"'s — a separate package, so that reading a
-schema never pulls in `arrow`.
+[`xsd-parser`](https://crates.io/crates/xsd-parser)'s job, and generating a
+config or a binding for some particular downstream reader belongs in a library
+of its own — so that reading a schema never pulls in dependencies you did not
+ask for.
 
 ## Usage
 
@@ -196,7 +197,7 @@ cargo run --example inspect -- schemas/report.xsd --lax
 | ✅ | `redefine` / `override` | done |
 | ✅ | XSD 1.1 open content, default attributes, relaxed UPA | done |
 | → | **XSD 1.1 assertions and conditional type assignment** | next |
-| | `xsd2arrow`, a separate package | |
+| | Identity constraint enforcement | |
 
 Code generation is permanently out of scope.
 

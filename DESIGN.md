@@ -1,9 +1,7 @@
 # A Rust XSD Toolkit — Review and Design Proposal
 
 > Status: P0–P2 implemented (component model, loading, content automata, UPA).
-> Plan revised 2026-09-04 to put Python bindings next and move the
-> [`xml2arrow`](https://github.com/mluttikh/xml2arrow) YAML generator into a
-> separate package.
+> Plan revised 2026-09-04 to put Python bindings next.
 >
 > Goal: **`xsdkit`**, a generic XSD reader in Rust with first-class Python
 > bindings — parse a schema, query it as a model, validate and typed-read
@@ -35,33 +33,22 @@ layer over it — and Python bindings, because that is where most schema
 processing actually happens. Skip code generation entirely; `xsd-parser`
 already does it and it is the single largest sink of effort in this space.
 
-**The consumer.** `xml2arrow`'s per-field `scale` and `offset`
-(`value = value * scale + offset`) are *exactly* an affine unit conversion.
-The README's own example hand-writes `offset: 273.15` for °C→K and
-`scale: 100.0` for hPa→Pa. A schema-driven generator can emit those
-automatically for every schema-fixed unit — but it is a **separate library**
-built on `xsdkit`, not part of it (§3.0b).
 
+### What belongs in this package
 
-### The package split
+`xsdkit` is a generic XSD reader — component model, validation, typed reading
+— and keeps a dependency footprint of essentially nothing, so that anyone with
+an XSD problem wants it regardless of what they intend to do afterwards.
 
-Three packages, not one:
+Consumers built on top of it belong outside it. A downstream tool has a
+different dependency set and a different release cadence from a schema reader,
+and every dependency it needs would otherwise be paid for by people who never
+asked for it.
 
-| Package | What it is | Depends on |
-|---|---|---|
-| **`xsdkit`** (Rust + PyPI) | A generic XSD reader: component model, validation, typed reading, unit *extraction* | nothing XSD-external |
-| **`xsd2arrow`** (separate) | Generates `xml2arrow` YAML from a schema | `xsdkit`, `xml2arrow` |
-| a unit-conversion crate | Dimensional analysis and UCUM; nothing XSD-specific | — |
-
-The split earns itself three ways. `xsdkit` keeps a dependency footprint of
-essentially nothing, so it is adoptable by anyone with an XSD problem and no
-interest in Arrow. `xsd2arrow` can move at `xml2arrow`'s release cadence
-rather than the schema reader's. And unit *conversion* — dimension vectors,
-affine factors, UCUM parsing — is not an XSD concern at all and shouldn't
-live in a schema library; only unit **extraction** (finding the binding a
-schema declares) is introspection, and that stays in `xsdkit`.
-
-`xsd2arrow` is free on both crates.io and PyPI, checked alongside `xsdkit`.
+Unit *conversion* is outside for the same reason and one more: dimension
+vectors, affine factors and UCUM parsing are not an XSD concern at all. Only
+unit **extraction** — finding the binding a schema declares — is
+introspection, and even that turned out not to need a layer (§3.7).
 
 ### Name
 
@@ -70,10 +57,9 @@ registries in every separator variant (`xsdkit` / `xsd-kit` / `xsd_kit`), no
 existing project clash.
 
 - `xsd` in the name keeps it findable by the search people actually run.
-- `kit` covers reading, validating and introspecting honestly; `-parser`,
-  `-model` and `2arrow` each name only one of them.
-- **`xsd2arrow`** names the downstream package (§3.0b), which gives the
-  `xml2arrow` sibling naming without boxing this library's scope in.
+- `kit` covers reading, validating and introspecting honestly, where
+  `-parser` and `-model` each name only one of them, and a name ending in a
+  target format would box the scope in permanently.
 
 Ruled out despite being available: **`xsom`** — `org.glassfish.jaxb:xsom` is a
 shipping Java library doing exactly this job, so the name is already spoken for
@@ -204,8 +190,8 @@ Beyond that: circular import/include graphs are normal (key on absolute URI);
 multiple documents contribute to one namespace; and
 `elementFormDefault`/`attributeFormDefault` decide whether *local* elements are
 namespace-qualified in instances — the number-one cause of "why won't my XML
-validate", and directly load-bearing for path matching in generated
-`xml2arrow` configs.
+validate", and directly load-bearing for anything that matches paths against a
+document.
 
 ### 1.6 Derivation and substitutability
 
@@ -233,9 +219,9 @@ validate", and directly load-bearing for path matching in generated
 (child and attribute axes, `.//`, `|`). A `keyref` is literally a declared
 foreign key between two element sets.
 
-No tool in this survey exploits that. For our purposes it is a direct source of
-`links:` entries in an `xml2arrow` config and, more generally, of the
-relational structure of the document. This is a differentiator worth taking.
+No tool in this survey exploits that. It is a direct source of the relational
+structure of a document — which element sets reference which — and that is a
+differentiator worth taking.
 
 ### 1.8 XSD 1.1, briefly
 
@@ -260,9 +246,10 @@ standards attach units of measure gives five distinct conventions:
 | **Type naming** | `LengthMeasure`, `md:pressureUom` | Heuristically |
 | **External dictionary** | WITSML `witsmlUnitDict.xml`, GML `gml:UnitDefinition` + `xlink:href="#m"` | Yes, with the dictionary |
 
-The two "yes" rows are the ones that compile to `scale`/`offset` in an
-`xml2arrow` config. The instance-attribute row cannot — it needs per-row
-runtime conversion, which `xml2arrow` does not currently support (§3.7).
+The two "yes" rows are the ones that reduce to a constant scale and offset,
+fixed for the whole column. The instance-attribute row cannot: a `uom` that
+varies per row needs conversion at read time, not a schema-derived constant
+(§3.7).
 
 **Design consequence:** units must be a *pluggable annotation-extraction*
 layer with built-in profiles, not a hardcoded feature.
@@ -323,8 +310,8 @@ xml-schema      0.3.0    32k   2023-12-19   Struct generator from XSD (stale)
 codegen-oriented intermediate (`MetaTypes`) that deliberately discards
 validation semantics; `uppsala` builds one internally but exposes only
 `validate()`. Neither lets you ask "what are the possible children of this
-element, and can they repeat?" — which is the question both the units layer and
-the `xml2arrow` generator are made of.
+element, and can they repeat?" — which is the question every downstream
+consumer of a schema is made of.
 
 ### 2.3 Five lessons to carry into the design
 
@@ -368,13 +355,14 @@ the `xml2arrow` generator are made of.
 largest effort sink in this space, and it is orthogonal to everything above.
 Saying no here is what makes the rest finishable.
 
-**Out of scope — the `xml2arrow` config generator.** A separate library
-(§3.0b). It would drag `arrow` and `xml2arrow` into every dependency tree
-that only wanted to read a schema.
+**Out of scope — data-binding config generation.** Emitting a config for some
+particular downstream reader belongs in a library of its own: it would drag
+that reader's dependencies into every tree that only wanted to read a
+schema (§3.0b).
 
 **Out of scope — unit conversion arithmetic.** Dimensional analysis is not an
 XSD concern. `xsdkit` reports what the schema *says*; converting is somebody
-else'"'"'s crate.
+else's crate.
 
 ### 3.2 Layout
 
@@ -383,7 +371,7 @@ feature-gated consumers, Python bindings behind a `python` feature.
 
 ```
 xsdkit/
-├── Cargo.toml            # features: validate, units, xml2arrow, python
+├── Cargo.toml            # features: validate, units, python
 ├── src/
 │   ├── lib.rs
 │   ├── datatypes/        # value spaces, lexical mappings, facets, XSD regex
@@ -401,8 +389,8 @@ Split into a workspace only once a boundary has proved stable. `datatypes` is
 the likeliest first extraction — it is genuinely reusable and has no upward
 dependencies.
 
-There is no `xml2arrow` module and no `arrow` dependency: that generator is
-its own package (§3.0b).
+There is no module here for any particular downstream format, and no
+dependency on one (§3.0b).
 
 The Python package lives in `python/` in the same repository and ships from
 the same tag, so a binding can never lag the model it wraps.
@@ -480,7 +468,7 @@ pub enum Value {
 
 - ~~**Reuse `oxsdatatypes`**~~ for `decimal` / `duration` / the date-time
   family. This was the plan, and it held for most of the project's life; the
-  datatypes are now implemented in `src/atomic.rs` instead. See §3.15.4 for
+  datatypes are now implemented in `src/atomic.rs` instead. See §3.13.4 for
   how that decision was made, defended twice, and finally reversed on
   evidence.
 - **Transpile XSD regex to the `regex` crate** rather than writing an engine
@@ -610,85 +598,7 @@ kept verbatim, and schema-supplied attribute values in the PSVI flagged
 `from_schema`. Interpreting them is a per-schema-family decision, and it
 belongs with whoever knows the schema family.
 
-#### What this leaves for consumers
-
-`xsd2arrow` (§3.8) is the first such consumer. Its unit handling becomes a
-config option — "this schema puts units in `@uom`" — rather than a guess, and
-its `scale`/`offset` emission covers the `Fixed` shape exactly.
-
-### 3.8 `xsd2arrow` — the downstream config generator
-
-A **separate package** (§3.0b), built on `xsdkit` and scheduled last. It is
-sketched here because working the algorithm through is what surfaced the
-requirements `xsdkit` has to satisfy — `possible_children`, `child_repeats`,
-`child_is_optional` and the unit bindings all exist because of it.
-
-The algorithm, given a compiled `Schemas` and a root element:
-
-1. **Walk** the element tree from the root, expanding types, substitution
-   groups, and recursion up to a depth bound.
-2. **Compute effective repeatability.** An element is *repeating* if its
-   particle has `maxOccurs > 1` **or** it sits under a repeating ancestor
-   without an intervening repeating boundary.
-3. **Table rule:** a repeating element becomes a table's `row:` element. Its
-   nearest repeating ancestor becomes the `links: - parent:` target. Its
-   non-repeating simple-content descendants become that table's `fields:` with
-   *relative* `path:`s (the modern `xml2arrow` spelling).
-4. **Type map** XSD → `DType`:
-
-   | XSD | `DType` | Note |
-   |---|---|---|
-   | `boolean` | `Boolean` | |
-   | `byte`/`unsignedByte` … `long`/`unsignedLong` | `Int8`…`UInt64` | exact |
-   | `integer`, `nonNegativeInteger`, `decimal` | `Int64` **if** `totalDigits`/`maxInclusive` prove it fits, else `Float64`, else `Utf8` | **facets used as evidence — a real advantage over hand-written configs** |
-   | `float` / `double` | `Float32` / `Float64` | |
-   | `string` and derived, `anyURI`, `QName` | `Utf8` | |
-   | enumerated simple type | `Utf8` | ideally `Dictionary(Int32, Utf8)` — gap, §3.9 |
-   | `date`, `dateTime`, `time`, `duration`, `g*` | `Utf8` | **gap**, §3.9 |
-   | `hexBinary`, `base64Binary` | `Utf8` | gap |
-   | list variety | `Utf8` (joined) | ideally `List<T>` — gap |
-   | union | common supertype, else `Utf8` | |
-
-5. **Nullability is derivable exactly**: `nullable: true` iff `minOccurs = 0`,
-   or `nillable = true`, or the attribute `use` is `optional`, or the element
-   lies inside a `choice` or optional branch. Humans get this wrong constantly;
-   the schema states it precisely.
-6. **Value policies from the schema**: `nillable` → `on_missing: null`;
-   `xs:token`-derived types → `trim: true` (the `whiteSpace: collapse` facet
-   *is* the trim instruction); a `default`/`fixed` value → note it in a comment.
-7. **`links:` from `xs:keyref`** where the schema declares one, rather than
-   inferring purely from nesting.
-8. **Namespace decision.** Inspect `elementFormDefault`. Keep `strip_namespaces:
-   true` by default, but **emit a warning when two namespaces in the schema set
-   have colliding local names** — a correctness trap that is invisible in the
-   XML but obvious in the schema.
-9. **Pruning.** Real schemas explode (UBL would yield hundreds of tables).
-   Needs: include/exclude path globs, a max depth, a
-   "restrict to what appears in this sample document" mode (schema ∩ instance),
-   and a flatten threshold for one-child-deep wrappers.
-10. **Verify.** Generated config + sample XML → run `xml2arrow` with
-    `error_on_unmatched_fields: true` → every configured field must match.
-    Build this into the generator as a `--verify <sample.xml>` flag; it is a
-    self-checking test loop in the style of `xml2arrow`'s own corpus tests.
-
-### 3.9 Findings for `xml2arrow` itself
-
-Working through the type map surfaced four concrete gaps:
-
-1. **No temporal `DType`.** `xs:date`/`dateTime` are extremely common and
-   currently land in `Utf8`. Proposal: `Date32`, `Time64`,
-   `Timestamp(Microsecond, tz)`.
-2. **No dictionary type.** XSD enumerations are a perfect
-   `Dictionary(Int32, Utf8)` and often high-cardinality-savings.
-3. **No list/binary types.** `NMTOKENS`, `IDREFS` and any list-variety simple
-   type want Arrow `List<T>`; `hexBinary`/`base64Binary` want `Binary`.
-4. **No per-row unit conversion.** `scale`/`offset` are per-field constants;
-   `uom="ft"` varying per row cannot be expressed.
-
-All four are `DType` additions, and `DType` is already `#[non_exhaustive]` — so
-adding variants stays non-breaking. Worth filing before the generator ships.
-
-### 3.10 Diagnostics
+### 3.8 Diagnostics
 
 ```rust
 pub struct Diagnostic {
@@ -708,7 +618,7 @@ feature they will notice first.
 Match the `xml2arrow` house rule: structured enums, never stringly-typed
 errors, and `Display` output treated as a stability surface.
 
-### 3.11 Security model
+### 3.9 Security model
 
 Mirroring `xml2arrow`'s trust-model section, since schemas arrive from
 elsewhere just as often as documents do:
@@ -722,19 +632,18 @@ elsewhere just as often as documents do:
 - **Recursion guards** in every graph walk (derivation chains, substitution
   closure, include/import cycles).
 
-### 3.12 Testing
+### 3.10 Testing
 
 | Layer | Approach |
 |---|---|
 | **Conformance** | The **W3C XML Schema Test Suite** (~26k cases across 1.0 and 1.1). Wire it up in Phase 1 and publish a per-feature-area pass rate. Highest-leverage single decision in the plan. |
 | **Real-world corpus** | XHTML, SVG, GML, UBL, OGC, WITSML, ISO 20022, XBRL, AUTOSAR. Merely *loading* these is a strong smoke test. |
 | **Differential** | Run the same corpus through Python `xmlschema` and diff verdicts. It is the most complete OSS 1.1 implementation and makes an excellent oracle. `uppsala` as a second. |
-| **Round-trip** | schema → `xml2arrow` config → parse sample XML → assert the Arrow schema matches independently-derived expectations. Frozen-corpus style, matching `tests/corpus/` in `xml2arrow`. |
 | **Property** | Facet composition, automaton equivalence under particle rewrites, regex transpilation (XSD pattern vs. transpiled `regex` on generated strings). |
 | **Fuzzing** | `cargo-fuzz` on the schema loader and the regex transpiler. |
 | **Bench** | `criterion` + CodSpeed, already in use. Track: compile time for UBL/AUTOSAR, validation throughput MB/s, `Schemas` deserialize time. |
 
-### 3.13 Python bindings
+### 3.11 Python bindings
 
 The reason this moved to the front of the queue: most XSD processing happens
 in Python, and `xmlschema` is the only complete option there — 40–75× slower
@@ -860,7 +769,7 @@ streaming reads (`schemas.read_typed("doc.xml")`, P4), unit bindings
 (`schemas.units(profile="energistics")`, P5), and caching a compiled
 `Schemas` to disk (§3.3) so repeated interpreter starts do not recompile UBL.
 
-### 3.14 Staging
+### 3.12 Staging
 
 | Phase | Deliverable | Gate |
 |---|---|---|
@@ -871,7 +780,6 @@ streaming reads (`schemas.read_typed("doc.xml")`, P4), unit bindings
 | **P4** | `validate`: streaming validator + PSVI + `TypedReader`, exposed in Python as it lands | W3C instance tests; differential vs. `xmlschema` |
 | ~~**P5**~~ | ~~`units`: extraction profiles~~ | **cut** — no standard to implement, and the public API already suffices (§3.7) |
 | **P5** | XSD 1.1: assertions, conditional type assignment, `openContent`, `override` | W3C 1.1 tests |
-| **P6** | **`xsd2arrow`** — separate package, generates `xml2arrow` YAML | round-trip on `xml2arrow`'s own corpus + a real WITSML file |
 
 **Why Python at P3.** Binding early is cheaper than binding late: it forces
 the Rust API to be ergonomic while it is still cheap to change, and each
@@ -879,20 +787,13 @@ later phase adds a thin layer rather than a retrofit. It also means every
 phase from here ships something usable to a Python user, rather than three
 phases of Rust-only work before anything is reachable.
 
-**Why the generator is last.** It is a separate package (§3.0b) with a
-different dependency set and a different release cadence, and it is the only
-deliverable here that is not a *generic* XSD capability. Everything it needs
-from `xsdkit` — `possible_children`, `child_repeats`, `child_is_optional`,
-unit bindings — is built by P5, so it can start any time after that without
-blocking anything.
-
 **Why units are gone.** They were one of the two original motivating
 features, so cutting the phase took evidence rather than taste: no standard
 exists to implement, real interchange schemas leave units free, and the three
 binding shapes are already reachable through the public API in fifteen lines
 (§3.7). What remains is a worked example, not a subsystem.
 
-### 3.15 Decisions worth making explicitly
+### 3.13 Decisions worth making explicitly
 
 1. **1.0 or 1.1?** Recommend: implement 1.0 semantics first, but shape the
    component model for 1.1 from day one — first-class (optional) slots for
@@ -962,11 +863,11 @@ binding shapes are already reachable through the public API in fifteen lines
    be *judged*, and judging it took a day. Without them it would have been a
    guess, and the original answer was the right one.
 5. **Codegen?** No — see §3.1. This is the load-bearing exclusion.
-6. **One package or three?** Three (§3.0b). `xsdkit` stays a generic XSD
-   reader with almost no dependencies; `xsd2arrow` and the unit-conversion
-   arithmetic live outside it. The test is simple: would someone who has an
-   XSD problem and no interest in Arrow still want this dependency? For the
-   reader, yes. For a YAML generator that pulls in `arrow`, no.
+6. **How much belongs in one package?** Only the reader (§3.0b). `xsdkit`
+   stays generic and almost dependency-free; consumers built on it, and
+   unit-conversion arithmetic, live outside. The test is simple: would someone
+   who has an XSD problem and no interest in your output format still want
+   this dependency? For the reader, yes — which is the whole argument.
 7. **Bind Python early or late?** Early, at P3. The API is small enough now
    that binding it is a day's work and a good forcing function; after
    validation and units land it would be three times the surface and the
