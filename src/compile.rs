@@ -15,6 +15,7 @@
 //!    against the finished `Schemas`, so it can expand substitution groups
 //!    while building.
 
+use crate::datatypes::Builtin;
 use crate::diagnostics::{DiagCode, Diagnostic, Diagnostics, Severity, Span};
 use crate::load::{AttrOwner, Conformance, Fixup, Loader};
 use crate::model::*;
@@ -315,6 +316,17 @@ fn prune_placeholders(l: &mut Loader<'_>) {
             e.type_id = TypeId::from_index(0); // xs:anyType, installed first
         }
     }
+    // Attributes need the same repair, and a different fallback: an attribute
+    // may only carry a simple type, so xs:anyType would be a lie. Reached by a
+    // `type` that is not even a well-formed QName — nothing binds, and the
+    // declaration keeps its placeholder into `Schemas`. Found by fuzzing.
+    let any_simple = l.builtins[&Builtin::AnySimpleType];
+    for i in 0..l.attributes.len() as u32 {
+        let a = l.attributes.get_mut(i);
+        if a.type_id.is_placeholder() {
+            a.type_id = any_simple;
+        }
+    }
 
     // A type whose *entire* content is a dangling reference. The loops above
     // prune dangling particles out of their containers, but a content
@@ -334,6 +346,32 @@ fn prune_placeholders(l: &mut Loader<'_>) {
             if let TypeDefinition::Complex(c) = l.types.get_mut(i) {
                 c.content = ContentType::Empty;
             }
+        }
+    }
+
+    // Everything above unlinks dangling particles from whatever *contained*
+    // them, but the particles themselves stay in the arena, still holding the
+    // placeholder id. Nothing reachable points at them — and yet
+    // `Schemas::iter_particles` walks the arena, not the reachable graph, so a
+    // caller enumerating components still meets one and hands it straight back
+    // to `child_particles`, which indexes the placeholder and panics.
+    //
+    // So neutralize the terms too. The invariant `Schemas` is supposed to
+    // carry is that no placeholder survives compilation *anywhere*, not just
+    // where a traversal from the roots happens to look. An empty sequence is
+    // the inert particle: unreachable as it already was, and harmless when
+    // enumerated. Found by fuzzing the loader.
+    for i in 0..l.particles.len() as u32 {
+        let dangling = match &l.particles.get(i).term {
+            Term::Element(e) => e.is_placeholder(),
+            Term::GroupRef(g) => g.is_placeholder(),
+            _ => false,
+        };
+        if dangling {
+            l.particles.get_mut(i).term = Term::Group(ModelGroup {
+                compositor: Compositor::Sequence,
+                particles: Vec::new(),
+            });
         }
     }
 }

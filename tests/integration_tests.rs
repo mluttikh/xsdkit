@@ -1140,6 +1140,55 @@ fn a_type_whose_whole_content_is_a_dangling_group_ref_does_not_panic() {
     assert!(s.content_model(t).is_some());
 }
 
+// ---------------------------------------------------------------------------
+// Regressions found by fuzzing
+// ---------------------------------------------------------------------------
+
+/// Pruning unlinks a dangling particle from whatever contained it, but the
+/// particle stays in the arena — and `iter_particles` walks the arena rather
+/// than the reachable graph. So a caller enumerating components used to be
+/// handed a particle still holding a placeholder, and `child_particles` on it
+/// panicked.
+#[test]
+fn no_placeholder_survives_anywhere_in_the_particle_arena() {
+    let (s, d) = SchemaSetBuilder::new()
+        .conformance(Conformance::Lax)
+        .text(
+            schema(
+                r#"<xs:complexType name="T">
+                     <xs:sequence>
+                       <xs:any namespace="urn:other" minOccurs="0"/>
+                       <xs:group ref="tns:Nonexistent"/>
+                       <xs:element ref="tns:alsoMissing"/>
+                     </xs:sequence>
+                     <xs:attribute name="bad" type="xs%:string"/>
+                   </xs:complexType>
+                   <xs:element name="e" type="tns:T"/>"#,
+            ),
+            "mem://main.xsd",
+        )
+        .build_with_warnings();
+    assert!(d.iter().any(|x| x.code == DiagCode::UnresolvedReference));
+
+    // Every particle in the arena, not just the reachable ones.
+    for (id, _) in s.iter_particles() {
+        for child in s.child_particles(id) {
+            assert!(s.get_particle(child).is_some());
+        }
+    }
+    // An attribute whose `type` is not even a well-formed QName binds to
+    // nothing, and used to keep its placeholder. Its fallback is
+    // xs:anySimpleType, not xs:anyType: an attribute cannot carry a complex
+    // type.
+    for (_, a) in s.iter_attributes() {
+        assert!(s.get_type(a.type_id).is_some());
+    }
+
+    // The wildcard, the one member that did resolve, is still there.
+    let t = s.type_(Some(NS), "T").unwrap();
+    assert!(s.content_model(t).is_some());
+}
+
 /// The `xsi:` *attributes* are available to every schema without being
 /// declared. The `xsi` *prefix* is not: unlike `xml:`, which the Namespaces
 /// specification binds implicitly, `xsi` is an ordinary prefix a schema must
