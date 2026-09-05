@@ -478,10 +478,11 @@ pub enum Value {
 }
 ```
 
-- **Reuse `oxsdatatypes`** for `decimal` / `duration` / the date-time family.
-  It is Oxigraph's, MIT/Apache-2.0, actively maintained, and already carries
-  the ugly parts (arbitrary-precision decimal, timezone-aware comparison,
-  the two duration subtypes).
+- ~~**Reuse `oxsdatatypes`**~~ for `decimal` / `duration` / the date-time
+  family. This was the plan, and it held for most of the project's life; the
+  datatypes are now implemented in `src/atomic.rs` instead. See §3.15.4 for
+  how that decision was made, defended twice, and finally reversed on
+  evidence.
 - **Transpile XSD regex to the `regex` crate** rather than writing an engine
   (`uppsala` wrote its own; `xmlschema` translates to Python `re`). Write a
   parser for the XSD regex grammar, then lower it: implicit anchoring →
@@ -903,7 +904,13 @@ binding shapes are already reachable through the public API in fifteen lines
    differential oracle instead.
 3. **Build on `xsd-parser`?** No. `MetaTypes` is codegen-shaped and lossy about
    validation semantics. Do read its resolver design — that part is right.
-4. **Reuse `oxsdatatypes`?** Yes. Decimal, duration and the date-time family
+4. **Reuse `oxsdatatypes`?** Originally yes; **now no — it is gone**, and all
+   14 datatypes live in `src/atomic.rs`. The original reasoning and the two
+   revisits are kept below, because the judgement was right each time on the
+   evidence available, and the same call will come round again for whatever
+   replaces it.
+
+   *Originally:* yes. Decimal, duration and the date-time family
    are weeks of subtle work already done and battle-tested in Oxigraph.
 
    *Revisited after the W3C suite and the fuzzers were in place, which is the
@@ -941,6 +948,19 @@ binding shapes are already reachable through the public API in fifteen lines
    exact version of the library. `src/atomic.rs` wraps all 14 — not to leave
    `oxsdatatypes`, but so that leaving it later is an internal change rather
    than a breaking one.
+
+   *Revisited again, and reversed.* The wrapping is what made the reversal
+   cheap, and once `xs:gMonthDay` had to be written here anyway, the rest
+   turned out to be a few hundred lines sharing one timezone parser, one
+   ±14-hour ordering rule, one civil-calendar day number and one seconds
+   formatter. Conformance went up rather than down — instance cases correct
+   20,490 to 20,492 — and the crate now has no datatype dependency at all.
+
+   The lesson is not "write it yourself". It is that **the decision needed an
+   oracle**, and the project did not have one when it was first made. With the
+   W3C suite and four fuzz targets in place, an implementation of our own could
+   be *judged*, and judging it took a day. Without them it would have been a
+   guess, and the original answer was the right one.
 5. **Codegen?** No — see §3.1. This is the load-bearing exclusion.
 6. **One package or three?** Three (§3.0b). `xsdkit` stays a generic XSD
    reader with almost no dependencies; `xsd2arrow` and the unit-conversion

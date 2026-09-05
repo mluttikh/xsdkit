@@ -630,6 +630,39 @@ fn keyref_resolves_to_the_key_it_refers_to() {
     assert_eq!(s[*keyref].refer, Some(*key));
 }
 
+/// A list whose item type is itself, or a union containing itself, is
+/// circular — and checking a value against one would not terminate. The
+/// derivation walk follows `base` only, so it never saw these. Found by
+/// fuzzing, as a stack overflow rather than an error.
+#[test]
+fn a_simple_type_cannot_contain_itself() {
+    for body in [
+        r#"<xs:simpleType name="L"><xs:list itemType="tns:L"/></xs:simpleType>"#,
+        r#"<xs:simpleType name="U"><xs:union memberTypes="xs:int tns:U"/></xs:simpleType>"#,
+        // Round the houses rather than directly.
+        r#"<xs:simpleType name="A"><xs:list itemType="tns:B"/></xs:simpleType>
+           <xs:simpleType name="B"><xs:list itemType="tns:A"/></xs:simpleType>"#,
+    ] {
+        let d = errors(&schema(body));
+        assert!(
+            d.errors().any(|x| x.code == DiagCode::CircularDefinition),
+            "expected a cycle report for:\n{body}\ngot:\n{d}"
+        );
+    }
+
+    // And the validator survives one even when the model keeps it, which is
+    // what `Conformance::Lax` does.
+    let (s, _) = SchemaSetBuilder::new()
+        .conformance(Conformance::Lax)
+        .text(
+            schema(r#"<xs:simpleType name="L"><xs:list itemType="tns:L"/></xs:simpleType>"#),
+            "mem://main.xsd",
+        )
+        .build_with_warnings();
+    let t = s.type_(Some(NS), "L").expect("type");
+    assert!(s.validator().validate(t, "anything").is_err());
+}
+
 /// The invariant `Schemas` carries is that no placeholder survives compilation
 /// *anywhere*. Elements and attributes were repaired; the four places one type
 /// points at another were not, so a walk over a derivation chain met one and

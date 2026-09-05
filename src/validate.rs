@@ -43,6 +43,13 @@ pub enum ValidationError {
     /// A `QName` value needs the document's namespace bindings, which a
     /// standalone value check does not have.
     NeedsNamespaceContext,
+    /// The type refers to itself, directly or through its item or member
+    /// types, so checking a value against it would not terminate.
+    ///
+    /// Such a schema is rejected with `CircularDefinition`, but
+    /// `Conformance::Lax` keeps the model, and a validator must not blow the
+    /// stack on it.
+    CircularType,
 }
 
 impl fmt::Display for ValidationError {
@@ -54,6 +61,9 @@ impl fmt::Display for ValidationError {
                 write!(f, "no member type accepts this value ({tried} tried)")
             }
             ValidationError::NotSimple => f.write_str("a complex type has no value space"),
+            ValidationError::CircularType => {
+                f.write_str("the type refers to itself, so it admits no value")
+            }
             ValidationError::NeedsNamespaceContext => {
                 f.write_str("QName values must be resolved against the document's namespaces")
             }
@@ -147,14 +157,34 @@ impl<'a> Validator<'a> {
 
     /// Validates a lexical form against a simple type, returning its value.
     pub fn validate(&self, ty: TypeId, lexical: &str) -> Result<Value, ValidationError> {
+        self.validate_within(ty, lexical, 0)
+    }
+
+    /// The recursion behind [`Self::validate`], carrying how deep it is.
+    ///
+    /// A list's items and a union's members are themselves types, so checking
+    /// a value descends. A type that reaches itself that way is rejected when
+    /// the schema is compiled — but `Conformance::Lax` keeps the model anyway,
+    /// and a validator handed untrusted input must not blow the stack. The
+    /// limit is far above any real schema: nesting lists and unions sixty-four
+    /// deep is not something a person writes.
+    fn validate_within(
+        &self,
+        ty: TypeId,
+        lexical: &str,
+        depth: u32,
+    ) -> Result<Value, ValidationError> {
+        if depth > 64 {
+            return Err(ValidationError::CircularType);
+        }
         let Some(p) = self.prepared.get(ty.index()).and_then(Option::as_ref) else {
             return Err(ValidationError::NotSimple);
         };
 
         match p.variety {
             Variety::Atomic => self.atomic(p, lexical),
-            Variety::List => self.list(p, lexical),
-            Variety::Union => self.union(p, lexical),
+            Variety::List => self.list(p, lexical, depth),
+            Variety::Union => self.union(p, lexical, depth),
         }
     }
 
@@ -179,7 +209,7 @@ impl<'a> Validator<'a> {
         Ok(value)
     }
 
-    fn list(&self, p: &Prepared, lexical: &str) -> Result<Value, ValidationError> {
+    fn list(&self, p: &Prepared, lexical: &str, depth: u32) -> Result<Value, ValidationError> {
         let normalized = p.white_space.normalize(lexical);
         values::check_patterns(normalized.as_ref(), &p.patterns).map_err(ValidationError::Facet)?;
 
@@ -188,7 +218,7 @@ impl<'a> Validator<'a> {
         };
         let items = normalized
             .split_whitespace()
-            .map(|tok| self.validate(item, tok))
+            .map(|tok| self.validate_within(item, tok, depth + 1))
             .collect::<Result<Vec<_>, _>>()?;
 
         // An enumeration on a list names whole lists, so each literal has to
@@ -198,7 +228,7 @@ impl<'a> Validator<'a> {
         if let Some(allowed) = &p.facets.enumeration {
             let matched = allowed.iter().any(|lex| {
                 lex.split_whitespace()
-                    .map(|tok| self.validate(item, tok))
+                    .map(|tok| self.validate_within(item, tok, depth + 1))
                     .collect::<Result<Vec<_>, _>>()
                     .is_ok_and(|want| want == items)
             });
@@ -220,11 +250,11 @@ impl<'a> Validator<'a> {
         Ok(value)
     }
 
-    fn union(&self, p: &Prepared, lexical: &str) -> Result<Value, ValidationError> {
+    fn union(&self, p: &Prepared, lexical: &str, depth: u32) -> Result<Value, ValidationError> {
         // Declaration order decides which member the value belongs to, not
         // just whether it is valid at all.
         for &member in &p.members {
-            if let Ok(v) = self.validate(member, lexical) {
+            if let Ok(v) = self.validate_within(member, lexical, depth + 1) {
                 // The union's own facets still apply on top of the member's.
                 if !p.patterns.is_empty() {
                     let normalized = p.white_space.normalize(lexical);
@@ -233,9 +263,11 @@ impl<'a> Validator<'a> {
                 }
                 if let Some(allowed) = &p.facets.enumeration {
                     let ok = allowed.iter().any(|lex| {
-                        p.members
-                            .iter()
-                            .any(|m| self.validate(*m, lex).map(|x| x == v).unwrap_or(false))
+                        p.members.iter().any(|m| {
+                            self.validate_within(*m, lex, depth + 1)
+                                .map(|x| x == v)
+                                .unwrap_or(false)
+                        })
                     });
                     if !ok {
                         return Err(ValidationError::Facet(FacetViolation {

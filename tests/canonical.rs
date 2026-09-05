@@ -275,3 +275,90 @@ fn a_malformed_gmonthday_is_rejected_not_panicked() {
         assert!(parse(B::GMonthDay, s).is_err(), "{s:?} should be rejected");
     }
 }
+
+/// `T` separates a duration's date fields from its time ones. It is never a
+/// field itself, so a number in front of it names no quantity — `P8TH` reached
+/// an `unreachable!` before the fuzzer pointed it out.
+#[test]
+fn a_malformed_duration_is_rejected_not_panicked() {
+    for s in [
+        "-P8TH", "P8T", "PT", "P", "-P", "P1YT", "P1M1Y", "PT1S1H", "P1.5Y", "P1H", "PT1D", "1Y",
+        "P1Z", "P-1Y", "PT.5S", "P1Y2M3DT",
+    ] {
+        assert!(
+            parse(B::Duration, s).is_err(),
+            "{s:?} should be rejected, got {}",
+            canonical(B::Duration, s)
+        );
+    }
+    // The halves refuse each other's fields.
+    assert!(parse(B::YearMonthDuration, "P1D").is_err());
+    assert!(parse(B::DayTimeDuration, "P1Y").is_err());
+}
+
+#[test]
+fn duration_canonical_forms() {
+    // Fields that are zero are left out, and the whole thing carries one sign.
+    assert_eq!(canonical(B::Duration, "P0Y1M0DT0H0M0S"), "P1M");
+    assert_eq!(
+        canonical(B::Duration, "-P1Y2M3DT4H5M6.5S"),
+        "-P1Y2M3DT4H5M6.5S"
+    );
+    assert_eq!(canonical(B::Duration, "P24M"), "P2Y");
+    assert_eq!(canonical(B::Duration, "PT60S"), "PT1M");
+    assert_eq!(canonical(B::Duration, "PT3600S"), "PT1H");
+    assert_eq!(canonical(B::Duration, "PT86400S"), "P1D");
+    // Zero has to be written as something, and the specification picks
+    // seconds.
+    assert_eq!(canonical(B::Duration, "PT0S"), "PT0S");
+    assert_eq!(canonical(B::Duration, "P0Y"), "PT0S");
+    for s in [
+        "P1Y", "P1M", "P1D", "PT1H", "PT1M", "PT1S", "PT0.5S", "-P1D",
+    ] {
+        round_trips(B::Duration, s);
+    }
+}
+
+/// Equality on the temporal types is the order relation, not the fields.
+/// `13:00+01:00` and `12:00Z` are one instant written two ways, so an
+/// enumeration listing either has to admit both.
+#[test]
+fn temporal_equality_is_in_the_value_space() {
+    let eq = |b: B, x: &str, y: &str| parse(b, x).unwrap() == parse(b, y).unwrap();
+
+    assert!(eq(
+        B::DateTime,
+        "2010-09-20T13:00:00+01:00",
+        "2010-09-20T12:00:00Z"
+    ));
+    assert!(eq(B::Time, "13:00:00+01:00", "12:00:00Z"));
+    assert!(eq(B::Date, "2024-01-01Z", "2024-01-01+00:00"));
+    assert!(eq(B::GYear, "2024Z", "2024+00:00"));
+    assert!(!eq(
+        B::DateTime,
+        "2024-01-01T00:00:00Z",
+        "2024-01-02T00:00:00Z"
+    ));
+    // Incomparable is not equal: one has a timezone and the other does not.
+    assert!(!eq(
+        B::DateTime,
+        "2024-01-01T12:00:00",
+        "2024-01-01T12:00:00Z"
+    ));
+}
+
+/// The year is unbounded in the lexical space, so an instant scaled all the
+/// way down to 10^-18 seconds does not fit in an `i128`. Comparing whole
+/// minutes and the remainder as a pair keeps each half small. Found by
+/// fuzzing, as a multiply overflow.
+#[test]
+fn a_far_future_datetime_still_compares() {
+    let far = parse(B::DateTime, "6044555555555-06-06T22:13:00").unwrap();
+    let near = parse(B::DateTime, "2024-01-01T00:00:00").unwrap();
+    assert_eq!(far.partial_cmp_value(&far), Some(std::cmp::Ordering::Equal));
+    assert_eq!(near.partial_cmp_value(&far), Some(std::cmp::Ordering::Less));
+    // And with timezones on both sides, where the window rule does not apply.
+    let a = parse(B::DateTime, "6044555555555-06-06T22:13:00Z").unwrap();
+    let b = parse(B::DateTime, "6044555555555-06-06T22:14:00Z").unwrap();
+    assert_eq!(a.partial_cmp_value(&b), Some(std::cmp::Ordering::Less));
+}

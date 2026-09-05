@@ -225,7 +225,7 @@ cases from NIST, Microsoft, IBM, Sun, Boeing and Saxonica):
 | | |
 |---|---|
 | valid schemas accepted | **99.2%** (5,206 / 5,247) |
-| invalid schemas rejected | **59.4%** (285 / 480) |
+| invalid schemas rejected | **60.4%** (290 / 480) |
 
 The gap is the honest description of what this is. `xsdkit` reads real
 schemas well; it does not yet enforce most of the specification's *validity

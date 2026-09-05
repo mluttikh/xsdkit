@@ -129,9 +129,9 @@ fn duration_cmp(
     a: &crate::atomic::Duration,
     b: &crate::atomic::Duration,
 ) -> Option<std::cmp::Ordering> {
-    // From the datatypes specification. Note the first is 1696, not the 1969
-    // `oxsdatatypes` uses: 1696 is a leap year and 1969 is not, so the two
-    // disagree on durations reaching back across February.
+    // From the datatypes specification. The first is 1696, not 1969 — a
+    // transposition worth guarding against, since 1696 is a leap year and 1969
+    // is not, so the two disagree on durations reaching back across February.
     const REFERENCES: [(i128, i128); 4] = [(1696, 9), (1697, 2), (1903, 3), (1903, 7)];
 
     let mut agreed = None;
@@ -154,44 +154,25 @@ fn duration_cmp(
 /// the second keeps the remainder non-negative, which is what makes comparing
 /// the pair lexicographically the same as comparing the instants.
 fn instant(reference: (i128, i128), d: &crate::atomic::Duration) -> Option<(i128, i128)> {
-    // `years`/`months` and `days`/`hours`/`minutes`/`seconds` are the
-    // normalized components: everything below the leading one is bounded, so
-    // recombining them recovers the totals exactly.
-    let months = i128::from(d.years())
-        .checked_mul(12)?
-        .checked_add(d.months().into())?;
+    // The two halves as the type holds them, rather than recombined from the
+    // normalized components — same value, and nothing to get wrong.
     let total = reference
         .0
         .checked_mul(12)?
         .checked_add(reference.1 - 1)?
-        .checked_add(months)?;
-    let day = days_from_civil(total.div_euclid(12), total.rem_euclid(12) + 1)?;
+        .checked_add(i128::from(d.total_months()))?;
+    let day = crate::atomic::days_from_civil(total.div_euclid(12), total.rem_euclid(12) + 1)?;
 
-    // The decimal is a fixed-point i128 scaled by 10^18, and holds less than a
-    // minute, so splitting it at the second is exact.
+    // The seconds are fixed point scaled by 10^18. Splitting at the second
+    // with `div_euclid` keeps the remainder non-negative, which is what makes
+    // comparing the pair lexicographically the same as comparing the instants.
     const SCALE: i128 = crate::atomic::Decimal::SCALE;
-    let scaled = d.seconds().to_i128_scaled();
+    let scaled = d.total_seconds();
 
     let seconds = day
         .checked_mul(86_400)?
-        .checked_add(i128::from(d.days()).checked_mul(86_400)?)?
-        .checked_add(i128::from(d.hours()).checked_mul(3_600)?)?
-        .checked_add(i128::from(d.minutes()).checked_mul(60)?)?
         .checked_add(scaled.div_euclid(SCALE))?;
     Some((seconds, scaled.rem_euclid(SCALE)))
-}
-
-/// Days from 1970-01-01 to the first of the given month, proleptic Gregorian.
-///
-/// Hinnant's civil-calendar formula, with the day fixed at 1 — every reference
-/// date is the first of a month, so there is no end-of-month clamping to do.
-fn days_from_civil(year: i128, month: i128) -> Option<i128> {
-    let y = year - i128::from(month <= 2);
-    let era = if y >= 0 { y } else { y - 399 }.div_euclid(400);
-    let yoe = y - era * 400;
-    let doy = (153 * (month + if month > 2 { -3 } else { 9 }) + 2) / 5;
-    let doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
-    era.checked_mul(146_097)?.checked_add(doe - 719_468)
 }
 
 impl fmt::Display for Value {

@@ -34,6 +34,7 @@ pub(crate) fn compile(mut loader: Loader<'_>, mode: Conformance) -> (Schemas, Di
     merge_inherited_attributes(&mut loader);
     resolve_simple_content(&mut loader);
     check_cycles(&mut loader);
+    check_structural_cycles(&mut loader);
     let substitution_closure = build_substitution_closure(&loader);
     let version = loader.version();
 
@@ -668,6 +669,94 @@ fn check_cycles(l: &mut Loader<'_>) {
             }
         }
     }
+}
+
+/// Reports a simple type that reaches itself through its item or member types.
+///
+/// Separate from the derivation walk above, which follows `base` only. A list
+/// of itself and a union containing itself are just as circular, and checking
+/// a value against one would not terminate — the fuzzer found the schema that
+/// does it before anyone wrote it on purpose.
+fn check_structural_cycles(l: &mut Loader<'_>) {
+    // Grey means "on the current path", black means "finished and clean".
+    #[derive(Clone, Copy, PartialEq)]
+    enum Mark {
+        White,
+        Grey,
+        Black,
+    }
+    let n = l.types.len();
+    let mut marks = vec![Mark::White; n];
+    let mut found = Vec::new();
+
+    // An explicit stack: a schema is untrusted input, so the recursion depth
+    // would be too.
+    for root in 0..n as u32 {
+        if marks[root as usize] != Mark::White {
+            continue;
+        }
+        let mut stack = vec![(root, 0usize)];
+        marks[root as usize] = Mark::Grey;
+        while let Some((id, next)) = stack.pop() {
+            let edges = structural_edges(l, TypeId(id));
+            match edges.get(next) {
+                None => {
+                    marks[id as usize] = Mark::Black;
+                }
+                Some(&child) => {
+                    stack.push((id, next + 1));
+                    let c = child.index();
+                    if c >= n {
+                        continue;
+                    }
+                    match marks[c] {
+                        Mark::Grey => found.push(TypeId(child.0)),
+                        Mark::White => {
+                            marks[c] = Mark::Grey;
+                            stack.push((child.0, 0));
+                        }
+                        Mark::Black => {}
+                    }
+                }
+            }
+        }
+    }
+
+    let mut reported = FxHashSet::default();
+    for id in found {
+        if !reported.insert(id) {
+            continue;
+        }
+        let def = l.types.get(id.0);
+        let shown = def
+            .name()
+            .map(|n| l.names.display(n))
+            .unwrap_or_else(|| "<anonymous>".into());
+        let span = def.span().clone();
+        l.diags.push(
+            Diagnostic::error(
+                DiagCode::CircularDefinition,
+                format!("simple type `{shown}` contains itself"),
+            )
+            .at(span)
+            .with_help("a list cannot have itself as its item type, nor a union as a member"),
+        );
+    }
+}
+
+/// The types a simple type is built from: its item type and its members.
+///
+/// Not `base` — the derivation walk covers that, and following both here would
+/// report one cycle twice.
+fn structural_edges(l: &Loader<'_>, id: TypeId) -> Vec<TypeId> {
+    let TypeDefinition::Simple(s) = l.types.get(id.0) else {
+        return Vec::new();
+    };
+    s.item_type
+        .into_iter()
+        .chain(s.member_types.iter().copied())
+        .filter(|t| !t.is_placeholder())
+        .collect()
 }
 
 /// The next link in a derivation chain, or `None` at a self-referential root.

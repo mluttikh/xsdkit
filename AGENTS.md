@@ -200,7 +200,7 @@ crate:
 | | |
 |---|---|
 | valid schemas accepted | **99.2%** — it reads real schemas |
-| invalid schemas rejected | **59.4%** — partial: see `src/restriction.rs` |
+| invalid schemas rejected | **60.4%** — partial: see `src/restriction.rs` |
 
 That asymmetry is by construction, not neglect: the Schema Component
 Constraints and the Derivation Valid rules are largely unimplemented (see §7).
@@ -390,7 +390,12 @@ Both need `XSDTESTS`. Re-run them before trusting any number here.
 
 ### P0 — the irreversible one
 
-~~**Get `oxsdatatypes` out of the public API.**~~ **Done** — `src/atomic.rs`.
+~~**Get `oxsdatatypes` out of the public API.**~~ **Done, and then some** —
+the dependency is gone entirely (`src/atomic.rs` implements all 14 datatypes).
+The wrapping came first and made the removal possible: with `Value` no longer
+naming the library's types, replacing them one at a time was an internal
+change rather than a breaking one. What follows is why the wrapping mattered,
+kept because the same trap will exist for whatever replaces it.
 
 `Value` is public, so whatever it held was this crate's API, and it held the
 library's types directly. Anyone matching on `Value::DateTime(dt)` had to add
@@ -500,30 +505,36 @@ has the wrong number of particles.
    `normalize_day` (a hang on a legal duration, not a slow answer) and the
    1969-09-01 reference date where the specification says 1696-09-01.
 
-7. **Drop `oxsdatatypes` entirely and implement the 14 datatypes here.**
-   Deliberately last, and deliberately still open. P0 removed the deadline —
-   the wrappers in `src/atomic.rs` mean this is now an internal change to one
-   file, per type, at any time — so it should be taken on evidence rather than
-   on a release schedule.
+7. ~~**Drop `oxsdatatypes` entirely.**~~ **Done.** All 14 datatypes are in
+   `src/atomic.rs`, and the crate's remaining dependencies are `encoding_rs`,
+   `fxhash`, `indexmap`, `quick-xml`, `regex`, `regex-syntax` and `roxmltree`.
+   Conformance went *up*: instance cases correct 20,490 -> 20,492, invalid
+   documents rejected 9,104 -> 9,106.
 
-   The evidence today says no (`DESIGN.md` §3.15.4): a direct probe found it
-   correct on the parts that are genuinely hard, its only dependency is
+   Kept below is the reasoning that said not to, because it was right up until
+   the evidence changed, and because the same judgement will be needed again.
+
+   The evidence *had* said no (`DESIGN.md` §3.15.4): a direct probe found it
+   correct on the parts that are genuinely hard, its only dependency was
    `thiserror`, and the problems this crate hit were one performance bug we
-   routed around and two version differences that were ours. What would change
-   the answer:
+   routed around and two version differences that were ours. What changed the
+   answer:
 
    - **`precisionDecimal`** (item 8) needs a decimal type it does not have.
-     That is additive, and writing one is the natural first step of a
-     replacement if a replacement is ever wanted.
+     That is additive, and writing one turned out to be the natural first step.
    - A finding in the date-time family that is *wrong* rather than slow. **One
      has now fired**: `--02-29` was rejected as an `xs:gMonthDay`, and that
      type is implemented here as a result. Two more of the same kind would be
      a reason to reconsider the whole family; one is a reason to own one type.
 
-   Do it one type at a time, each behind its existing wrapper, each landing
-   with the suite and the fuzzer green. A big-bang rewrite of the date-time
-   family would trade a library verified against 21,533 documents for one
-   verified against nothing.
+   That is what happened, and the method is the part worth keeping: one type
+   at a time, behind its existing wrapper, each landing with the suite and the
+   fuzzer green. The fuzzer found four bugs in the new code — a char-boundary
+   panic, an `unreachable!` on `P8TH`, an `i128` overflow comparing a
+   thirteen-digit year, and a stack overflow on a list of itself — and the
+   suite found a fifth that no amount of fuzzing would have: **equality on the
+   temporal types is the order relation, not the fields**, because
+   `13:00+01:00` and `12:00Z` are one instant written two ways.
 8. **`precisionDecimal`.** 40 of the 58 remaining false rejections — 27
    unresolved `xs:precisionDecimal` plus 13 `minScale`/`maxScale` facets. It is
    the largest single cluster *and* an optional XSD 1.1 feature that did not
