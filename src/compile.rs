@@ -84,6 +84,7 @@ pub(crate) fn compile(mut loader: Loader<'_>, mode: Conformance) -> (Schemas, Di
     diags.extend(crate::facets::check_all(&schemas));
     diags.extend(crate::declarations::check_all(&schemas));
     diags.extend(crate::derivation::check_all(&schemas));
+    diags.extend(crate::restriction::check_all(&schemas));
 
     (schemas, diags)
 }

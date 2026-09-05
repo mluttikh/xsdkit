@@ -551,7 +551,7 @@ pub(crate) fn build_all(
 /// and reversed. Restriction states the model in full, so the walk stops
 /// there — an ancestor's particles are not part of a restricting type's
 /// content.
-fn effective_particles(schemas: &Schemas, id: TypeId) -> Vec<ParticleId> {
+pub(crate) fn effective_particles(schemas: &Schemas, id: TypeId) -> Vec<ParticleId> {
     let mut chain = Vec::new();
     let mut cur = id;
     let mut guard = 0usize;

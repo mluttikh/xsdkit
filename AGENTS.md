@@ -199,8 +199,8 @@ crate:
 
 | | |
 |---|---|
-| valid schemas accepted | **99.1%** — it reads real schemas |
-| invalid schemas rejected | **54.4%** — particle subsumption is the big rule still missing |
+| valid schemas accepted | **99.0%** — it reads real schemas |
+| invalid schemas rejected | **57.1%** — partial: see `src/restriction.rs` |
 
 That asymmetry is by construction, not neglect: the Schema Component
 Constraints and the Derivation Valid rules are largely unimplemented (see §7).
@@ -430,17 +430,31 @@ replacing any one type is an internal change.
    whether a wildcard takes a name — **add new exclusions there**, not at the
    call sites, of which there are five.
 
-### P2 — the one large item
+### P2 — particle subsumption
 
-**Particle subsumption**, i.e. *Derivation Valid (Restriction, Complex)*:
-whether a restriction's content model actually accepts a subset of its base's.
-Worth roughly 50 of the invalid schemas still accepted — the `all`, `simple`,
-`complex` and `over` families in `w3c_gap`. Everything else on this list is
-days at most; this one is not.
+*Derivation Valid (Restriction, Complex)* — partly done, in
+`src/restriction.rs`. Read that module's header before touching it: **it is
+the one place in this crate that errs towards accepting**, and the
+[`Verdict`]-style three-way answer is what makes that safe. A pair it cannot
+judge is not a match; treating it as one lets an ordered walk consume a base
+particle it never checked, which is how the first version rejected the W3C
+schema for schemas.
 
-The facet-level reading of the same idea is done (`src/facets.rs`, rule 4), so
-the shape is familiar: compare what this step declares against what it
-inherits, and reject anything that widens.
+Implemented: *Occurrence Range OK*, *Elt:Elt NameAndTypeOK*, *Elt:Any
+NSCompat*, *Any:Any NSSubset*, *RecurseAsIfGroup*, *Recurse* for
+sequence-against-sequence and for anything against an `xs:all`, and
+*RecurseLax* for choice-against-choice.
+
+Still unjudged, and each accepted rather than guessed at: *MapAndSum* (a
+restriction naming substitution-group members, whose bounds must be summed
+across them), *NSRecurseCheckCardinality* (a group restricting a wildcard),
+and the remaining cross-compositor pairs.
+
+Two normalisations the rules need and the specification assumes: a base's
+content model is its **whole derivation chain**, not the particle it declared
+itself, and a same-compositor inline group occurring exactly once is spliced
+into its parent. Without either, every type in a derivation chain looks like it
+has the wrong number of particles.
 
 ### P3 — finishing the hardening pass
 

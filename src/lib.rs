@@ -61,6 +61,7 @@ pub mod load;
 pub mod model;
 pub mod names;
 pub mod regex;
+pub(crate) mod restriction;
 pub mod validate;
 pub mod values;
 
