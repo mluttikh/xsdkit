@@ -1,0 +1,67 @@
+name: Docs
+
+on:
+  push:
+    branches: ["main"]
+  pull_request:
+    branches: ["main"]
+  # So the site can be republished without an empty commit.
+  workflow_dispatch:
+
+# One in-flight deployment at a time, and let a newer commit win rather than
+# queueing a site nobody wants any more.
+concurrency:
+  group: pages
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: Build the site
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+
+      # The Python reference is generated from the built extension module, not
+      # from the type stub alone: the stub has the annotations and the compiled
+      # module has the prose. Both halves have to be present.
+      - name: Build and install the wheel
+        run: pip install .
+
+      - name: Install the docs toolchain
+        run: pip install -r docs/requirements.txt
+
+      # `--strict` inside the script turns a broken link into a failed build,
+      # and RUSTDOCFLAGS=-D warnings does the same for the Rust half.
+      - name: Build
+        run: ./scripts/build-docs.sh
+
+      - uses: actions/upload-pages-artifact@v4
+        with:
+          path: site
+
+  deploy:
+    name: Deploy to Pages
+    # A pull request should prove the site still builds without publishing it.
+    if: github.event_name != 'pull_request'
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v4

@@ -28,7 +28,7 @@ use crate::values::Value;
 use crate::{Conformance, FileResolver, SchemaSetBuilder, Version};
 use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
-use pyo3::types::{PyBytes, PyList, PyTuple, PyType};
+use pyo3::types::{PyBytes, PyDict, PyList, PyTuple, PyType};
 use pyo3::{IntoPyObjectExt, create_exception};
 use std::collections::BTreeMap;
 use std::sync::Arc;
@@ -2517,15 +2517,23 @@ fn value_to_py<'py>(py: Python<'py>, v: &Value) -> PyResult<Bound<'py, PyAny>> {
                 tzinfo(py, t.timezone_offset().map(|t| t.minutes()))?,
             ))
         }
-        Value::DayTimeDuration(d) => py.import("datetime")?.getattr("timedelta")?.call1((
-            0,
-            d.seconds().to_string().parse::<f64>().unwrap_or(0.0),
-            0,
-            0,
-            d.minutes(),
-            d.hours(),
-            d.days(),
-        )),
+        Value::DayTimeDuration(d) => {
+            // By name, not by position. `timedelta`'s positional order is
+            // (days, seconds, microseconds, milliseconds, minutes, hours,
+            // weeks) — seventh is *weeks*, and putting days there multiplied
+            // every duration by seven.
+            let kwargs = PyDict::new(py);
+            kwargs.set_item("days", d.days())?;
+            kwargs.set_item("hours", d.hours())?;
+            kwargs.set_item("minutes", d.minutes())?;
+            kwargs.set_item(
+                "seconds",
+                d.seconds().to_string().parse::<f64>().unwrap_or(0.0),
+            )?;
+            py.import("datetime")?
+                .getattr("timedelta")?
+                .call((), Some(&kwargs))
+        }
         Value::List(items) => {
             let list = PyList::empty(py);
             for item in items {

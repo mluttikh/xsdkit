@@ -381,6 +381,40 @@ gets a named regression test in `tests/` or a `mod tests`, not an artifact file
 checked in** — the artifact is an opaque blob, the test says what was wrong.
 Fuzz findings are marked `Found by fuzzing` at the fix site.
 
+## Documentation
+
+The published site is <https://mluttikh.github.io/xsdkit/> — Material for
+MkDocs for the guide and the Python reference, with `cargo doc` mounted
+underneath at `/rust/`. `.github/workflows/docs.yml` builds it on every push
+and deploys from `main`.
+
+```bash
+pip install -r docs/requirements.txt
+maturin develop --release     # the Python reference needs the built module
+./scripts/build-docs.sh       # rustdoc + mkdocs --strict, into site/
+mkdocs serve                  # live preview
+```
+
+Things that are easy to get wrong here:
+
+- **The Python reference needs both halves.** `python/xsdkit/_xsdkit.pyi` has
+  the type annotations and almost no prose; the compiled module has the prose
+  from the Rust `///` comments and no annotations, because a pyo3 getter has
+  no inspectable return type. `scripts/griffe_runtime_docs.py` reads the stub
+  and borrows the text. Do **not** fix this by copying doc comments into the
+  stub — that is a second copy that will drift.
+- **A docstring after a method is not a docstring.** In a `.pyi`, a string
+  literal placed below `def _repr_html_` is a no-op expression, and the class
+  silently has no documentation. `Facets` had this bug.
+- **Links to the mounted rustdoc are written source-relative**, so
+  `docs/reference/rust.md` says `../rust/xsdkit/index.html`, not `../../`.
+  MkDocs rewrites it for the output URL. The `../../` form works in a browser
+  but fails `--strict`, which is the wrong trade.
+- **The build is `--strict`** and rustdoc runs with `-D warnings`, so a broken
+  link fails CI rather than shipping.
+- Every example on the site runs against `docs/examples/report.xsd`. Verify
+  new snippets against it rather than writing plausible output.
+
 ## The road to 1.0
 
 Ordered by what gets more expensive the longer it waits, not by size.

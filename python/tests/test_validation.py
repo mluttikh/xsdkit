@@ -287,3 +287,30 @@ def test_iter_typed_is_an_iterator(schemas):
     for i, ev in enumerate(schemas.iter_typed(DOC)):
         assert ev.kind in {"start", "text", "end"}
     assert i + 1 == len(kinds)
+
+
+@pytest.mark.parametrize(
+    "lexical,expected",
+    [
+        ("P1D", datetime.timedelta(days=1)),
+        ("P2D", datetime.timedelta(days=2)),
+        ("PT2H", datetime.timedelta(hours=2)),
+        ("PT30M", datetime.timedelta(minutes=30)),
+        ("PT0.5S", datetime.timedelta(seconds=0.5)),
+        ("P1DT2H3M4S", datetime.timedelta(days=1, hours=2, minutes=3, seconds=4)),
+        ("P400D", datetime.timedelta(days=400)),
+        ("-P1D", -datetime.timedelta(days=1)),
+        ("-P1DT2H30M", -datetime.timedelta(days=1, hours=2, minutes=30)),
+    ],
+)
+def test_daytimeduration_days_are_days(lexical, expected):
+    """`timedelta`'s seventh positional argument is *weeks*, not days.
+
+    Days were being passed there, so every `xs:dayTimeDuration` carrying a day
+    component came back seven times too large — and silently, because the type
+    was right and only the number was wrong.
+    """
+    xs = build('<xs:element name="e" type="xs:string"/>')
+    assert xs.type(
+        "http://www.w3.org/2001/XMLSchema", "dayTimeDuration"
+    ).validate(lexical) == expected

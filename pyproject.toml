@@ -21,7 +21,10 @@ classifiers = [
 dynamic = ["version"]
 
 [project.urls]
+Homepage = "https://mluttikh.github.io/xsdkit/"
+Documentation = "https://mluttikh.github.io/xsdkit/"
 Repository = "https://github.com/mluttikh/xsdkit"
+Changelog = "https://github.com/mluttikh/xsdkit/releases"
 
 [tool.maturin]
 # `extension-module` links against libpython, which is correct for a wheel and

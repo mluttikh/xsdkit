@@ -1,0 +1,57 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema"
+           xmlns:tns="urn:example"
+           targetNamespace="urn:example"
+           elementFormDefault="qualified">
+
+  <xs:annotation>
+    <xs:documentation>
+      A small order report, used throughout the xsdkit documentation.
+    </xs:documentation>
+  </xs:annotation>
+
+  <xs:simpleType name="Sku">
+    <xs:annotation>
+      <xs:documentation>Two letters, a dash, then four digits.</xs:documentation>
+    </xs:annotation>
+    <xs:restriction base="xs:string">
+      <xs:pattern value="[A-Z]{2}-[0-9]{4}"/>
+    </xs:restriction>
+  </xs:simpleType>
+
+  <xs:simpleType name="Currency">
+    <xs:restriction base="xs:string">
+      <xs:enumeration value="EUR"/>
+      <xs:enumeration value="USD"/>
+      <xs:enumeration value="GBP"/>
+    </xs:restriction>
+  </xs:simpleType>
+
+  <xs:complexType name="Money">
+    <xs:simpleContent>
+      <xs:extension base="xs:decimal">
+        <xs:attribute name="currency" type="tns:Currency" use="required"/>
+      </xs:extension>
+    </xs:simpleContent>
+  </xs:complexType>
+
+  <xs:complexType name="Item">
+    <xs:sequence>
+      <xs:element name="price" type="tns:Money"/>
+      <xs:element name="note" type="xs:string" minOccurs="0"/>
+    </xs:sequence>
+    <xs:attribute name="sku" type="tns:Sku" use="required"/>
+    <xs:attribute name="quantity" type="xs:positiveInteger" default="1"/>
+  </xs:complexType>
+
+  <xs:complexType name="Report">
+    <xs:sequence>
+      <xs:element name="title" type="xs:string"/>
+      <xs:element name="issued" type="xs:date"/>
+      <xs:element name="item" type="tns:Item" maxOccurs="unbounded"/>
+    </xs:sequence>
+    <xs:attribute name="id" type="xs:ID" use="required"/>
+  </xs:complexType>
+
+  <xs:element name="report" type="tns:Report"/>
+</xs:schema>

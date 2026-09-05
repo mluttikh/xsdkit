@@ -1,0 +1,55 @@
+/* xsdkit — a restrained blueprint palette: ink for structure, teal for the
+   things you can act on. Both schemes are defined explicitly so the page
+   never borrows a colour it did not choose. */
+
+:root,
+[data-md-color-scheme="default"] {
+  --md-primary-fg-color:        #14344f;
+  --md-primary-fg-color--light: #24506f;
+  --md-primary-fg-color--dark:  #0d2337;
+  --md-accent-fg-color:         #0f766e;
+  --md-typeset-a-color:         #14344f;
+}
+
+[data-md-color-scheme="slate"] {
+  --md-hue: 214;
+  --md-primary-fg-color:        #0d2337;
+  --md-accent-fg-color:         #2dd4bf;
+  --md-typeset-a-color:         #7dd3d8;
+}
+
+/* Code is the substance of this site, not decoration: give it room and stop
+   long XSD lines from pushing the page sideways. */
+.md-typeset pre > code {
+  overflow-x: auto;
+}
+
+.md-typeset :is(h2, h3) {
+  font-weight: 600;
+  letter-spacing: -0.01em;
+}
+
+.md-typeset h2 {
+  margin-top: 2.2em;
+  padding-top: 0.35em;
+  border-top: 1px solid var(--md-default-fg-color--lightest);
+}
+
+/* mkdocstrings renders one heading per member; without this they run together
+   in a long class like `Type`, which has twenty-eight. */
+.doc-children .doc-heading {
+  margin-top: 1.6em;
+}
+
+.doc-symbol-attribute::after { content: "attr"; }
+
+/* The two-language tabs are the spine of the guide — make the active one
+   unmistakable rather than a subtle underline. */
+.md-typeset .tabbed-labels > label {
+  font-weight: 600;
+}
+
+/* Tables of facets and diagnostics are reference material: align the numbers. */
+.md-typeset table:not([class]) td:has(code) {
+  font-variant-numeric: tabular-nums;
+}

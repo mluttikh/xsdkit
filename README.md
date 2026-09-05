@@ -2,14 +2,20 @@
 
 [![CI](https://github.com/mluttikh/xsdkit/actions/workflows/ci.yml/badge.svg)](https://github.com/mluttikh/xsdkit/actions/workflows/ci.yml)
 [![License](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
+[![Docs](https://img.shields.io/badge/docs-mluttikh.github.io%2Fxsdkit-0f766e.svg)](https://mluttikh.github.io/xsdkit/)
 
 A **generic XSD reader**: parse W3C XML Schema into a queryable schema
 component model, in Rust and Python.
 
+**[Documentation](https://mluttikh.github.io/xsdkit/)** — guide, Python API
+reference and the full rustdoc.
+
 > **Status: early.** The component model, document loading, reference
-> resolution, content-model compilation and the Python bindings work, and are
-> tested against real schemas. Instance validation and the units layer come
-> next — see [DESIGN.md](DESIGN.md) §3.14.
+> resolution, content-model compilation, instance validation and the Python
+> bindings work, and are measured against the W3C XML Schema Test Suite on
+> every change. XSD 1.1 assertions and conditional type assignment come next.
+> A units layer was planned and **cut on evidence** — see
+> [DESIGN.md](DESIGN.md) §3.7.
 
 ## Why
 

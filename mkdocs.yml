@@ -1,0 +1,147 @@
+site_name: xsdkit
+site_description: >-
+  A generic XSD reader: parse W3C XML Schema into a queryable schema component
+  model, in Rust and Python.
+site_url: https://mluttikh.github.io/xsdkit/
+repo_url: https://github.com/mluttikh/xsdkit
+repo_name: mluttikh/xsdkit
+edit_uri: edit/main/docs/
+copyright: MIT licensed
+
+docs_dir: docs
+site_dir: site
+
+# The staged rustdoc tree is copied in wholesale by scripts/build-docs.sh. It
+# carries a font licence as Markdown, which MkDocs would otherwise render as a
+# page and report as missing from the nav.
+exclude_docs: |
+  rust/static.files/*.md
+
+theme:
+  name: material
+  language: en
+  icon:
+    repo: fontawesome/brands/github
+  features:
+    - navigation.instant
+    - navigation.tracking
+    - navigation.sections
+    - navigation.top
+    - navigation.footer
+    - content.code.copy
+    - content.code.annotate
+    - content.tabs.link       # picking Python once picks it everywhere
+    - toc.follow
+    - search.suggest
+    - search.highlight
+  palette:
+    - media: "(prefers-color-scheme)"
+      toggle:
+        icon: material/brightness-auto
+        name: Follow the system theme
+    - media: "(prefers-color-scheme: light)"
+      scheme: default
+      toggle:
+        icon: material/brightness-7
+        name: Switch to dark mode
+    - media: "(prefers-color-scheme: dark)"
+      scheme: slate
+      toggle:
+        icon: material/brightness-4
+        name: Switch to light mode
+
+extra_css:
+  - stylesheets/extra.css
+
+markdown_extensions:
+  - abbr
+  - admonition
+  - attr_list
+  - def_list
+  - footnotes
+  - md_in_html
+  - tables
+  - toc:
+      permalink: true
+      toc_depth: 3
+  - pymdownx.details
+  - pymdownx.highlight:
+      anchor_linenums: true
+      line_spans: __span
+  - pymdownx.inlinehilite
+  - pymdownx.snippets:
+      check_paths: true
+  - pymdownx.superfences:
+      custom_fences:
+        - name: mermaid
+          class: mermaid
+          format: !!python/name:pymdownx.superfences.fence_code_format
+  - pymdownx.tabbed:
+      alternate_style: true
+      slugify: !!python/object/apply:pymdownx.slugs.slugify {kwds: {case: lower}}
+  - pymdownx.smartsymbols
+  # Material's icon shortcodes (`:octicons-arrow-right-24:`) are emoji
+  # shortcodes under the hood; without this they render as literal text.
+  - pymdownx.emoji:
+      emoji_index: !!python/name:material.extensions.emoji.twemoji
+      emoji_generator: !!python/name:material.extensions.emoji.to_svg
+
+plugins:
+  - search
+  - mkdocstrings:
+      handlers:
+        python:
+          paths: [python, scripts]
+          options:
+            # The stub carries the types, the compiled module carries the
+            # prose; the extension merges them. See scripts/griffe_runtime_docs.py.
+            extensions:
+              - scripts/griffe_runtime_docs.py:RuntimeDocstrings
+            docstring_style: sphinx
+            docstring_section_style: table
+            show_source: false
+            show_root_heading: true
+            show_root_full_path: false
+            show_symbol_type_heading: true
+            show_symbol_type_toc: true
+            show_if_no_docstring: true
+            members_order: source
+            separate_signature: true
+            show_signature_annotations: true
+            signature_crossrefs: true
+            show_docstring_attributes: true
+            merge_init_into_class: true
+            heading_level: 3
+            filters: ["!^_", "^__(len|iter|getitem|contains|bool|next)__$"]
+
+extra:
+  social:
+    - icon: fontawesome/brands/github
+      link: https://github.com/mluttikh/xsdkit
+      name: xsdkit on GitHub
+    - icon: fontawesome/brands/rust
+      link: https://crates.io/crates/xsdkit
+      name: xsdkit on crates.io
+    - icon: fontawesome/brands/python
+      link: https://pypi.org/project/xsdkit/
+      name: xsdkit on PyPI
+
+nav:
+  - Home: index.md
+  - Installation: install.md
+  - Guide:
+      - The component model: concepts.md
+      - Loading schemas: loading.md
+      - Querying the model: querying.md
+      - Validating documents: validation.md
+      - Diagnostics: diagnostics.md
+      - XSD 1.1: xsd11.md
+      - In a notebook: notebooks.md
+  - Reference:
+      - Python API: reference/python.md
+      - Rust API: reference/rust.md
+  - Project:
+      - Conformance: project/conformance.md
+      - Performance: project/performance.md
+      - Security: project/security.md
+      - Design: project/design.md

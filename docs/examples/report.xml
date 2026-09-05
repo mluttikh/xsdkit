@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<report xmlns="urn:example" id="r-2024-11">
+  <title>November orders</title>
+  <issued>2024-12-01</issued>
+  <item sku="AB-1042" quantity="3">
+    <price currency="EUR">19.95</price>
+    <note>backordered</note>
+  </item>
+  <item sku="ZZ-0007">
+    <price currency="USD">4.50</price>
+  </item>
+</report>

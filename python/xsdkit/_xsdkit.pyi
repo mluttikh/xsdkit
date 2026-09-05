@@ -104,15 +104,15 @@ class AppInfo:
     xml: str
 
 class Facets:
-    def _repr_html_(self) -> str:
-        """The constraints in force, as a table."""
-
     """A set of facets on a simple type.
 
     Bounds and enumerations are the lexical forms the schema wrote, not typed
     values: a facet constrains the lexical space as much as the value space.
     Pass one through ``Type.validate`` for the value.
     """
+
+    def _repr_html_(self) -> str:
+        """The constraints in force, as a table."""
 
     @property
     def length(self) -> int | None: ...

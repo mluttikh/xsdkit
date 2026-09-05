@@ -1,0 +1,4 @@
+# The documentation toolchain. Pinned to majors: this builds a website, and a
+# surprise there should be a deliberate upgrade rather than a Tuesday.
+mkdocs-material>=9.5,<10
+mkdocstrings[python]>=0.26,<1
