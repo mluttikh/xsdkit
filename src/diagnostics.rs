@@ -85,6 +85,9 @@ pub enum DiagCode {
     UnknownSchemaElement,
     /// A required attribute is missing.
     MissingAttribute,
+    /// An `xs:annotation` appears where the schema for schemas does not
+    /// allow one: after a sibling, or a second time.
+    MisplacedAnnotation,
     /// An attribute's value does not match its expected form.
     InvalidAttributeValue,
     /// The document declares an encoding this build cannot decode.
@@ -163,6 +166,7 @@ impl DiagCode {
             DiagCode::NotASchemaDocument => "XSD1002",
             DiagCode::UnknownSchemaElement => "XSD1003",
             DiagCode::MissingAttribute => "XSD1004",
+            DiagCode::MisplacedAnnotation => "XSD1008",
             DiagCode::InvalidAttributeValue => "XSD1005",
             DiagCode::UnsupportedEncoding => "XSD1006",
             DiagCode::MalformedEncoding => "XSD1007",

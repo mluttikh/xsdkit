@@ -209,3 +209,63 @@ fn an_enumeration_on_a_list_matches_a_whole_list() {
         1
     );
 }
+
+// ---------------------------------------------------------------------------
+// Where an annotation may sit
+// ---------------------------------------------------------------------------
+
+/// The schema for schemas gives almost every component the same content model:
+/// an optional annotation, then the rest. So one, and it comes first.
+#[test]
+fn an_annotation_must_be_first_and_alone() {
+    assert_eq!(
+        count(
+            r#"<xs:element name="people">
+                 <xs:complexType>
+                   <xs:sequence><xs:element name="person" type="xs:string"/></xs:sequence>
+                 </xs:complexType>
+                 <xs:unique name="u">
+                   <xs:annotation><xs:documentation>one</xs:documentation></xs:annotation>
+                   <xs:annotation><xs:documentation>two</xs:documentation></xs:annotation>
+                   <xs:selector xpath="./person"/>
+                   <xs:field xpath="."/>
+                 </xs:unique>
+               </xs:element>"#,
+            DiagCode::MisplacedAnnotation
+        ),
+        1,
+        "the second annotation"
+    );
+    assert_eq!(
+        count(
+            r#"<xs:element name="people">
+                 <xs:complexType>
+                   <xs:sequence><xs:element name="person" type="xs:string"/></xs:sequence>
+                 </xs:complexType>
+                 <xs:unique name="u">
+                   <xs:selector xpath="./person"/>
+                   <xs:field xpath="."/>
+                   <xs:annotation><xs:documentation>after</xs:documentation></xs:annotation>
+                 </xs:unique>
+               </xs:element>"#,
+            DiagCode::MisplacedAnnotation
+        ),
+        1,
+        "an annotation after the thing it documents"
+    );
+}
+
+/// `xs:schema` interleaves annotations with the declarations they document,
+/// and `xs:redefine` and `xs:override` do the same with what they revise.
+#[test]
+fn the_containers_that_interleave_annotations_are_exempt() {
+    clean(
+        r#"<xs:annotation><xs:documentation>first</xs:documentation></xs:annotation>
+           <xs:element name="a" type="xs:string"/>
+           <xs:annotation><xs:documentation>between</xs:documentation></xs:annotation>
+           <xs:element name="b" type="xs:string">
+             <xs:annotation><xs:documentation>ok, first child</xs:documentation></xs:annotation>
+           </xs:element>
+           <xs:annotation><xs:documentation>last</xs:documentation></xs:annotation>"#,
+    );
+}

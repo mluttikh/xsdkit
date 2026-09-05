@@ -200,13 +200,14 @@ crate:
 | | |
 |---|---|
 | valid schemas accepted | **98.9%** — it reads real schemas |
-| invalid schemas rejected | **35.3%** — it does not enforce most validity constraints |
+| invalid schemas rejected | **42.6%** — it does not enforce most validity constraints |
 
 That asymmetry is by construction, not neglect: the Schema Component
 Constraints and the Derivation Valid rules are largely unimplemented (see §7).
 A schema this crate accepts is not thereby a *valid* schema. Implemented so
-far: the facet rules (`src/facets.rs`) and the declaration value-constraint
-rules (`src/declarations.rs`).
+far: the facet rules (`src/facets.rs`), the declaration value-constraint
+rules (`src/declarations.rs`), and annotation placement (in the loader, since
+it is answerable from the document alone).
 
 `examples/w3c_gap.rs` is how to pick what to implement next: it clusters the
 invalid schemas we accept by test-group family, so a family with fifty misses

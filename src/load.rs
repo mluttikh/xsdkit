@@ -581,6 +581,8 @@ impl<'r> Loader<'r> {
     // -- schema body -------------------------------------------------------
 
     fn read_schema_body(&mut self, doc: &roxmltree::Document, root: roxmltree::Node, ctx: &DocCtx) {
+        check_annotation_placement(doc, root, ctx, &mut self.diags);
+
         // Composition first: everything a later reference might name has to
         // exist before the references are collected.
         for child in root.children().filter(is_xs_element) {
@@ -2103,6 +2105,61 @@ impl<'r> Loader<'r> {
 // ---------------------------------------------------------------------------
 // Free helpers
 // ---------------------------------------------------------------------------
+
+/// Where `xs:annotation` is allowed to sit.
+///
+/// The schema for schemas gives almost every component the same content
+/// model: an optional annotation, then the rest. So one annotation, and it
+/// comes first — a second one, or one after the `xs:selector` it was meant to
+/// describe, does not match the grammar and the document is not a schema.
+///
+/// Three elements are exempt because their own content models say so.
+/// `xs:schema` interleaves annotations with the declarations they document,
+/// and `xs:redefine` and `xs:override` do the same with what they revise.
+///
+/// This is a Schema Representation Constraint: answerable from the document
+/// alone, which is why it runs here rather than on the assembled model.
+fn check_annotation_placement(
+    doc: &roxmltree::Document,
+    root: roxmltree::Node,
+    ctx: &DocCtx,
+    diags: &mut Diagnostics,
+) {
+    for node in root.descendants().filter(is_xs_element) {
+        if matches!(
+            node.tag_name().name(),
+            "schema" | "redefine" | "override" | "annotation"
+        ) {
+            continue;
+        }
+        let mut seen = false;
+        for (i, child) in node.children().filter(is_xs_element).enumerate() {
+            if child.tag_name().name() != "annotation" {
+                continue;
+            }
+            let span = Span::new(&ctx.uri, line_of(doc, child));
+            let owner = node.tag_name().name();
+            if seen {
+                diags.push(
+                    Diagnostic::error(
+                        DiagCode::MisplacedAnnotation,
+                        format!("`xs:{owner}` may have only one `xs:annotation`"),
+                    )
+                    .at(span),
+                );
+            } else if i != 0 {
+                diags.push(
+                    Diagnostic::error(
+                        DiagCode::MisplacedAnnotation,
+                        format!("`xs:annotation` must be the first child of `xs:{owner}`"),
+                    )
+                    .at(span),
+                );
+            }
+            seen = true;
+        }
+    }
+}
 
 fn is_xs_element(n: &roxmltree::Node) -> bool {
     n.is_element() && n.tag_name().namespace() == Some(XS)
