@@ -581,7 +581,7 @@ impl<'r> Loader<'r> {
     // -- schema body -------------------------------------------------------
 
     fn read_schema_body(&mut self, doc: &roxmltree::Document, root: roxmltree::Node, ctx: &DocCtx) {
-        check_annotation_placement(doc, root, ctx, &mut self.diags);
+        check_representation(doc, root, ctx, &mut self.diags);
 
         // Composition first: everything a later reference might name has to
         // exist before the references are collected.
@@ -2105,6 +2105,96 @@ impl<'r> Loader<'r> {
 // ---------------------------------------------------------------------------
 // Free helpers
 // ---------------------------------------------------------------------------
+
+/// Schema Representation Constraints: the rules answerable from the document
+/// alone, with nothing resolved and no other document consulted.
+///
+/// One sweep of the tree rather than a check at each reading site, because
+/// these are about the XML the schema for schemas describes, not about the
+/// components it produces — and several of them concern elements this loader
+/// otherwise never visits.
+fn check_representation(
+    doc: &roxmltree::Document,
+    root: roxmltree::Node,
+    ctx: &DocCtx,
+    diags: &mut Diagnostics,
+) {
+    check_annotation_placement(doc, root, ctx, diags);
+
+    for node in root.descendants().filter(is_xs_element) {
+        let name = node.tag_name().name();
+        let span = || Span::new(&ctx.uri, line_of(doc, node));
+
+        // `block` and `final` name derivation methods. Which subset is legal
+        // depends on where the attribute sits, but a token outside the whole
+        // vocabulary is wrong everywhere — and silently ignoring it turns a
+        // typo into a constraint that quietly does nothing.
+        for attr in ["block", "final", "blockDefault", "finalDefault"] {
+            let Some(value) = node.attribute(attr) else {
+                continue;
+            };
+            let trimmed = value.trim();
+            if trimmed == "#all" {
+                continue;
+            }
+            for tok in trimmed.split_whitespace() {
+                if !DerivationSet::KEYWORDS.contains(&tok) {
+                    let help = if tok == "#all" {
+                        "`#all` is the whole value or none of it"
+                    } else {
+                        "expected `#all`, or a list of `extension`, `restriction`, `substitution`, `list` and `union`"
+                    };
+                    diags.push(
+                        Diagnostic::error(
+                            DiagCode::InvalidAttributeValue,
+                            format!("`{attr}` contains `{tok}`, which is not a derivation method"),
+                        )
+                        .at(span())
+                        .with_help(help),
+                    );
+                }
+            }
+        }
+
+        // `default` supplies a value the document may override; `fixed`
+        // supplies one it may not. A declaration cannot mean both.
+        if matches!(name, "element" | "attribute")
+            && node.attribute("default").is_some()
+            && node.attribute("fixed").is_some()
+        {
+            diags.push(
+                Diagnostic::error(
+                    DiagCode::InvalidValueConstraint,
+                    format!("`xs:{name}` has both `default` and `fixed`"),
+                )
+                .at(span())
+                .with_help("`default` may be overridden and `fixed` may not, so only one applies"),
+            );
+        }
+
+        // A named model group *is* its one model group. Two of them name no
+        // single content model, and nothing downstream would ever look at the
+        // second.
+        if name == "group" && node.has_attribute("name") {
+            let groups = node
+                .children()
+                .filter(is_xs_element)
+                .filter(|c| matches!(c.tag_name().name(), "all" | "choice" | "sequence"))
+                .count();
+            if groups != 1 {
+                diags.push(
+                    Diagnostic::error(
+                        DiagCode::ConflictingTypeDefinition,
+                        format!(
+                            "`xs:group` must contain exactly one of `xs:all`, `xs:choice` or `xs:sequence`, found {groups}"
+                        ),
+                    )
+                    .at(span()),
+                );
+            }
+        }
+    }
+}
 
 /// Where `xs:annotation` is allowed to sit.
 ///

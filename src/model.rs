@@ -186,6 +186,14 @@ impl DerivationSet {
         self == Self::default()
     }
 
+    /// The keywords a `block` or `final` attribute may contain, across every
+    /// context one of them appears in.
+    ///
+    /// Which subset is legal depends on where the attribute sits — `final` on
+    /// a simple type takes `list` and `union`, `block` on an element takes
+    /// `substitution` — but a token outside this set is wrong everywhere.
+    pub const KEYWORDS: [&str; 5] = ["extension", "restriction", "substitution", "list", "union"];
+
     /// Parses a `block`/`final` attribute value: `#all`, or a space-separated
     /// list of keywords. Unknown keywords are ignored by the caller's rules.
     pub fn parse(s: &str) -> Self {
