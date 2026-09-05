@@ -199,8 +199,8 @@ crate:
 
 | | |
 |---|---|
-| valid schemas accepted | **98.9%** — it reads real schemas |
-| invalid schemas rejected | **54.2%** — particle subsumption is the big rule still missing |
+| valid schemas accepted | **99.0%** — it reads real schemas |
+| invalid schemas rejected | **54.0%** — particle subsumption is the big rule still missing |
 
 That asymmetry is by construction, not neglect: the Schema Component
 Constraints and the Derivation Valid rules are largely unimplemented (see §7).
@@ -339,7 +339,7 @@ Ordered by what gets more expensive the longer it waits, not by size.
 
 The 58 valid schemas still rejected break down, by diagnostic code, as: **40**
 `precisionDecimal` (27 unresolved `xs:precisionDecimal`, 13 `minScale`), **7**
-the identity-constraint `ref` bug below, **4** UPA false positives, **5** or so
+the identity-constraint `ref` bug (now fixed), **4** UPA false positives, **5** or so
 `vc:` conditional inclusion, and **2** that are correct behaviour — the
 entity-reference-loop guard firing on `ElementDeclarations.xsd`, and
 `FileResolver` refusing to fetch `xlink.xsd` over the network.
@@ -371,13 +371,13 @@ evidence — or never. See `DESIGN.md` §3.15.4 for why the answer today is
 
 ### P1 — correctness bugs, all small, all with repros
 
-1. **Identity-constraint `ref`.** XSD 1.1 lets an identity constraint be a
-   reference rather than a definition: `<unique ref="a:u1"/>`. The loader
-   reads `name` unconditionally, so a `ref` form gets the empty local name and
-   the second one collides with the first — reported as
-   `duplicate identity constraint {a}`. Costs 7 false rejections
-   (`IdentityConstraint/s2_2_4v01`-`v03`, the matching `ii` cases,
-   `saxonData/Id/id044`).
+1. ~~**Identity-constraint `ref`.**~~ **Done.** XSD 1.1 lets a constraint be
+   referenced rather than defined (`<unique ref="a:u1"/>`); the loader read
+   `name` unconditionally, so the `ref` form got the empty local name and the
+   second one collided with the first. Recovered the 7 predicted rejections
+   and cost 1 — a schema that is invalid for an unrelated reason was being
+   caught by the bogus duplicate, which is a reminder that a rejection being
+   *right* is not the same as a rejection being *correct*.
 2. **`values::parse` does not know the version.** It takes a `Builtin` and a
    lexical form, so it always applies the XSD 1.1 lexical spaces.
    `+INF` and the year `0000` are legal in 1.1 and illegal in 1.0, and we

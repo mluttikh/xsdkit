@@ -630,6 +630,103 @@ fn keyref_resolves_to_the_key_it_refers_to() {
     assert_eq!(s[*keyref].refer, Some(*key));
 }
 
+/// XSD 1.1 lets a constraint be *referenced* rather than defined, so one
+/// definition can apply to several elements. There is no new component: both
+/// elements end up pointing at the same one.
+///
+/// Read as a definition instead, a `ref` form has no `name` — so the first got
+/// the empty name, the second collided with it, and a valid schema was
+/// rejected as a duplicate.
+#[test]
+fn an_identity_constraint_can_be_referenced_instead_of_defined() {
+    let s = SchemaSetBuilder::new()
+        .version(Version::Xsd11)
+        .text(
+            schema(
+                r#"<xs:complexType name="T">
+                     <xs:sequence>
+                       <xs:element name="e1" maxOccurs="unbounded">
+                         <xs:complexType><xs:attribute name="a" type="xs:int"/></xs:complexType>
+                       </xs:element>
+                     </xs:sequence>
+                   </xs:complexType>
+                   <xs:element name="first" type="tns:T">
+                     <xs:unique name="u1">
+                       <xs:selector xpath="e1"/><xs:field xpath="@a"/>
+                     </xs:unique>
+                   </xs:element>
+                   <xs:element name="second" type="tns:T">
+                     <xs:unique ref="tns:u1"/>
+                   </xs:element>"#,
+            ),
+            "mem://main.xsd",
+        )
+        .build()
+        .unwrap_or_else(|d| panic!("expected a clean build, got:\n{d}"));
+
+    let first = s.element(Some(NS), "first").unwrap();
+    let second = s.element(Some(NS), "second").unwrap();
+    let a = &s[first].identity_constraints;
+    let b = &s[second].identity_constraints;
+    assert_eq!(a.len(), 1);
+    assert_eq!(b, a, "the reference resolves to the same component");
+    assert_eq!(s[b[0]].selector, "e1");
+}
+
+/// A `ref` naming nothing leaves no constraint behind. The slot goes away
+/// rather than pointing at something wrong — there is no sensible substitute
+/// for a constraint that is not there.
+#[test]
+fn an_unresolved_identity_constraint_reference_drops_the_slot() {
+    let (s, d) = SchemaSetBuilder::new()
+        .version(Version::Xsd11)
+        .conformance(Conformance::Lax)
+        .text(
+            schema(
+                r#"<xs:element name="e" type="xs:string">
+                        <xs:unique ref="tns:nonexistent"/>
+                      </xs:element>"#,
+            ),
+            "mem://main.xsd",
+        )
+        .build_with_warnings();
+    assert!(d.iter().any(|x| x.code == DiagCode::UnresolvedReference));
+
+    let e = s.element(Some(NS), "e").unwrap();
+    assert!(s[e].identity_constraints.is_empty());
+    // And nothing in the arena still holds the placeholder.
+    for id in &s[e].identity_constraints {
+        assert!(s.get_identity_constraint(*id).is_some());
+    }
+}
+
+/// `name` and `ref` are alternatives, and one of them is required.
+#[test]
+fn an_identity_constraint_needs_exactly_one_of_name_and_ref() {
+    let both = errors(&schema(
+        r#"<xs:element name="e" type="xs:string">
+             <xs:unique name="u" ref="tns:u"><xs:selector xpath="."/></xs:unique>
+           </xs:element>"#,
+    ));
+    assert!(
+        both.errors()
+            .any(|d| d.code == DiagCode::ConflictingTypeDefinition),
+        "{both}"
+    );
+
+    let neither = errors(&schema(
+        r#"<xs:element name="e" type="xs:string">
+             <xs:unique><xs:selector xpath="."/></xs:unique>
+           </xs:element>"#,
+    ));
+    assert!(
+        neither
+            .errors()
+            .any(|d| d.code == DiagCode::MissingAttribute),
+        "{neither}"
+    );
+}
+
 // ---------------------------------------------------------------------------
 // Annotations — the seam the units layer will hang on
 // ---------------------------------------------------------------------------

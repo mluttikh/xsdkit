@@ -207,6 +207,14 @@ pub(crate) enum Fixup {
         name: QName,
         span: Span,
     },
+    /// `<xs:unique ref="…"/>`: the element carries a constraint defined
+    /// elsewhere, so the slot holds a placeholder until that one is found.
+    ElementIdcRef {
+        element: ElementId,
+        index: usize,
+        name: QName,
+        span: Span,
+    },
 }
 
 #[derive(Copy, Clone, PartialEq, Eq, Debug)]
@@ -1138,7 +1146,7 @@ impl<'r> Loader<'r> {
             }
         }
 
-        let idcs = self.read_identity_constraints(doc, node, ctx);
+        let idcs = self.read_identity_constraints(doc, node, ctx, id);
         self.elements.get_mut(id.0).identity_constraints = idcs;
         id
     }
@@ -1148,6 +1156,7 @@ impl<'r> Loader<'r> {
         doc: &roxmltree::Document,
         node: roxmltree::Node,
         ctx: &DocCtx,
+        owner: ElementId,
     ) -> Vec<IdcId> {
         let mut out = Vec::new();
         for c in node.children().filter(is_xs_element) {
@@ -1158,6 +1167,48 @@ impl<'r> Loader<'r> {
                 _ => continue,
             };
             let span = Span::new(&ctx.uri, line_of(doc, c));
+
+            // XSD 1.1 lets a constraint be *referenced* rather than defined:
+            // `<xs:unique ref="a:u1"/>` hangs the constraint named there off
+            // this element too. There is no new component, and nothing to
+            // register — reading it as a definition gives it the empty name,
+            // and the second such reference then collides with the first.
+            match (c.attribute("ref"), c.attribute("name")) {
+                (Some(r), None) => {
+                    if let Some(q) = self.attr_qname(c, r, ctx, &span) {
+                        self.fixups.push(Fixup::ElementIdcRef {
+                            element: owner,
+                            index: out.len(),
+                            name: q,
+                            span,
+                        });
+                        out.push(IdcId::PLACEHOLDER);
+                    }
+                    continue;
+                }
+                (Some(_), Some(_)) => {
+                    self.diags.push(
+                        Diagnostic::error(
+                            DiagCode::ConflictingTypeDefinition,
+                            format!("`xs:{}` has both `name` and `ref`", c.tag_name().name()),
+                        )
+                        .at(span),
+                    );
+                    continue;
+                }
+                (None, None) => {
+                    self.diags.push(
+                        Diagnostic::error(
+                            DiagCode::MissingAttribute,
+                            format!("`xs:{}` needs a `name` or a `ref`", c.tag_name().name()),
+                        )
+                        .at(span),
+                    );
+                    continue;
+                }
+                (None, Some(_)) => {}
+            }
+
             let name = self.qualified_name(c.attribute("name").unwrap_or_default(), true, ctx);
             let selector = c
                 .children()

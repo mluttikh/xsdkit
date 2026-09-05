@@ -235,6 +235,16 @@ fn resolve_references(l: &mut Loader<'_>, mode: Conformance) {
                     None => unresolved.push((SymbolSpace::IdentityConstraint, name, span)),
                 }
             }
+            Fixup::ElementIdcRef {
+                element,
+                index,
+                name,
+                span,
+            } => match l.globals.identity_constraints.get(&name).copied() {
+                Some(k) => l.elements.get_mut(element.0).identity_constraints[index] = k,
+                // The placeholder stays, and `prune_placeholders` drops it.
+                None => unresolved.push((SymbolSpace::IdentityConstraint, name, span)),
+            },
         }
     }
 
@@ -326,6 +336,15 @@ fn prune_placeholders(l: &mut Loader<'_>) {
         if e.type_id.is_placeholder() {
             e.type_id = TypeId::from_index(0); // xs:anyType, installed first
         }
+    }
+    // An identity constraint reached by `ref` that never resolved. Unlike a
+    // type there is no sensible substitute — the constraint simply is not
+    // there — so the slot goes away rather than pointing at something wrong.
+    for i in 0..l.elements.len() as u32 {
+        l.elements
+            .get_mut(i)
+            .identity_constraints
+            .retain(|c| !c.is_placeholder());
     }
     // Attributes need the same repair, and a different fallback: an attribute
     // may only carry a simple type, so xs:anyType would be a lie. Reached by a
