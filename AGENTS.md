@@ -219,11 +219,16 @@ is fifty cases one rule buys.
 
 The instance half — 21,671 documents — is `#[ignore]`d because it takes
 minutes where the schema half takes seconds (4.5 minutes in `--release`; run
-it that way). Run it with `-- --ignored`. It scores 21,575 of them, 90.8%
-correct: **88.1%** of valid documents accepted, **94.1%** of invalid ones
-rejected. The shape is the mirror of the schema half — validation is
-implemented, so it catches things (the schema half's 21.4% at the time). 1,160 of the 1,412 false alarms sit in
-NIST2004-01-14 alone, which is where to look first.
+it that way). Run it with `-- --ignored`. It scores 21,575 of them, 95.0%
+correct: **95.7%** of valid documents accepted, **94.1%** of invalid ones
+rejected.
+
+That first figure was 88.1% until a one-line bug turned up: an *enumeration on
+a list type* compared its literals as strings against a list, so every such
+enumeration rejected every value. Fixing it moved 900 documents, and the whole
+run from 90.8% to 95.0%. Worth remembering when a conformance number looks
+like a long tail of unrelated failures — 1,160 of the 1,412 false alarms sat
+in NIST2004-01-14 alone, and they were all that one bug.
 
 The harness carries a floor assertion on acceptance. **Raise it as the number
 improves; never lower it silently** — a drop means a schema that used to load
