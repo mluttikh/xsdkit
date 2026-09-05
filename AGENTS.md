@@ -466,7 +466,32 @@ inherits, and reject anything that widens.
 6. Report the two `oxsdatatypes` findings upstream: the month-at-a-time
    `normalize_day` (a hang on a legal duration, not a slow answer) and the
    1969-09-01 reference date where the specification says 1696-09-01.
-7. **`precisionDecimal`.** 40 of the 58 remaining false rejections — 27
+
+7. **Drop `oxsdatatypes` entirely and implement the 14 datatypes here.**
+   Deliberately last, and deliberately still open. P0 removed the deadline —
+   the wrappers in `src/atomic.rs` mean this is now an internal change to one
+   file, per type, at any time — so it should be taken on evidence rather than
+   on a release schedule.
+
+   The evidence today says no (`DESIGN.md` §3.15.4): a direct probe found it
+   correct on the parts that are genuinely hard, its only dependency is
+   `thiserror`, and the problems this crate hit were one performance bug we
+   routed around and two version differences that were ours. What would change
+   the answer:
+
+   - **`precisionDecimal`** (item 8) needs a decimal type it does not have.
+     That is additive, and writing one is the natural first step of a
+     replacement if a replacement is ever wanted.
+   - A finding in the date-time family that is *wrong* rather than slow. The
+     W3C instance suite and the `parse_value` fuzz target are the oracle now,
+     which is the thing this project did not have when the decision was first
+     made.
+
+   Do it one type at a time, each behind its existing wrapper, each landing
+   with the suite and the fuzzer green. A big-bang rewrite of the date-time
+   family would trade a library verified against 21,533 documents for one
+   verified against nothing.
+8. **`precisionDecimal`.** 40 of the 58 remaining false rejections — 27
    unresolved `xs:precisionDecimal` plus 13 `minScale`/`maxScale` facets. It is
    the largest single cluster *and* an optional XSD 1.1 feature that did not
    survive into the required conformance set, so it buys a number rather than
