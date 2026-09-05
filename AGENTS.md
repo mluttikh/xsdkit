@@ -199,7 +199,7 @@ crate:
 
 | | |
 |---|---|
-| valid schemas accepted | **99.0%** — it reads real schemas |
+| valid schemas accepted | **99.1%** — it reads real schemas |
 | invalid schemas rejected | **54.4%** — particle subsumption is the big rule still missing |
 
 That asymmetry is by construction, not neglect: the Schema Component
@@ -366,7 +366,8 @@ Ordered by what gets more expensive the longer it waits, not by size.
 
 The 58 valid schemas still rejected break down, by diagnostic code, as: **40**
 `precisionDecimal` (27 unresolved `xs:precisionDecimal`, 13 `minScale`), **7**
-the identity-constraint `ref` bug (now fixed), **4** UPA false positives, **5** or so
+the identity-constraint `ref` bug (now fixed), **4** UPA false positives (also
+fixed), **5** or so
 `vc:` conditional inclusion, and **2** that are correct behaviour — the
 entity-reference-loop guard firing on `ElementDeclarations.xsd`, and
 `FileResolver` refusing to fetch `xlink.xsd` over the network.
@@ -410,9 +411,19 @@ evidence — or never. See `DESIGN.md` §3.15.4 for why the answer today is
    `values::parse_in` takes it. The bare `values::parse` still reads the 1.1
    superset — with no schema in hand there is nothing to say which language
    applies.
-3. **Four UPA false positives** (`XSD1304`). Three are named by `w3c_why`:
-   `saxonData/Wild/wild050`, `wildcard/s3_10_1ii08` and `ii09` — wildcards
-   the checker believes overlap and the specification does not.
+3. ~~**Four UPA false positives.**~~ **Done**, and they were two unrelated
+   gaps rather than one bug in the checker. `notNamespace` was never parsed,
+   so such a wildcard silently became `##any` and two wildcards *partitioning*
+   the namespaces looked identical. And `notQName`'s `##defined` /
+   `##definedSibling` keywords were dropped, so a wildcard meant to stand
+   aside for its named siblings competed with them.
+
+   The second one is why `Content` carries a `siblings` set: "the content
+   model this wildcard sits in" is only settled once group references are
+   expanded and an extension's base is folded in, so it cannot be resolved at
+   load time. `content::wildcard_admits` is the single place that answers
+   whether a wildcard takes a name — **add new exclusions there**, not at the
+   call sites, of which there are five.
 
 ### P2 — the one large item
 

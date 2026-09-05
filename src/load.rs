@@ -358,6 +358,8 @@ impl<'r> Loader<'r> {
                         namespace: NamespaceConstraint::Any,
                         process_contents: ProcessContents::Lax,
                         not_qname: Vec::new(),
+                        not_defined: false,
+                        not_defined_sibling: false,
                     }),
                     open_content: None,
                     is_abstract: false,
@@ -1951,19 +1953,30 @@ impl<'r> Loader<'r> {
             Some("strict") => ProcessContents::Strict,
             _ => ProcessContents::Lax,
         };
-        let not_qname = node
-            .attribute("notQName")
-            .map(|v| {
-                v.split_whitespace()
-                    .filter(|t| !t.starts_with("##"))
-                    .filter_map(|t| self.attr_qname(node, t, ctx, &Span::new(&ctx.uri, 0)))
-                    .collect()
-            })
-            .unwrap_or_default();
+        // `notQName` mixes plain names with two keywords standing for sets
+        // the document cannot spell out.
+        let raw = node.attribute("notQName").unwrap_or_default();
+        let mut not_qname = Vec::new();
+        let mut not_defined = false;
+        let mut not_defined_sibling = false;
+        for tok in raw.split_whitespace() {
+            match tok {
+                "##defined" => not_defined = true,
+                "##definedSibling" => not_defined_sibling = true,
+                _ if tok.starts_with("##") => {}
+                _ => {
+                    if let Some(q) = self.attr_qname(node, tok, ctx, &Span::new(&ctx.uri, 0)) {
+                        not_qname.push(q);
+                    }
+                }
+            }
+        }
         Wildcard {
             namespace,
             process_contents,
             not_qname,
+            not_defined,
+            not_defined_sibling,
         }
     }
 

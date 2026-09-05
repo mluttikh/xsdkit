@@ -328,3 +328,91 @@ fn namespace_and_not_namespace_are_alternatives() {
         "{d}"
     );
 }
+
+/// `##definedSibling` excludes every name the surrounding content model writes
+/// out, which is what lets a wildcard sit between named particles without
+/// competing with them. Without it the wildcard looked ambiguous against the
+/// element after it and UPA rejected a valid schema.
+#[test]
+fn defined_sibling_excludes_the_names_beside_it() {
+    let body = r###"<xs:complexType name="T">
+                      <xs:sequence>
+                        <xs:element ref="tns:b"/>
+                        <xs:any notQName="##definedSibling" processContents="lax"
+                                maxOccurs="unbounded"/>
+                        <xs:element ref="tns:c"/>
+                      </xs:sequence>
+                    </xs:complexType>
+                    <xs:element name="b" type="xs:int"/>
+                    <xs:element name="c" type="xs:int"/>
+                    <xs:element name="d" type="xs:int"/>
+                    <xs:element name="root" type="tns:T"/>"###;
+    let d = diagnostics(body, Version::Xsd11);
+    assert!(!d.has_errors(), "{d}");
+
+    // And the exclusion has to reach validation, not just UPA: the wildcard
+    // must refuse `c` so the sequence can finish on it.
+    let s = build(body, Version::Xsd11);
+    assert!(valid(
+        &s,
+        r#"<root xmlns="urn:example"><b>1</b><d>2</d><c>3</c></root>"#
+    ));
+    // `c` is a sibling, so the wildcard never swallows it — two of them in a
+    // row cannot both be matched by the wildcard.
+    assert!(!valid(
+        &s,
+        r#"<root xmlns="urn:example"><b>1</b><c>2</c><c>3</c></root>"#
+    ));
+}
+
+/// `##defined` excludes every name the schema declares globally, so the
+/// wildcard admits only what the schema does not describe.
+#[test]
+fn defined_excludes_every_global_declaration() {
+    let body = r###"<xs:complexType name="T">
+                      <xs:sequence>
+                        <xs:any notQName="##defined" processContents="lax"
+                                namespace="##targetNamespace" maxOccurs="unbounded"/>
+                      </xs:sequence>
+                    </xs:complexType>
+                    <xs:element name="known" type="xs:int"/>
+                    <xs:element name="root" type="tns:T"/>"###;
+    let s = build(body, Version::Xsd11);
+    // `known` has a global declaration, so the wildcard refuses it.
+    assert!(!valid(
+        &s,
+        r#"<root xmlns="urn:example"><known>1</known></root>"#
+    ));
+    // A name the schema never declares goes through.
+    assert!(valid(
+        &s,
+        r#"<root xmlns="urn:example"><unknown>1</unknown></root>"#
+    ));
+}
+
+/// The sibling set is the model as it ends up, so a name reached through a
+/// group reference counts too.
+#[test]
+fn defined_sibling_sees_through_a_group_reference() {
+    let body = r###"<xs:group name="G">
+                      <xs:sequence><xs:element ref="tns:inner"/></xs:sequence>
+                    </xs:group>
+                    <xs:complexType name="T">
+                      <xs:sequence>
+                        <xs:group ref="tns:G"/>
+                        <xs:any notQName="##definedSibling" processContents="lax" minOccurs="0"/>
+                      </xs:sequence>
+                    </xs:complexType>
+                    <xs:element name="inner" type="xs:int"/>
+                    <xs:element name="root" type="tns:T"/>"###;
+    let s = build(body, Version::Xsd11);
+    assert!(valid(
+        &s,
+        r#"<root xmlns="urn:example"><inner>1</inner><other>2</other></root>"#
+    ));
+    // `inner` came from the group, and is still a sibling.
+    assert!(!valid(
+        &s,
+        r#"<root xmlns="urn:example"><inner>1</inner><inner>2</inner></root>"#
+    ));
+}

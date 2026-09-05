@@ -575,6 +575,17 @@ pub struct Wildcard {
     /// XSD 1.1 `notQName`, excluding specific names from an otherwise
     /// admitted namespace.
     pub not_qname: Vec<QName>,
+    /// XSD 1.1 `notQName="##defined"`: exclude every name that has a global
+    /// element declaration, so the wildcard admits only what the schema does
+    /// *not* describe.
+    pub not_defined: bool,
+    /// XSD 1.1 `notQName="##definedSibling"`: exclude every name written out
+    /// in the content model this wildcard sits in.
+    ///
+    /// The point is to let a wildcard sit beside named particles without
+    /// competing with them — which is also why it settles a Unique Particle
+    /// Attribution question that would otherwise be ambiguous.
+    pub not_defined_sibling: bool,
 }
 
 // ---------------------------------------------------------------------------

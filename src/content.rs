@@ -196,6 +196,15 @@ pub enum ContentModel {
 #[derive(Clone, Debug)]
 pub struct Content {
     pub model: ContentModel,
+    /// Every element name written out in this content model, which is what
+    /// `notQName="##definedSibling"` excludes.
+    ///
+    /// Resolved here rather than at load time because "the content model this
+    /// wildcard sits in" is only settled once group references are expanded
+    /// and an extension's base is folded in. Names, not declarations: a
+    /// substitution group member is admitted through its head rather than
+    /// named, so it is not a sibling.
+    pub siblings: FxHashSet<QName>,
     /// Kept beside the model rather than compiled into it: interleaved open
     /// content is the *shuffle* of the declared language with the wildcard's,
     /// which a position automaton cannot express — but a matcher decides it
@@ -508,7 +517,11 @@ pub(crate) fn build_all(
         let open = schemas[id]
             .as_complex()
             .and_then(|c| c.open_content.clone());
-        models[id.index()] = Some(Content { model, open });
+        models[id.index()] = Some(Content {
+            model,
+            open,
+            siblings: named_elements(schemas, &particles),
+        });
     }
 
     for (id, def) in schemas.iter_types() {
@@ -516,7 +529,15 @@ pub(crate) fn build_all(
             continue;
         };
         if let ContentModel::Automaton(a) = &content.model {
-            check_upa(schemas, def, a, mode, version, &mut diags);
+            check_upa(
+                schemas,
+                def,
+                a,
+                &content.siblings,
+                mode,
+                version,
+                &mut diags,
+            );
         }
     }
 
@@ -629,6 +650,7 @@ fn check_upa(
     schemas: &Schemas,
     def: &TypeDefinition,
     a: &ContentAutomaton,
+    siblings: &FxHashSet<QName>,
     mode: crate::load::Conformance,
     version: crate::load::Version,
     diags: &mut Diagnostics,
@@ -644,7 +666,7 @@ fn check_upa(
                     // choice; they can never be confused for each other.
                     continue;
                 }
-                let Some(overlap) = overlap(schemas, p, q) else {
+                let Some(overlap) = overlap(schemas, p, q, siblings) else {
                     continue;
                 };
                 // XSD 1.1 resolves an element competing with a wildcard in
@@ -692,7 +714,12 @@ enum Overlap {
     Wildcards,
 }
 
-fn overlap(schemas: &Schemas, p: &Position, q: &Position) -> Option<Overlap> {
+fn overlap(
+    schemas: &Schemas,
+    p: &Position,
+    q: &Position,
+    siblings: &FxHashSet<QName>,
+) -> Option<Overlap> {
     match (&p.label, &q.label) {
         (Label::Element(_), Label::Element(_)) => {
             // By *name*, not by declaration identity. Two distinct local
@@ -706,10 +733,10 @@ fn overlap(schemas: &Schemas, p: &Position, q: &Position) -> Option<Overlap> {
                 .map(Overlap::Name)
         }
         (Label::Element(_), Label::Wildcard) => {
-            wildcard_of(schemas, q).and_then(|w| first_admitted(schemas, w, &p.admits))
+            wildcard_of(schemas, q).and_then(|w| first_admitted(schemas, w, &p.admits, siblings))
         }
         (Label::Wildcard, Label::Element(_)) => {
-            wildcard_of(schemas, p).and_then(|w| first_admitted(schemas, w, &q.admits))
+            wildcard_of(schemas, p).and_then(|w| first_admitted(schemas, w, &q.admits, siblings))
         }
         (Label::Wildcard, Label::Wildcard) => {
             let (Some(a), Some(b)) = (wildcard_of(schemas, p), wildcard_of(schemas, q)) else {
@@ -727,11 +754,71 @@ fn wildcard_of<'a>(schemas: &'a Schemas, p: &Position) -> Option<&'a Wildcard> {
     }
 }
 
-fn first_admitted(schemas: &Schemas, w: &Wildcard, elements: &[ElementId]) -> Option<Overlap> {
+/// Whether a wildcard admits `name`, given the names its content model writes
+/// out.
+///
+/// The namespace decides first, then the three exclusions XSD 1.1 added.
+/// `##defined` asks the schema and `##definedSibling` asks the model, which is
+/// why this needs both and cannot live on `Wildcard`.
+pub(crate) fn wildcard_admits(
+    schemas: &Schemas,
+    w: &Wildcard,
+    name: QName,
+    siblings: &FxHashSet<QName>,
+) -> bool {
+    w.namespace.admits(name.ns)
+        && !w.not_qname.contains(&name)
+        && !(w.not_defined_sibling && siblings.contains(&name))
+        && !(w.not_defined && schemas.globals().elements.contains_key(&name))
+}
+
+/// The element names a set of particles writes out, with group references
+/// expanded.
+fn named_elements(schemas: &Schemas, particles: &[ParticleId]) -> FxHashSet<QName> {
+    fn walk(
+        schemas: &Schemas,
+        p: ParticleId,
+        out: &mut FxHashSet<QName>,
+        seen: &mut FxHashSet<GroupId>,
+    ) {
+        match &schemas[p].term {
+            Term::Element(e) if !e.is_placeholder() => {
+                out.insert(schemas[*e].name);
+            }
+            Term::Group(g) => {
+                for c in &g.particles {
+                    walk(schemas, *c, out, seen);
+                }
+            }
+            // A group that reaches itself is rejected elsewhere; the guard
+            // here only needs to make this walk terminate.
+            Term::GroupRef(gid) if !gid.is_placeholder() && seen.insert(*gid) => {
+                for c in &schemas[*gid].group.particles {
+                    walk(schemas, *c, out, seen);
+                }
+            }
+            _ => {}
+        }
+    }
+
+    let mut out = FxHashSet::default();
+    let mut seen = FxHashSet::default();
+    for p in particles {
+        walk(schemas, *p, &mut out, &mut seen);
+    }
+    out
+}
+
+fn first_admitted(
+    schemas: &Schemas,
+    w: &Wildcard,
+    elements: &[ElementId],
+    siblings: &FxHashSet<QName>,
+) -> Option<Overlap> {
     elements
         .iter()
         .map(|e| schemas[*e].name)
-        .find(|n| w.namespace.admits(n.ns) && !w.not_qname.contains(n))
+        .find(|n| wildcard_admits(schemas, w, *n, siblings))
         .map(Overlap::ElementAndWildcard)
 }
 
@@ -828,6 +915,8 @@ pub struct ContentMatcher<'a> {
     schemas: &'a Schemas,
     model: &'a ContentModel,
     open: Option<&'a OpenContent>,
+    /// The names this model writes out, for `notQName="##definedSibling"`.
+    siblings: &'a FxHashSet<QName>,
     /// Active positions, for an automaton model.
     active: Vec<PositionId>,
     /// The declaration the last successful `step` matched, if it named one.
@@ -841,6 +930,7 @@ pub struct ContentMatcher<'a> {
 impl<'a> ContentMatcher<'a> {
     pub fn new(schemas: &'a Schemas, content: &'a Content) -> Self {
         let model = &content.model;
+        let siblings = &content.siblings;
         let counts = match model {
             ContentModel::All(g) => vec![0; g.members.len()],
             _ => Vec::new(),
@@ -848,6 +938,7 @@ impl<'a> ContentMatcher<'a> {
         Self {
             schemas,
             model,
+            siblings,
             open: content.open.as_ref(),
             active: Vec::new(),
             matched: None,
@@ -866,9 +957,14 @@ impl<'a> ContentMatcher<'a> {
         let ok = match self.model {
             ContentModel::Empty => false,
             ContentModel::Automaton(a) => self.step_automaton(a, name),
-            ContentModel::All(g) => {
-                Self::step_all(self.schemas, g, &mut self.counts, name, &mut self.matched)
-            }
+            ContentModel::All(g) => Self::step_all(
+                self.schemas,
+                g,
+                &mut self.counts,
+                name,
+                self.siblings,
+                &mut self.matched,
+            ),
         };
         if ok {
             return true;
@@ -887,7 +983,7 @@ impl<'a> ContentMatcher<'a> {
     /// Whether open content admits an already-known name at this point.
     fn open_admits(&self, name: QName) -> bool {
         let Some(open) = self.open else { return false };
-        if !open.wildcard.namespace.admits(name.ns) || open.wildcard.not_qname.contains(&name) {
+        if !wildcard_admits(self.schemas, &open.wildcard, name, self.siblings) {
             return false;
         }
         match open.mode {
@@ -928,7 +1024,7 @@ impl<'a> ContentMatcher<'a> {
         let mut next = Vec::new();
         let mut matched = None;
         for c in candidates {
-            if let Some(decl) = admits(self.schemas, a.position(c), name) {
+            if let Some(decl) = admits(self.schemas, a.position(c), name, self.siblings) {
                 if !next.contains(&c) {
                     next.push(c);
                 }
@@ -957,6 +1053,7 @@ impl<'a> ContentMatcher<'a> {
         g: &AllGroup,
         counts: &mut [u32],
         name: QName,
+        siblings: &FxHashSet<QName>,
         matched: &mut Option<ElementId>,
     ) -> bool {
         for (i, m) in g.members.iter().enumerate() {
@@ -967,11 +1064,7 @@ impl<'a> ContentMatcher<'a> {
                     .find(|e| schemas[**e].name == name)
                     .map(|e| Some(*e)),
                 Label::Wildcard => match &schemas[m.particle].term {
-                    Term::Wildcard(w)
-                        if w.namespace.admits(name.ns) && !w.not_qname.contains(&name) =>
-                    {
-                        Some(None)
-                    }
+                    Term::Wildcard(w) if wildcard_admits(schemas, w, name, siblings) => Some(None),
                     _ => None,
                 },
             };
@@ -1134,7 +1227,12 @@ fn excluded(schemas: &Schemas, w: &Wildcard, ns_uri: Option<&str>, local: &str) 
     })
 }
 
-fn admits(schemas: &Schemas, p: &Position, name: QName) -> Option<Option<ElementId>> {
+fn admits(
+    schemas: &Schemas,
+    p: &Position,
+    name: QName,
+    siblings: &FxHashSet<QName>,
+) -> Option<Option<ElementId>> {
     match &p.label {
         Label::Element(_) => p
             .admits
@@ -1142,9 +1240,7 @@ fn admits(schemas: &Schemas, p: &Position, name: QName) -> Option<Option<Element
             .find(|e| schemas[**e].name == name)
             .map(|e| Some(*e)),
         Label::Wildcard => match &schemas[p.particle].term {
-            Term::Wildcard(w) if w.namespace.admits(name.ns) && !w.not_qname.contains(&name) => {
-                Some(None)
-            }
+            Term::Wildcard(w) if wildcard_admits(schemas, w, name, siblings) => Some(None),
             _ => None,
         },
     }
