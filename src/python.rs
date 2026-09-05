@@ -1088,6 +1088,17 @@ impl PyElement {
         self.r#type().optional(child)
     }
 
+    /// Shows the tree in a notebook, where evaluating a value is how you look
+    /// at it.
+    ///
+    /// Shallower than `tree()` on purpose: this fires on any cell that ends in
+    /// an element, including by accident, so it shows the shape rather than
+    /// the whole schema. Call `tree(depth=...)` for more.
+    #[allow(non_snake_case)]
+    fn _repr_html_(&self) -> String {
+        self.tree(2)._repr_html_()
+    }
+
     /// A readable tree of what may appear inside, for looking at a schema.
     ///
     /// Regular-expression markers for how often a child may appear — `?`
@@ -1104,11 +1115,11 @@ impl PyElement {
     ///         price: xs:decimal
     ///         note?: xs:string
     #[pyo3(signature = (depth=3))]
-    fn tree(&self, depth: usize) -> String {
-        let mut out = String::new();
+    fn tree(&self, depth: usize) -> PyTree {
+        let mut text = String::new();
         let mut seen = Vec::new();
-        self.write_tree(&mut out, 0, depth, &mut seen, "");
-        out
+        self.write_tree(&mut text, 0, depth, &mut seen, "");
+        PyTree { text }
     }
 
     fn __repr__(&self) -> String {
@@ -1121,6 +1132,73 @@ impl PyElement {
 
     fn __hash__(&self) -> u64 {
         self.id.index() as u64
+    }
+}
+
+/// Rendered text that knows how to show itself.
+///
+/// A plain `str` is the wrong return type for something meant to be *looked
+/// at*: a notebook displays `repr()` of the last expression, and `repr` of a
+/// string escapes every newline into `\n`. This renders as itself in a REPL,
+/// in a notebook, and through `print`.
+#[pyclass(module = "xsdkit", name = "Tree", frozen)]
+pub struct PyTree {
+    text: String,
+}
+
+#[pymethods]
+impl PyTree {
+    /// The text itself, so a notebook cell and a REPL both show the tree
+    /// rather than an escaped one-liner.
+    fn __repr__(&self) -> String {
+        self.text.clone()
+    }
+
+    fn __str__(&self) -> String {
+        self.text.clone()
+    }
+
+    /// Monospaced and with the whitespace kept, for Jupyter.
+    ///
+    /// The leading underscore is IPython's convention, not ours.
+    #[allow(non_snake_case)]
+    fn _repr_html_(&self) -> String {
+        let escaped = self
+            .text
+            .replace('&', "&amp;")
+            .replace('<', "&lt;")
+            .replace('>', "&gt;");
+        format!(
+            "<pre style=\"line-height:1.3;margin:0;font-family:ui-monospace,\
+             SFMono-Regular,Menlo,monospace\">{escaped}</pre>"
+        )
+    }
+
+    /// The lines, so a tree can be sliced and searched like the text it is.
+    fn splitlines(&self) -> Vec<String> {
+        self.text.lines().map(str::to_string).collect()
+    }
+
+    fn __contains__(&self, needle: &str) -> bool {
+        self.text.contains(needle)
+    }
+
+    /// How many times `needle` occurs, as `str.count` would say.
+    fn count(&self, needle: &str) -> usize {
+        self.text.matches(needle).count()
+    }
+
+    /// The length in characters, matching what `str` would say.
+    fn __len__(&self) -> usize {
+        self.text.chars().count()
+    }
+
+    /// Equal to the string it renders as, so a test may compare against one.
+    fn __eq__(&self, other: &Bound<'_, PyAny>) -> bool {
+        match other.extract::<String>() {
+            Ok(s) => s == self.text,
+            Err(_) => false,
+        }
     }
 }
 
@@ -1717,6 +1795,49 @@ impl PyType_ {
             TypeDefinition::Complex(t) => t.annotation,
         };
         annotation_appinfo(&self.s, ann)
+    }
+
+    /// A readable tree of what may appear inside this type.
+    ///
+    /// The same rendering as `Element.tree`, rooted at the type rather than at
+    /// a declaration — so the first line is the type's name and the rest is
+    /// its content.
+    #[pyo3(signature = (depth=3))]
+    fn tree(&self, depth: usize) -> PyTree {
+        use std::fmt::Write;
+        let mut text = String::new();
+        let _ = writeln!(
+            text,
+            "{}",
+            self.qname()
+                .map(|n| short(&n))
+                .unwrap_or_else(|| "(anonymous)".into())
+        );
+        for u in self.attributes() {
+            let _ = writeln!(
+                text,
+                "  @{}{}",
+                u.local_name(),
+                if u.required() { "" } else { "?" }
+            );
+        }
+        let mut seen = Vec::new();
+        for c in self.children() {
+            let marker = match (self.repeats(&c), self.optional(&c)) {
+                (true, true) => "*",
+                (true, false) => "+",
+                (false, true) => "?",
+                (false, false) => "",
+            };
+            c.write_tree(&mut text, 1, depth, &mut seen, marker);
+        }
+        PyTree { text }
+    }
+
+    /// Shows the tree in a notebook. Shallower than `tree()`, as on `Element`.
+    #[allow(non_snake_case)]
+    fn _repr_html_(&self) -> String {
+        self.tree(2)._repr_html_()
     }
 
     /// The child element of that name, raising `KeyError` when there is none.
@@ -2466,6 +2587,7 @@ fn xsdkit_module(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<PySchemaSet>()?;
     m.add_class::<PyNameIter>()?;
     m.add_class::<PyElementIter>()?;
+    m.add_class::<PyTree>()?;
     m.add_class::<PyPsviEvents>()?;
     m.add_class::<PyElement>()?;
     m.add_class::<PyAttribute>()?;

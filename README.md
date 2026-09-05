@@ -77,7 +77,7 @@ import xsdkit
 schemas = xsdkit.SchemaSet.from_file("report.xsd", search_paths=["schemas/"])
 report = schemas["{urn:example}report"]
 
-print(report.tree())
+report.tree()          # or print(...); it renders in a notebook either way
 # report
 #   title: xs:string
 #   item+

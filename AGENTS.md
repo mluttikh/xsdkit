@@ -608,6 +608,15 @@ practice, since each was a real complaint:
   on the component, and pairs made every caller write `[0][1]`. The complaint
   that produced all of this was one line of real code:
   `x.elements[0][1].type.children[1].type.children[0].qname`.
+- **Anything meant to be looked at returns a display object, not a `str`.**
+  A notebook shows `repr()` of the last expression, and `repr` of a string
+  escapes every newline — so `tree()` returning a `str` was unreadable in the
+  one place people most want to read it. `Tree` renders as itself through
+  `repr`, `str` and `print`, offers `_repr_html_` for Jupyter, and keeps the
+  text operations that make it still a piece of text. `Element` and `Type`
+  carry `_repr_html_` too, shallower than `tree()`, because the notebook
+  gesture is to evaluate rather than to print — but `__repr__` stays a short
+  one-liner, or a list of a hundred elements becomes a hundred trees.
 - **Every public name carries a docstring**, and `test_stubs.py` fails without
   one. A `#[getter]` with no `///` above it produces an *empty* docstring
   rather than an error, so nothing else notices — coverage had drifted to 51%,

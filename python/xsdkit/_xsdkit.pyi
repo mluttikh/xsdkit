@@ -206,7 +206,9 @@ class Element:
         """Whether ``child`` may appear here more than once."""
     def optional(self, child: Element, /) -> bool:
         """Whether ``child`` may be left out."""
-    def tree(self, depth: int = ...) -> str:
+    def _repr_html_(self) -> str:
+        """Shows the tree in a notebook, shallower than ``tree()``."""
+    def tree(self, depth: int = ...) -> Tree:
         """A readable tree of what may appear inside.
 
         ``?`` optional, ``+`` one or more, ``*`` any number, nothing for
@@ -253,6 +255,10 @@ class Element:
 
 class Type:
     """A type definition, simple or complex."""
+
+    def tree(self, depth: int = ...) -> Tree:
+        """A readable tree of what may appear inside this type."""
+    def _repr_html_(self) -> str: ...
 
     def __len__(self) -> int: ...
     def __iter__(self) -> Iterator[Element]: ...
@@ -372,6 +378,24 @@ class PsviEvents:
     def report(self) -> ValidationReport:
         """The outcome, available before the events are consumed as well as
         after — a document can be read for its values and still be invalid."""
+
+class Tree:
+    """Rendered text that knows how to show itself.
+
+    A plain ``str`` is the wrong type for something meant to be *looked at*: a
+    notebook displays ``repr()`` of the last expression, and ``repr`` of a
+    string escapes every newline. This renders as itself in a REPL, in a
+    notebook and through ``print``, while still behaving as the text it is.
+    """
+
+    def __str__(self) -> str: ...
+    def __repr__(self) -> str: ...
+    def __len__(self) -> int: ...
+    def __contains__(self, needle: str, /) -> bool: ...
+    def __eq__(self, other: object, /) -> bool: ...
+    def _repr_html_(self) -> str: ...
+    def splitlines(self) -> list[str]: ...
+    def count(self, needle: str, /) -> int: ...
 
 class ElementIterator:
     def __iter__(self) -> Iterator[Element]: ...

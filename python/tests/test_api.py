@@ -462,3 +462,57 @@ def test_a_recursive_schema_prints_once():
     out = s[f"{{{NS}}}root"].tree(depth=50)
     assert out.count("child") < 10, "recursion has to stop where the shape repeats"
     assert "..." in out
+
+
+def test_a_tree_shows_itself_rather_than_escaping_itself():
+    """A notebook displays `repr()` of the last expression.
+
+    `repr` of a `str` escapes every newline into `\\n`, so returning one made
+    `element.tree()` unreadable in the place people most want to read it.
+    """
+    s = build(
+        '<xs:element name="report"><xs:complexType><xs:sequence>'
+        '<xs:element name="item" type="xs:string" maxOccurs="unbounded"/>'
+        "</xs:sequence></xs:complexType></xs:element>"
+    )
+    t = s.elements[0].tree()
+    assert repr(t) == str(t), "repr is the tree, not an escaped one-liner"
+    assert "\\n" not in repr(t)
+    assert repr(t).splitlines()[0] == "report"
+
+    # Jupyter picks the HTML up, monospaced and whitespace-preserving.
+    html = t._repr_html_()
+    assert html.startswith("<pre") and "item+" in html
+
+    # And it still behaves as the text it is.
+    assert "item+" in t
+    assert t.splitlines()[0] == "report"
+    assert len(t) == len(str(t))
+    assert t == str(t)
+
+
+def test_markup_in_a_namespace_is_escaped():
+    """A namespace URI may hold an ampersand, and the HTML must survive it."""
+    s = xsdkit.SchemaSet.from_string(
+        f'<xs:schema xmlns:xs="{XS}" xmlns:tns="urn:a&amp;b" targetNamespace="urn:a&amp;b">'
+        '<xs:element name="e" type="tns:T"/>'
+        '<xs:complexType name="T"><xs:sequence/></xs:complexType></xs:schema>'
+    )
+    tree = s.elements[0].tree()
+    assert "urn:a&b" in tree, "the text keeps the URI as it is"
+    assert "urn:a&amp;b" in tree._repr_html_(), "the HTML escapes it"
+
+
+def test_evaluating_a_component_shows_it():
+    """The notebook gesture is to evaluate, not to print."""
+    s = build(
+        '<xs:element name="report" type="tns:R"/>'
+        '<xs:complexType name="R"><xs:sequence>'
+        '<xs:element name="item" type="xs:string"/>'
+        "</xs:sequence></xs:complexType>"
+    )
+    for component in (s.elements[0], s.types[0]):
+        html = component._repr_html_()
+        assert html.startswith("<pre") and "item" in html
+    # `repr` stays short, so a list of them is still readable.
+    assert repr(s.elements) == "[<Element {urn:example}report>]"
