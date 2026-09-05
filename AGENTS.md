@@ -501,9 +501,10 @@ has the wrong number of particles.
 
 ### P4 — optional, and genuinely optional
 
-6. Report the two `oxsdatatypes` findings upstream: the month-at-a-time
-   `normalize_day` (a hang on a legal duration, not a slow answer) and the
-   1969-09-01 reference date where the specification says 1696-09-01.
+6. ~~Report the `oxsdatatypes` findings upstream.~~ **Dropped**, deliberately
+   rather than forgotten: the crate no longer depends on it. The three
+   findings stay written down in `DESIGN.md` §3.15.4, since they are the
+   evidence for the decision recorded there.
 
 7. ~~**Drop `oxsdatatypes` entirely.**~~ **Done.** All 14 datatypes are in
    `src/atomic.rs`, and the crate's remaining dependencies are `encoding_rs`,
