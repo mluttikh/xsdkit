@@ -23,6 +23,22 @@ Use = Literal["required", "optional", "prohibited"]
 #: A name as Clark notation (``{ns}local``), a bare local name, or a pair.
 Name = str | tuple[str | None, str]
 
+#: Resolves a schema location to a document.
+#:
+#: Called with ``(location, base)``, where ``base`` is the URI of the document
+#: containing the reference, or ``None``. Return the document as ``bytes`` —
+#: leaving the encoding to xsdkit, which reads the byte-order mark and the XML
+#: declaration — or as ``str``, or as ``(uri, document)`` to say where it was
+#: actually found. Raise to report that it could not be resolved; the exception
+#: becomes the diagnostic.
+#:
+#: Replaces the filesystem rather than adding to it, so it is an alternative to
+#: ``search_paths``, not a layer on top.
+Resolver = Callable[[str, str | None], bytes | str | tuple[str, bytes | str]]
+
+#: A document to validate: text, or bytes whose encoding xsdkit detects.
+Instance = str | bytes
+
 #: An XSD value as its closest native Python type.
 #:
 #: Durations and gregorian fragments stay as their canonical lexical strings —
@@ -312,6 +328,7 @@ class SchemaSet:
         conformance: Conformance = ...,
         version: XsdVersion = ...,
         nodes_limit: int | None = ...,
+        resolver: Resolver | None = ...,
     ) -> SchemaSet:
         """Raises `SchemaError` on any error diagnostic.
 
@@ -329,6 +346,7 @@ class SchemaSet:
         conformance: Conformance = ...,
         version: XsdVersion = ...,
         nodes_limit: int | None = ...,
+        resolver: Resolver | None = ...,
     ) -> SchemaSet: ...
     @classmethod
     def from_bytes(
@@ -340,6 +358,7 @@ class SchemaSet:
         conformance: Conformance = ...,
         version: XsdVersion = ...,
         nodes_limit: int | None = ...,
+        resolver: Resolver | None = ...,
     ) -> SchemaSet:
         """Detects the encoding: byte-order mark, then the XML declaration,
         then UTF-8."""
@@ -370,10 +389,10 @@ class SchemaSet:
     def element(self, namespace: Name | None, local: str | None = ..., /) -> Element | None: ...
     def type(self, namespace: Name | None, local: str | None = ..., /) -> Type | None: ...
     def attribute(self, namespace: Name | None, local: str | None = ..., /) -> Attribute | None: ...
-    def validate(self, xml: str, *, uri: str = ...) -> ValidationReport:
+    def validate(self, xml: Instance, *, uri: str = ...) -> ValidationReport:
         """Validates a document. Never raises for an invalid one — that is an
         answer, not an error."""
-    def iter_typed(self, xml: str, *, uri: str = ...) -> PsviEvents:
+    def iter_typed(self, xml: Instance, *, uri: str = ...) -> PsviEvents:
         """Reads a document into typed PSVI events, one at a time.
 
         The iterator form of ``read_typed``, and the one to reach for::
@@ -385,7 +404,7 @@ class SchemaSet:
         """
     def read_typed(
         self,
-        xml: str,
+        xml: Instance,
         *,
         on_event: Callable[[PsviEvent], None] | None = ...,
         uri: str = ...,
@@ -403,6 +422,7 @@ def load(
     conformance: Conformance = ...,
     version: XsdVersion = ...,
     nodes_limit: int | None = ...,
+    resolver: Resolver | None = ...,
 ) -> tuple[SchemaSet, list[Diagnostic]]:
     """Loads a schema and returns it *with* its diagnostics, rather than
     raising. For schemas expected to be imperfect."""
@@ -415,4 +435,5 @@ def load_string(
     conformance: Conformance = ...,
     version: XsdVersion = ...,
     nodes_limit: int | None = ...,
+    resolver: Resolver | None = ...,
 ) -> tuple[SchemaSet, list[Diagnostic]]: ...

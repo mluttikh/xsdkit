@@ -578,6 +578,30 @@ be released around `build()`.
 
 ### 6. The Python bindings
 
+The API is a Python API, not a transliterated Rust one. What that has meant in
+practice, since each was a real complaint:
+
+- **`SchemaSet` is a mapping** — `len`, `in`, `[]`, iteration — over the
+  globals *the documents declare*. The XSD built-ins are filtered out of all
+  of it, by namespace rather than by `Schemas::as_builtin`, which reads
+  `SimpleType::builtin` and so cannot see the complex `xs:anyType`. `type()`
+  still resolves them: the mapping is "what this schema says", the lookup
+  methods are "resolve this name".
+- **Every handle needs `__eq__` and `__hash__`.** Without them a `#[pyclass]`
+  falls back to identity, so two lookups of one declaration are unequal and
+  hash apart — a set of them silently holds duplicates and nothing raises.
+  That is worse than being unhashable.
+- **Anything document-shaped takes `str` or `bytes`**, and anything
+  path-shaped goes through `os.fspath`. A caller has a `Path` and a file read
+  in binary; refusing either is friction with no upside.
+- **Iterators, not callbacks.** `iter_typed` composes with `enumerate`,
+  `itertools` and generator expressions; `on_event=` composes with nothing.
+  A return type that changes with an argument — `list | None` decided by a
+  keyword — is worse still.
+- **Every Rust knob needs a keyword.** `version=` was missing for a long time,
+  which made the whole XSD 1.1 implementation unreachable from Python without
+  anyone noticing.
+
 - Every wrapper is `(Arc<Schemas>, Id)`. **Never copy components into Python
   objects** — handles must stay free so a schema with thousands of globals
   costs nothing to walk.

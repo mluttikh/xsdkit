@@ -55,6 +55,77 @@ fn schema_error(py: Python<'_>, diags: Diagnostics) -> PyErr {
     err
 }
 
+/// Bridges a Python callable into the [`Resolver`] trait.
+///
+/// The contract is deliberately small, because the caller already has a
+/// language for this: a function of `(location, base)` that returns the
+/// document, or raises. Returning `bytes` leaves the encoding to
+/// `xsdkit` — byte-order mark, then the XML declaration, then UTF-8 — which is
+/// the same treatment `from_bytes` gives, and the reason a resolver should not
+/// decode for itself.
+struct PyResolver {
+    callable: Py<PyAny>,
+}
+
+impl crate::load::Resolver for PyResolver {
+    fn resolve(&self, location: &str, base: Option<&str>) -> Result<(String, Vec<u8>), String> {
+        // Reacquires the GIL: `build()` released it, and this is Python code.
+        Python::attach(|py| {
+            let out = self
+                .callable
+                .call1(py, (location, base))
+                .map_err(|e| e.to_string())?;
+            let out = out.bind(py);
+
+            // `(uri, document)` when the resolver followed a redirect and
+            // wants relative locations resolved against where it landed;
+            // otherwise the location stands as the URI.
+            if let Ok(t) = out.cast::<PyTuple>() {
+                if t.len() != 2 {
+                    return Err("a resolver tuple must be (uri, document)".into());
+                }
+                let uri: String = t
+                    .get_item(0)
+                    .and_then(|v| v.extract())
+                    .map_err(|e| e.to_string())?;
+                return Ok((
+                    uri,
+                    extract_document(&t.get_item(1).map_err(|e| e.to_string())?)?,
+                ));
+            }
+            Ok((location.to_string(), extract_document(out)?))
+        })
+    }
+}
+
+/// An instance document given as `str` or as `bytes`.
+///
+/// Bytes are decoded the way a schema's are — byte-order mark, then the XML
+/// declaration, then UTF-8 — so a document read with `open(path, "rb")` needs
+/// no guess about its encoding, which is exactly the guess a caller is most
+/// likely to get wrong.
+fn instance_text(obj: &Bound<'_, PyAny>) -> PyResult<String> {
+    if let Ok(s) = obj.extract::<String>() {
+        return Ok(s);
+    }
+    let bytes: Vec<u8> = obj
+        .extract()
+        .map_err(|_| PyValueError::new_err("a document must be str or bytes"))?;
+    crate::encoding::decode_document(&bytes, "<instance>")
+        .map(|d| d.text)
+        .map_err(|d| PyValueError::new_err(d.message))
+}
+
+/// A resolver's document, as `bytes` or as `str`.
+fn extract_document(obj: &Bound<'_, PyAny>) -> Result<Vec<u8>, String> {
+    if let Ok(b) = obj.extract::<Vec<u8>>() {
+        return Ok(b);
+    }
+    obj.extract::<String>()
+        .map(String::into_bytes)
+        .map_err(|_| "a resolver must return bytes, str, or (uri, bytes)".to_string())
+}
+
 /// Accepts anything `os.fspath` understands, which in practice means a
 /// `pathlib.Path` as readily as a `str`. Refusing one is friction with no
 /// upside — every caller has a `Path`.
@@ -224,14 +295,22 @@ fn builder(
     conformance: &str,
     version: &str,
     nodes_limit: Option<u32>,
+    resolver: Option<Py<PyAny>>,
 ) -> PyResult<SchemaSetBuilder> {
     let mut b = SchemaSetBuilder::new()
         .conformance(conformance_from(conformance)?)
         .version(version_from(version)?);
-    if let Some(paths) = search_paths {
-        let mut fr = FileResolver::new();
-        fr.search_paths = paths.into_iter().map(Into::into).collect();
-        b = b.resolver(fr);
+    // A custom resolver replaces the filesystem entirely, so the two are
+    // alternatives rather than layers — a caller serving documents from a zip
+    // has no search path to add them to.
+    match (resolver, search_paths) {
+        (Some(callable), _) => b = b.resolver(PyResolver { callable }),
+        (None, Some(paths)) => {
+            let mut fr = FileResolver::new();
+            fr.search_paths = paths.into_iter().map(Into::into).collect();
+            b = b.resolver(fr);
+        }
+        (None, None) => {}
     }
     if let Some(limit) = nodes_limit {
         b = b.nodes_limit(limit);
@@ -261,7 +340,7 @@ impl PySchemaSet {
 impl PySchemaSet {
     /// Loads a schema from a file, following its includes and imports.
     #[classmethod]
-    #[pyo3(signature = (path, *, search_paths=None, conformance="strict", version="1.0", nodes_limit=None))]
+    #[pyo3(signature = (path, *, search_paths=None, conformance="strict", version="1.0", nodes_limit=None, resolver=None))]
     fn from_file(
         _cls: &Bound<'_, PyType>,
         py: Python<'_>,
@@ -270,8 +349,10 @@ impl PySchemaSet {
         conformance: &str,
         version: &str,
         nodes_limit: Option<u32>,
+        resolver: Option<Py<PyAny>>,
     ) -> PyResult<Self> {
-        let b = builder(search_paths, conformance, version, nodes_limit)?.file(path_from(path)?);
+        let b = builder(search_paths, conformance, version, nodes_limit, resolver)?
+            .file(path_from(path)?);
         // Compilation is the only slow part, and `Schemas` is Send + Sync
         // precisely so this is legal.
         let (schemas, diags) = py.detach(|| b.build_with_warnings());
@@ -283,7 +364,7 @@ impl PySchemaSet {
 
     /// Loads a schema from a string. The text must already be decoded.
     #[classmethod]
-    #[pyo3(signature = (xsd, *, uri="<string>", search_paths=None, conformance="strict", version="1.0", nodes_limit=None))]
+    #[pyo3(signature = (xsd, *, uri="<string>", search_paths=None, conformance="strict", version="1.0", nodes_limit=None, resolver=None))]
     fn from_string(
         _cls: &Bound<'_, PyType>,
         py: Python<'_>,
@@ -293,8 +374,9 @@ impl PySchemaSet {
         conformance: &str,
         version: &str,
         nodes_limit: Option<u32>,
+        resolver: Option<Py<PyAny>>,
     ) -> PyResult<Self> {
-        let b = builder(search_paths, conformance, version, nodes_limit)?.text(xsd, uri);
+        let b = builder(search_paths, conformance, version, nodes_limit, resolver)?.text(xsd, uri);
         let (schemas, diags) = py.detach(|| b.build_with_warnings());
         if diags.has_errors() {
             return Err(schema_error(py, diags));
@@ -307,7 +389,7 @@ impl PySchemaSet {
     /// Prefer this over `from_string` when the encoding is not known to be
     /// UTF-8: a byte-order mark or the XML declaration decides it.
     #[classmethod]
-    #[pyo3(signature = (data, *, uri="<bytes>", search_paths=None, conformance="strict", version="1.0", nodes_limit=None))]
+    #[pyo3(signature = (data, *, uri="<bytes>", search_paths=None, conformance="strict", version="1.0", nodes_limit=None, resolver=None))]
     fn from_bytes(
         _cls: &Bound<'_, PyType>,
         py: Python<'_>,
@@ -317,8 +399,10 @@ impl PySchemaSet {
         conformance: &str,
         version: &str,
         nodes_limit: Option<u32>,
+        resolver: Option<Py<PyAny>>,
     ) -> PyResult<Self> {
-        let b = builder(search_paths, conformance, version, nodes_limit)?.bytes(data, uri);
+        let b =
+            builder(search_paths, conformance, version, nodes_limit, resolver)?.bytes(data, uri);
         let (schemas, diags) = py.detach(|| b.build_with_warnings());
         if diags.has_errors() {
             return Err(schema_error(py, diags));
@@ -539,13 +623,19 @@ impl PySchemaSet {
     /// Never raises for an invalid document — an invalid document is an
     /// answer, not an error. Inspect `.is_valid` and `.diagnostics`.
     #[pyo3(signature = (xml, *, uri="<instance>"))]
-    fn validate(&self, py: Python<'_>, xml: &str, uri: &str) -> PyResult<PyValidationReport> {
+    fn validate(
+        &self,
+        py: Python<'_>,
+        xml: &Bound<'_, PyAny>,
+        uri: &str,
+    ) -> PyResult<PyValidationReport> {
+        let xml = instance_text(xml)?;
         let schemas = self.inner.clone();
         // No Python is called back into, so the GIL can go.
         let report = py.detach(|| {
             schemas
                 .instance_validator()
-                .validate_named(xml, uri, |_| {})
+                .validate_named(&xml, uri, |_| {})
         });
         let valid = report.is_valid();
         Ok(PyValidationReport {
@@ -568,13 +658,19 @@ impl PySchemaSet {
     /// has for iterables, where a callback composes with nothing. The outcome
     /// is on the iterator's `report`, before or after the loop.
     #[pyo3(signature = (xml, *, uri="<instance>"))]
-    fn iter_typed(&self, py: Python<'_>, xml: &str, uri: &str) -> PyResult<PyPsviEvents> {
+    fn iter_typed(
+        &self,
+        py: Python<'_>,
+        xml: &Bound<'_, PyAny>,
+        uri: &str,
+    ) -> PyResult<PyPsviEvents> {
+        let xml = instance_text(xml)?;
         let mut events: Vec<Py<PyPsviEvent>> = Vec::new();
         let mut failed: Option<PyErr> = None;
         let report = self
             .inner
             .instance_validator()
-            .validate_named(xml, uri, |ev| {
+            .validate_named(&xml, uri, |ev| {
                 if failed.is_some() {
                     return;
                 }
@@ -598,10 +694,11 @@ impl PySchemaSet {
     fn read_typed(
         &self,
         py: Python<'_>,
-        xml: &str,
+        xml: &Bound<'_, PyAny>,
         on_event: Option<Bound<'_, PyAny>>,
         uri: &str,
     ) -> PyResult<(Option<Vec<Py<PyPsviEvent>>>, PyValidationReport)> {
+        let xml = instance_text(xml)?;
         let mut collected: Vec<Py<PyPsviEvent>> = Vec::new();
         let mut callback_error: Option<PyErr> = None;
 
@@ -610,7 +707,7 @@ impl PySchemaSet {
         let report = self
             .inner
             .instance_validator()
-            .validate_named(xml, uri, |ev| {
+            .validate_named(&xml, uri, |ev| {
                 if callback_error.is_some() {
                     return;
                 }
@@ -1914,7 +2011,7 @@ impl PyPsviEvent {
 /// Use this when a schema is expected to be imperfect — a vendor schema with
 /// dangling imports, say — and you want the components anyway.
 #[pyfunction]
-#[pyo3(signature = (path, *, search_paths=None, conformance="lax", version="1.0", nodes_limit=None))]
+#[pyo3(signature = (path, *, search_paths=None, conformance="lax", version="1.0", nodes_limit=None, resolver=None))]
 fn load(
     py: Python<'_>,
     path: &Bound<'_, PyAny>,
@@ -1922,8 +2019,10 @@ fn load(
     conformance: &str,
     version: &str,
     nodes_limit: Option<u32>,
+    resolver: Option<Py<PyAny>>,
 ) -> PyResult<(PySchemaSet, Vec<PyDiagnostic>)> {
-    let b = builder(search_paths, conformance, version, nodes_limit)?.file(path_from(path)?);
+    let b =
+        builder(search_paths, conformance, version, nodes_limit, resolver)?.file(path_from(path)?);
     let (schemas, diags) = py.detach(|| b.build_with_warnings());
     Ok((
         PySchemaSet::wrap(schemas),
@@ -1933,7 +2032,7 @@ fn load(
 
 /// The same, from a string.
 #[pyfunction]
-#[pyo3(signature = (xsd, *, uri="<string>", search_paths=None, conformance="lax", version="1.0", nodes_limit=None))]
+#[pyo3(signature = (xsd, *, uri="<string>", search_paths=None, conformance="lax", version="1.0", nodes_limit=None, resolver=None))]
 fn load_string(
     py: Python<'_>,
     xsd: String,
@@ -1942,8 +2041,9 @@ fn load_string(
     conformance: &str,
     version: &str,
     nodes_limit: Option<u32>,
+    resolver: Option<Py<PyAny>>,
 ) -> PyResult<(PySchemaSet, Vec<PyDiagnostic>)> {
-    let b = builder(search_paths, conformance, version, nodes_limit)?.text(xsd, uri);
+    let b = builder(search_paths, conformance, version, nodes_limit, resolver)?.text(xsd, uri);
     let (schemas, diags) = py.detach(|| b.build_with_warnings());
     Ok((
         PySchemaSet::wrap(schemas),

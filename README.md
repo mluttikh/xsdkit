@@ -112,10 +112,20 @@ Values arrive as native Python types, not strings to re-parse. `iter_typed`
 composes with `enumerate`, `itertools` and generator expressions, and carries
 the outcome on its `.report` — before the loop as well as after.
 
-XSD 1.1 is opt-in, as it is in Rust:
+XSD 1.1 is opt-in, as it is in Rust, and documents may be bytes whose encoding
+is detected rather than assumed:
 
 ```python
 schemas = xsdkit.SchemaSet.from_file("report.xsd", version="1.1")
+schemas.validate(Path("report.xml").read_bytes())
+```
+
+Schemas need not be on disk. A resolver is a function of `(location, base)`
+that returns the document, or raises to say it could not be found:
+
+```python
+with zipfile.ZipFile("schemas.zip") as z:
+    schemas = xsdkit.SchemaSet.from_string(main, resolver=lambda loc, _: z.read(loc))
 ```
 
 Schemas that are expected to be imperfect return their diagnostics instead of

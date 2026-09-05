@@ -327,3 +327,52 @@ def test_from_file_takes_a_path(tmp_path):
                  '<xs:element name="a" type="xs:string"/></xs:schema>')
     assert xsdkit.SchemaSet.from_file(p).element(NS, "a") is not None
     assert xsdkit.load(p)[0].element(NS, "a") is not None
+
+
+def test_a_resolver_can_serve_documents_from_anywhere():
+    """Schemas in a zip, a database or an HTTP cache were unreachable."""
+    main = (
+        f'<xs:schema xmlns:xs="{XS}" xmlns:tns="{NS}" targetNamespace="{NS}">'
+        '<xs:include schemaLocation="part.xsd"/>'
+        '<xs:element name="root" type="tns:T"/></xs:schema>'
+    )
+    part = (
+        f'<xs:schema xmlns:xs="{XS}" targetNamespace="{NS}">'
+        '<xs:simpleType name="T"><xs:restriction base="xs:int"/></xs:simpleType>'
+        "</xs:schema>"
+    )
+    asked = []
+
+    def resolve(location, base):
+        asked.append((location, base))
+        return part.encode()  # bytes: the encoding is xsdkit's problem
+
+    s = xsdkit.SchemaSet.from_string(main, resolver=resolve)
+    assert asked and asked[0][0] == "part.xsd"
+    assert s.type(NS, "T") is not None
+
+    # `(uri, document)` says where it was really found.
+    s = xsdkit.SchemaSet.from_string(
+        main, resolver=lambda loc, base: (f"zip://{loc}", part)
+    )
+    assert any(d.uri.startswith("zip://") for d in s.documents)
+
+    # Raising is how a resolver says no, and the exception becomes the message.
+    def missing(location, base):
+        raise FileNotFoundError("not in the archive")
+
+    with pytest.raises(xsdkit.SchemaError) as excinfo:
+        xsdkit.SchemaSet.from_string(main, resolver=missing)
+    assert "not in the archive" in excinfo.value.diagnostics[0].message
+
+
+def test_documents_may_be_bytes():
+    s = build('<xs:element name="a" type="xs:int"/>')
+    doc = f'<a xmlns="{NS}">1</a>'
+    assert s.validate(doc.encode()).is_valid
+    assert [e.kind for e in s.iter_typed(doc.encode())] == ["start", "text", "end"]
+    # And the encoding is detected rather than assumed.
+    latin = f'<?xml version="1.0" encoding="ISO-8859-1"?><a xmlns="{NS}">1</a>'
+    assert s.validate(latin.encode("iso-8859-1")).is_valid
+    with pytest.raises(ValueError, match="str or bytes"):
+        s.validate(42)
