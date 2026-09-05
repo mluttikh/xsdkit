@@ -33,7 +33,12 @@ use pyo3::{IntoPyObjectExt, create_exception};
 use std::collections::BTreeMap;
 use std::sync::Arc;
 
-create_exception!(xsdkit, XsdError, pyo3::exceptions::PyException);
+create_exception!(
+    xsdkit,
+    XsdError,
+    pyo3::exceptions::PyException,
+    "The base of every error this package raises, for `except xsdkit.XsdError`."
+);
 create_exception!(
     xsdkit,
     SchemaError,
@@ -690,6 +695,12 @@ impl PySchemaSet {
         })
     }
 
+    /// Reads a document into typed PSVI events, collected or streamed.
+    ///
+    /// Prefer `iter_typed`, which is the same thing in the shape Python
+    /// expects. This form exists for feeding a callback that already exists,
+    /// and returns the events as a list, or `None` in their place when
+    /// `on_event` took them.
     #[pyo3(signature = (xml, *, on_event=None, uri="<instance>"))]
     fn read_typed(
         &self,
@@ -868,6 +879,15 @@ impl PySchemaSet {
 // Declarations
 // ---------------------------------------------------------------------------
 
+/// An element declaration: a name, a type, and how it may appear.
+///
+/// A handle into the schema, not a copy — holding ten thousand of them costs
+/// ten thousand refcounts. Two handles to the same declaration compare equal
+/// and hash alike, so they work as dict keys and set members.
+///
+///     >>> report = schemas.element("urn:example", "report")
+///     >>> report.type.children          # what may appear inside
+///     >>> report.substitutes            # what may appear *instead*
 #[pyclass(module = "xsdkit", name = "Element", frozen, from_py_object)]
 #[derive(Clone)]
 pub struct PyElement {
@@ -893,6 +913,7 @@ impl PyElement {
         clark(&self.s, self.s[self.id].name)
     }
 
+    /// The local part of the name, without its namespace.
     #[getter]
     fn local_name(&self) -> String {
         self.s
@@ -901,6 +922,7 @@ impl PyElement {
             .to_string()
     }
 
+    /// The namespace URI, or `None` when the name is unqualified.
     #[getter]
     fn namespace(&self) -> Option<String> {
         self.s[self.id]
@@ -909,6 +931,7 @@ impl PyElement {
             .map(|n| self.s.names().resolve_ns(n).to_string())
     }
 
+    /// The type in force for this element.
     #[getter]
     fn r#type(&self) -> PyType_ {
         PyType_ {
@@ -917,11 +940,18 @@ impl PyElement {
         }
     }
 
+    /// Whether an instance may be empty by saying `xsi:nil="true"`.
+    ///
+    /// Nil is not the same as absent, and not the same as empty: it says the
+    /// element is *present and has no value*.
     #[getter]
     fn nillable(&self) -> bool {
         self.s[self.id].nillable
     }
 
+    /// Whether this element may not appear itself.
+    ///
+    /// An abstract head exists to be substituted for — see `substitutes`.
     #[getter]
     fn r#abstract(&self) -> bool {
         self.s[self.id].is_abstract
@@ -947,6 +977,7 @@ impl PyElement {
             .collect()
     }
 
+    /// The `default` value, supplied when the element is present but empty.
     #[getter]
     fn default(&self) -> Option<String> {
         match &self.s[self.id].value_constraint {
@@ -955,6 +986,7 @@ impl PyElement {
         }
     }
 
+    /// The `fixed` value, which an instance may repeat but not contradict.
     #[getter]
     fn fixed(&self) -> Option<String> {
         match &self.s[self.id].value_constraint {
@@ -988,6 +1020,11 @@ impl PyElement {
     }
 }
 
+/// An attribute declaration.
+///
+/// The declaration itself, shared by every type that uses it. How a particular
+/// type uses it — required, optional, prohibited, with what default — is on
+/// `AttributeUse`, which is what `Type.attributes` returns.
 #[pyclass(module = "xsdkit", name = "Attribute", frozen, skip_from_py_object)]
 #[derive(Clone)]
 pub struct PyAttribute {
@@ -997,6 +1034,7 @@ pub struct PyAttribute {
 
 #[pymethods]
 impl PyAttribute {
+    /// The name as a `(namespace, local)` pair.
     #[getter]
     fn name(&self) -> (Option<String>, String) {
         let q = self.s[self.id].name;
@@ -1006,11 +1044,13 @@ impl PyAttribute {
         )
     }
 
+    /// The name in Clark notation, `{namespace}local`.
     #[getter]
     fn qname(&self) -> String {
         clark(&self.s, self.s[self.id].name)
     }
 
+    /// The local part of the name, without its namespace.
     #[getter]
     fn local_name(&self) -> String {
         self.s
@@ -1019,6 +1059,7 @@ impl PyAttribute {
             .to_string()
     }
 
+    /// The simple type of this attribute's value.
     #[getter]
     fn r#type(&self) -> PyType_ {
         PyType_ {
@@ -1027,6 +1068,7 @@ impl PyAttribute {
         }
     }
 
+    /// The `default` value the schema supplies when the attribute is absent.
     #[getter]
     fn default(&self) -> Option<String> {
         match &self.s[self.id].value_constraint {
@@ -1045,11 +1087,13 @@ impl PyAttribute {
         }
     }
 
+    /// The `xs:documentation` text, entries joined.
     #[getter]
     fn doc(&self) -> Option<String> {
         annotation_doc(&self.s, self.s[self.id].annotation)
     }
 
+    /// The `xs:appinfo` blocks, with their XML kept verbatim.
     #[getter]
     fn appinfo(&self) -> Vec<PyAppInfo> {
         annotation_appinfo(&self.s, self.s[self.id].annotation)
@@ -1086,6 +1130,10 @@ pub struct PyAttributeUse {
 
 #[pymethods]
 impl PyAttributeUse {
+    /// The declaration this use refers to.
+    ///
+    /// Several types may use one declaration, each with its own `use` and
+    /// value constraint.
     #[getter]
     fn attribute(&self) -> PyAttribute {
         PyAttribute {
@@ -1094,21 +1142,28 @@ impl PyAttributeUse {
         }
     }
 
+    /// The name as a `(namespace, local)` pair.
     #[getter]
     fn name(&self) -> (Option<String>, String) {
         self.attribute().name()
     }
 
+    /// The local part of the name, without its namespace.
     #[getter]
     fn local_name(&self) -> String {
         self.attribute().local_name()
     }
 
+    /// The simple type of this attribute's value.
     #[getter]
     fn r#type(&self) -> PyType_ {
         self.attribute().r#type()
     }
 
+    /// Whether an instance must carry this attribute.
+    ///
+    /// The same question as `use == "required"`, asked the way it is usually
+    /// asked.
     #[getter]
     fn required(&self) -> bool {
         self.kind == AttributeUseKind::Required
@@ -1134,6 +1189,7 @@ impl PyAttributeUse {
         }
     }
 
+    /// The `default` for this use, which overrides the declaration's.
     #[getter]
     fn default(&self) -> Option<String> {
         match &self.constraint {
@@ -1163,6 +1219,16 @@ impl PyAttributeUse {
 // Types
 // ---------------------------------------------------------------------------
 
+/// A type definition, simple or complex.
+///
+/// The centre of the model. A complex type answers what may appear inside it
+/// (`children`, `attributes`, `accepts`); a simple type answers what its
+/// values may be (`validate`, `facets`, `variety`). `is_complex` says which
+/// you have.
+///
+///     >>> t = schemas.type("urn:example", "Measurement")
+///     >>> t.validate("3.14")            # the typed value, or ValueError
+///     >>> t.facets.max_inclusive        # the constraints in force
 #[pyclass(module = "xsdkit", name = "Type", frozen, from_py_object)]
 #[derive(Clone)]
 pub struct PyType_ {
@@ -1183,21 +1249,27 @@ impl PyType_ {
         })
     }
 
+    /// The name in Clark notation, or `None` for an anonymous type.
+    ///
+    /// A type declared inline inside an element has no name to report.
     #[getter]
     fn qname(&self) -> Option<String> {
         self.s[self.id].name().map(|q| clark(&self.s, q))
     }
 
+    /// Whether this type may have attributes and child elements.
     #[getter]
     fn is_complex(&self) -> bool {
         self.s[self.id].as_complex().is_some()
     }
 
+    /// Whether this type has a value space — something `validate` can parse.
     #[getter]
     fn is_simple(&self) -> bool {
         self.s[self.id].is_simple()
     }
 
+    /// Whether an instance may not use this type directly, only one derived from it.
     #[getter]
     fn r#abstract(&self) -> bool {
         self.s[self.id].as_complex().is_some_and(|c| c.is_abstract)
@@ -1422,6 +1494,7 @@ impl PyType_ {
             .map(|_| PyFacets(crate::validate::effective_facets(&self.s, self.id)))
     }
 
+    /// The `xs:documentation` text, entries joined.
     #[getter]
     fn doc(&self) -> Option<String> {
         let ann = match &self.s[self.id] {
@@ -1431,6 +1504,11 @@ impl PyType_ {
         annotation_doc(&self.s, ann)
     }
 
+    /// The `xs:appinfo` blocks, with their XML kept verbatim.
+    ///
+    /// Kept as written, because a summary cannot be un-summarised: this is
+    /// where a schema hides units, labels and anything else its authors agreed
+    /// on.
     #[getter]
     fn appinfo(&self) -> Vec<PyAppInfo> {
         let ann = match &self.s[self.id] {
@@ -1473,14 +1551,17 @@ pub struct PyFacets(crate::datatypes::FacetSet);
 
 #[pymethods]
 impl PyFacets {
+    /// Exact length. Characters, or *items* for a list type.
     #[getter]
     fn length(&self) -> Option<u64> {
         self.0.length
     }
+    /// Least length, in characters or list items.
     #[getter]
     fn min_length(&self) -> Option<u64> {
         self.0.min_length
     }
+    /// Greatest length, in characters or list items.
     #[getter]
     fn max_length(&self) -> Option<u64> {
         self.0.max_length
@@ -1493,6 +1574,10 @@ impl PyFacets {
         self.0.patterns.clone()
     }
 
+    /// The permitted values, as the lexical forms the schema wrote.
+    ///
+    /// Compared in the value space, so an enumeration listing `1.0` admits
+    /// `1.00`.
     #[getter]
     fn enumeration(&self) -> Option<Vec<String>> {
         self.0.enumeration.clone()
@@ -1504,26 +1589,32 @@ impl PyFacets {
         self.0.white_space.map(|w| w.to_string())
     }
 
+    /// Upper bound, inclusive.
     #[getter]
     fn max_inclusive(&self) -> Option<String> {
         self.0.max_inclusive.clone()
     }
+    /// Upper bound, exclusive.
     #[getter]
     fn max_exclusive(&self) -> Option<String> {
         self.0.max_exclusive.clone()
     }
+    /// Lower bound, inclusive.
     #[getter]
     fn min_inclusive(&self) -> Option<String> {
         self.0.min_inclusive.clone()
     }
+    /// Lower bound, exclusive.
     #[getter]
     fn min_exclusive(&self) -> Option<String> {
         self.0.min_exclusive.clone()
     }
+    /// Most significant digits a decimal may have.
     #[getter]
     fn total_digits(&self) -> Option<u32> {
         self.0.total_digits
     }
+    /// Most digits a decimal may have after the point.
     #[getter]
     fn fraction_digits(&self) -> Option<u32> {
         self.0.fraction_digits
@@ -1584,6 +1675,8 @@ fn annotation_appinfo(s: &Schemas, id: Option<AnnotationId>) -> Vec<PyAppInfo> {
 )]
 #[derive(Clone)]
 pub struct PyAppInfo {
+    /// The `source` attribute — a URI naming what convention the payload
+    /// follows, when the schema said.
     pub source: Option<String>,
     /// The `appinfo` element's children, re-serialized. Element and attribute
     /// names are in Clark notation, so no prefix can be lost.
@@ -1601,6 +1694,10 @@ impl PyAppInfo {
     }
 }
 
+/// One schema document that went into the set.
+///
+/// A schema is often many files — `xs:include` and `xs:import` pull in more —
+/// and this is the record of each, including which namespace it ended up in.
 #[pyclass(
     module = "xsdkit",
     name = "Document",
@@ -1610,7 +1707,11 @@ impl PyAppInfo {
 )]
 #[derive(Clone)]
 pub struct PyDocument {
+    /// Where this document was read from — a path, a URL, or whatever a
+    /// custom resolver called it.
     pub uri: String,
+    /// The namespace its declarations landed in, `None` for a no-namespace
+    /// schema.
     pub target_namespace: Option<String>,
     /// True when this document had no `targetNamespace` of its own and was
     /// absorbed into its includer's.
@@ -1642,11 +1743,19 @@ impl PyDocument {
     }
 }
 
+/// Where in a document a diagnostic points, and what that place is.
+///
+/// One diagnostic may carry several — an ambiguous content model names both
+/// particles that could match, and the labels say which is which.
 #[pyclass(module = "xsdkit", name = "Span", frozen, get_all, skip_from_py_object)]
 #[derive(Clone)]
 pub struct PySpan {
+    /// The document this points into.
     pub uri: String,
+    /// The line, counting from one. Zero when the position is not known.
     pub line: u32,
+    /// What this place *is*, when a diagnostic names more than one — "one
+    /// candidate" and "the other", say.
     pub label: Option<String>,
 }
 
@@ -1678,6 +1787,11 @@ impl PySpan {
     }
 }
 
+/// Something the reader found wrong, or worth saying.
+///
+/// Carries a stable `code` to match on, a `message` for people, `spans` for
+/// where, and often `help` for what to do. `str()` renders the lot the way a
+/// compiler would.
 #[pyclass(module = "xsdkit", name = "Diagnostic", frozen, skip_from_py_object)]
 #[derive(Clone)]
 pub struct PyDiagnostic(Diagnostic);
@@ -1700,11 +1814,16 @@ impl PyDiagnostic {
         }
     }
 
+    /// What is wrong, in a sentence.
     #[getter]
     fn message(&self) -> String {
         self.0.message.clone()
     }
 
+    /// Where it is, sometimes in more than one place.
+    ///
+    /// An ambiguous content model names both particles that could match, and
+    /// the labels say which is which.
     #[getter]
     fn spans(&self) -> Vec<PySpan> {
         self.0
@@ -1718,11 +1837,13 @@ impl PyDiagnostic {
             .collect()
     }
 
+    /// What to do about it, when there is something useful to say.
     #[getter]
     fn help(&self) -> Option<String> {
         self.0.help.clone()
     }
 
+    /// Whether this stops the schema loading, as opposed to a warning or a note.
     #[getter]
     fn is_error(&self) -> bool {
         self.0.is_error()
@@ -1845,11 +1966,15 @@ pub struct PyValidationReport {
 
 #[pymethods]
 impl PyValidationReport {
+    /// Whether the document satisfied the schema.
+    ///
+    /// The report is falsy when it did not, so `if not report:` reads.
     #[getter]
     fn is_valid(&self) -> bool {
         self.valid
     }
 
+    /// Everything found, warnings and notes included.
     #[getter]
     fn diagnostics(&self) -> Vec<PyDiagnostic> {
         self.diagnostics.clone()
@@ -1908,14 +2033,17 @@ impl Clone for PyAttributeValue {
 
 #[pymethods]
 impl PyAttributeValue {
+    /// The name as a `(namespace, local)` pair.
     #[getter]
     fn name(&self) -> (Option<String>, String) {
         self.name.clone()
     }
+    /// The local part of the name, without its namespace.
     #[getter]
     fn local_name(&self) -> String {
         self.name.1.clone()
     }
+    /// The declaration this matched, absent under a `skip` wildcard.
     #[getter]
     fn declaration(&self) -> Option<PyAttribute> {
         self.declaration.clone()
@@ -1925,6 +2053,7 @@ impl PyAttributeValue {
     fn value(&self, py: Python<'_>) -> Option<Py<PyAny>> {
         self.value.as_ref().map(|v| v.clone_ref(py))
     }
+    /// The attribute exactly as the document wrote it.
     #[getter]
     fn lexical(&self) -> String {
         self.lexical.clone()
@@ -1973,14 +2102,19 @@ impl PyPsviEvent {
     fn kind(&self) -> &'static str {
         self.kind
     }
+    /// The element's name as a `(namespace, local)` pair.
     #[getter]
     fn name(&self) -> (Option<String>, String) {
         self.name.clone()
     }
+    /// The local part of the name, without its namespace.
     #[getter]
     fn local_name(&self) -> String {
         self.name.1.clone()
     }
+    /// The declaration this element matched.
+    ///
+    /// Absent under a `skip` wildcard, or a `lax` one with nothing to match.
     #[getter]
     fn declaration(&self) -> Option<PyElement> {
         self.declaration.clone()
@@ -1990,14 +2124,17 @@ impl PyPsviEvent {
     fn r#type(&self) -> Option<PyType_> {
         self.type_.clone()
     }
+    /// Whether `xsi:type` chose the type, rather than the declaration.
     #[getter]
     fn type_from_instance(&self) -> bool {
         self.type_from_instance
     }
+    /// Whether the element said `xsi:nil="true"`.
     #[getter]
     fn nil(&self) -> bool {
         self.nil
     }
+    /// The attributes, typed, including any the schema supplied.
     #[getter]
     fn attributes(&self) -> Vec<PyAttributeValue> {
         self.attributes.clone()
@@ -2007,10 +2144,12 @@ impl PyPsviEvent {
     fn value(&self, py: Python<'_>) -> Option<Py<PyAny>> {
         self.value.as_ref().map(|v| v.clone_ref(py))
     }
+    /// The character content exactly as the document wrote it.
     #[getter]
     fn lexical(&self) -> Option<String> {
         self.lexical.clone()
     }
+    /// The line the element started on, counting from one.
     #[getter]
     fn line(&self) -> u32 {
         self.line

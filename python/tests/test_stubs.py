@@ -44,3 +44,39 @@ def test_every_stubbed_member_exists():
 
 def test_package_is_marked_typed():
     assert pathlib.Path(xsdkit.__file__).with_name("py.typed").exists()
+
+
+def test_everything_public_is_documented():
+    """`help()` is the documentation most users read, and it decays silently.
+
+    A `#[getter]` with no `///` above it produces an empty docstring, not an
+    error, so this is the only thing that notices.
+    """
+    import inspect
+
+    undocumented = []
+    for name, cls in vars(xsdkit).items():
+        if not inspect.isclass(cls) or cls.__module__ != "xsdkit":
+            continue
+        if not (cls.__doc__ or "").strip():
+            undocumented.append(f"class {name}")
+        for member, obj in vars(cls).items():
+            if member.startswith("_"):
+                continue
+            if not (getattr(obj, "__doc__", None) or "").strip():
+                undocumented.append(f"{name}.{member}")
+
+    for fn in ("load", "load_string"):
+        if not (getattr(xsdkit, fn).__doc__ or "").strip():
+            undocumented.append(fn)
+
+    assert not undocumented, "undocumented public API: " + ", ".join(sorted(undocumented))
+
+
+def test_constructors_show_their_signature():
+    """`help(SchemaSet.from_file)` must name the keywords, not print `(...)`."""
+    import inspect
+
+    sig = str(inspect.signature(xsdkit.SchemaSet.from_file))
+    for kw in ("search_paths", "conformance", "version", "nodes_limit", "resolver"):
+        assert kw in sig, f"{kw} missing from the rendered signature"

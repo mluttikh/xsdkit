@@ -601,6 +601,13 @@ practice, since each was a real complaint:
 - **Every Rust knob needs a keyword.** `version=` was missing for a long time,
   which made the whole XSD 1.1 implementation unreachable from Python without
   anyone noticing.
+- **Every public name carries a docstring**, and `test_stubs.py` fails without
+  one. A `#[getter]` with no `///` above it produces an *empty* docstring
+  rather than an error, so nothing else notices — coverage had drifted to 51%,
+  and the classes missing one entirely were `Element`, `Type` and `Attribute`,
+  the three a reader meets first. `help()` is the documentation most people
+  read; the `.pyi` is what their editor reads, and the two say the same thing
+  on purpose.
 
 - Every wrapper is `(Arc<Schemas>, Id)`. **Never copy components into Python
   objects** — handles must stay free so a schema with thousands of globals
