@@ -94,7 +94,18 @@ fn narrows(
             }
             _ => None,
         };
+        let widened_scale =
+            |name: &str, own: Option<i32>, inherited: Option<i32>, grew: bool| match (
+                own, inherited,
+            ) {
+                (Some(o), Some(i)) if grew == (o > i) && o != i => {
+                    Some(format!("`xs:{name}` {o} is wider than the inherited {i}"))
+                }
+                _ => None,
+            };
         for m in [
+            widened_scale("minScale", own.min_scale, b.min_scale, false),
+            widened_scale("maxScale", own.max_scale, b.max_scale, true),
             widened("minLength", own.min_length, b.min_length, false),
             widened("maxLength", own.max_length, b.max_length, true),
             widened(
@@ -342,6 +353,11 @@ fn consistent(s: &SimpleType, span: &Span, diags: &mut Diagnostics) {
     if f.total_digits == Some(0) {
         err("`xs:totalDigits` must be at least 1".into());
     }
+    if let (Some(min), Some(max)) = (f.min_scale, f.max_scale) {
+        if min > max {
+            err(format!("`xs:minScale` {min} exceeds `xs:maxScale` {max}"));
+        }
+    }
 }
 
 /// Which facets this step actually declared.
@@ -365,6 +381,8 @@ fn declared_kinds(f: &FacetSet) -> Vec<FacetKind> {
     add(f.total_digits.is_some(), FacetKind::TotalDigits);
     add(f.fraction_digits.is_some(), FacetKind::FractionDigits);
     add(f.explicit_timezone.is_some(), FacetKind::ExplicitTimezone);
+    add(f.min_scale.is_some(), FacetKind::MinScale);
+    add(f.max_scale.is_some(), FacetKind::MaxScale);
     add(!f.assertions.is_empty(), FacetKind::Assertion);
     out
 }

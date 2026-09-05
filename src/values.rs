@@ -17,7 +17,7 @@
 
 use crate::atomic::{
     Date, DateTime, DayTimeDuration, Decimal, Double, Duration, Float, GDay, GMonth, GMonthDay,
-    GYear, GYearMonth, Time, YearMonthDuration,
+    GYear, GYearMonth, PrecisionDecimal, Time, YearMonthDuration,
 };
 use crate::datatypes::{Builtin, BuiltinKind, FacetSet};
 use crate::load::Version;
@@ -32,6 +32,8 @@ pub enum Value {
     String(String),
     Boolean(bool),
     Decimal(Decimal),
+    /// `xs:precisionDecimal`, which keeps the scale it was written with.
+    PrecisionDecimal(PrecisionDecimal),
     /// The `xs:integer` chain, held as `i128`.
     ///
     /// That covers every *bounded* XSD integer type exactly, `unsignedLong`
@@ -87,6 +89,7 @@ impl Value {
         use Value::*;
         match (self, other) {
             (Decimal(a), Decimal(b)) => a.partial_cmp(b),
+            (PrecisionDecimal(a), PrecisionDecimal(b)) => a.partial_cmp(b),
             (Integer(a), Integer(b)) => a.partial_cmp(b),
             (Decimal(a), Integer(b)) => a.partial_cmp(&crate::atomic::Decimal::from_integer(*b)?),
             (Integer(a), Decimal(b)) => crate::atomic::Decimal::from_integer(*a)?.partial_cmp(b),
@@ -181,6 +184,7 @@ impl fmt::Display for Value {
             Value::String(s) | Value::AnyUri(s) => f.write_str(s),
             Value::Boolean(b) => write!(f, "{b}"),
             Value::Decimal(v) => write!(f, "{v}"),
+            Value::PrecisionDecimal(v) => write!(f, "{v}"),
             Value::Integer(v) => write!(f, "{v}"),
             Value::Float(v) => write!(f, "{v}"),
             Value::Double(v) => write!(f, "{v}"),
@@ -343,6 +347,9 @@ fn parse_normalized(
         },
 
         B::Decimal => Value::Decimal(Decimal::parse_lexical(s).map_err(|e| bad(&e))?),
+        B::PrecisionDecimal => {
+            Value::PrecisionDecimal(PrecisionDecimal::parse_lexical(s).map_err(|e| bad(&e))?)
+        }
 
         B::Integer
         | B::NonPositiveInteger
@@ -673,6 +680,30 @@ pub fn check_facets(
         }
     }
 
+    // The scale bounds, which only `xs:precisionDecimal` has. A special value
+    // has no scale, so the facets cannot reject one — `INF` is admitted by any
+    // `minScale`.
+    if let Value::PrecisionDecimal(p) = value {
+        if let Some(scale) = p.scale() {
+            if let Some(min) = facets.min_scale {
+                if scale < min {
+                    return Err(violation(
+                        "minScale",
+                        format!("`{value}` has scale {scale}, minimum is {min}"),
+                    ));
+                }
+            }
+            if let Some(max) = facets.max_scale {
+                if scale > max {
+                    return Err(violation(
+                        "maxScale",
+                        format!("`{value}` has scale {scale}, maximum is {max}"),
+                    ));
+                }
+            }
+        }
+    }
+
     // Enumeration compares in the *value* space: `1.0` satisfies an
     // enumeration listing `1.00`, which a string comparison would reject.
     //
@@ -749,6 +780,12 @@ pub fn check_facets(
 /// `(totalDigits, fractionDigits)` of a decimal-derived value, counted from
 /// its canonical form so trailing zeroes do not inflate the total.
 fn digit_counts(value: &Value) -> Option<(u32, u32)> {
+    // A precisionDecimal counts the digits it was *written* with — `1.000` has
+    // four, where the same number as an `xs:decimal` has one. It knows its own
+    // answer, so there is nothing to read off a rendered form.
+    if let Value::PrecisionDecimal(p) = value {
+        return p.total_digits().map(|t| (t, 0));
+    }
     let text = match value {
         Value::Decimal(d) => d.to_string(),
         Value::Integer(n) => n.to_string(),

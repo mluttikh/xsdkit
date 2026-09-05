@@ -224,8 +224,8 @@ cases from NIST, Microsoft, IBM, Sun, Boeing and Saxonica):
 
 | | |
 |---|---|
-| valid schemas accepted | **99.2%** (5,206 / 5,247) |
-| invalid schemas rejected | **60.4%** (290 / 480) |
+| valid schemas accepted | **99.7%** (5,231 / 5,247) |
+| invalid schemas rejected | **58.8%** (282 / 480) |
 
 The gap is the honest description of what this is. `xsdkit` reads real
 schemas well; it does not yet enforce most of the specification's *validity
@@ -233,13 +233,13 @@ constraints*, so a schema it accepts is not thereby a valid schema. If you
 need a conformance checker, use Xerces or Saxon; if you need to read a schema
 that already works, this is built for that.
 
-Document validation is the other half of the suite — 21,540 scored cases,
-95.1% correct:
+Document validation is the other half of the suite — 21,565 scored cases,
+95.3% correct:
 
 | | |
 |---|---|
-| valid documents accepted | **95.7%** (11,386 / 11,895) |
-| invalid documents rejected | **94.4%** (9,104 / 9,645) |
+| valid documents accepted | **95.8%** (11,397 / 11,902) |
+| invalid documents rejected | **94.6%** (9,144 / 9,663) |
 
 ```bash
 git clone --depth 1 https://github.com/w3c/xsdtests /tmp/xsdtests

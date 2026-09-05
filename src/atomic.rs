@@ -1343,3 +1343,237 @@ impl PartialOrd for DayTimeDuration {
         Some(self.total_seconds().cmp(&other.total_seconds()))
     }
 }
+
+// ---------------------------------------------------------------------------
+// precisionDecimal
+// ---------------------------------------------------------------------------
+
+/// What an [`PrecisionDecimal`] holds.
+#[derive(Clone, Copy, Debug)]
+enum Pd {
+    /// `coefficient × 10^exponent`, with the sign kept apart so that `-0` and
+    /// `0` stay distinct values.
+    Finite {
+        negative: bool,
+        coefficient: u128,
+        exponent: i32,
+    },
+    Infinity {
+        negative: bool,
+    },
+    NaN,
+}
+
+/// `xs:precisionDecimal`, the optional XSD 1.1 datatype.
+///
+/// A decimal that remembers how it was written. `1.0` and `1.00` are the same
+/// *number* and compare equal, but they are different values: the second has a
+/// scale of two, and `minScale`/`maxScale` can tell them apart. That is the
+/// whole point of the type — it is IEEE 754's decimal, where the trailing
+/// zeroes carry the precision of a measurement.
+///
+/// It also has what `xs:decimal` does not: infinities, a not-a-number, and a
+/// signed zero.
+#[derive(Clone, Copy, Debug)]
+pub struct PrecisionDecimal(Pd);
+
+impl PrecisionDecimal {
+    /// The number of digits in the coefficient, which is what `totalDigits`
+    /// counts.
+    ///
+    /// Written digits, not significant ones: `1.000` has four and `1.0` two,
+    /// where an `xs:decimal` would say one of each.
+    pub fn total_digits(self) -> Option<u32> {
+        match self.0 {
+            Pd::Finite { coefficient, .. } => Some(digit_count(coefficient)),
+            // A special value has no digits to count, so the facet cannot
+            // reject it.
+            _ => None,
+        }
+    }
+
+    /// How many digits sit after the point — the negated exponent.
+    ///
+    /// Signed: `200` written as `2e2` has a scale of -2.
+    pub fn scale(self) -> Option<i32> {
+        match self.0 {
+            Pd::Finite { exponent, .. } => Some(-exponent),
+            _ => None,
+        }
+    }
+
+    pub(crate) fn parse_lexical(s: &str) -> Result<Self, String> {
+        match s {
+            "INF" | "+INF" => return Ok(Self(Pd::Infinity { negative: false })),
+            "-INF" => return Ok(Self(Pd::Infinity { negative: true })),
+            "NaN" => return Ok(Self(Pd::NaN)),
+            _ => {}
+        }
+        if !is_xsd_numeral(s) {
+            return Err("expected a number, `INF`, `-INF` or `NaN`".into());
+        }
+        let (negative, rest) = match s.as_bytes().first() {
+            Some(b'-') => (true, &s[1..]),
+            Some(b'+') => (false, &s[1..]),
+            _ => (false, s),
+        };
+        let (mantissa, exp) = match rest.split_once(['e', 'E']) {
+            Some((m, e)) => (
+                m,
+                e.parse::<i32>()
+                    .map_err(|_| "the exponent is out of range".to_string())?,
+            ),
+            None => (rest, 0),
+        };
+        let (int, frac) = match mantissa.split_once('.') {
+            Some((i, f)) => (i, f),
+            None => (mantissa, ""),
+        };
+
+        let mut coefficient: u128 = 0;
+        for b in int.bytes().chain(frac.bytes()) {
+            coefficient = coefficient
+                .checked_mul(10)
+                .and_then(|v| v.checked_add(u128::from(b - b'0')))
+                .ok_or("more digits than an xs:precisionDecimal can hold")?;
+        }
+        // Each fractional digit is one power of ten the exponent has to
+        // absorb, which is what turns `1.00` into 100 × 10^-2 and gives the
+        // value its scale.
+        let exponent = i32::try_from(frac.len())
+            .ok()
+            .and_then(|f| exp.checked_sub(f))
+            .ok_or("the exponent is out of range")?;
+        Ok(Self(Pd::Finite {
+            negative,
+            coefficient,
+            exponent,
+        }))
+    }
+}
+
+/// How many decimal digits `n` is written with; zero is one digit.
+fn digit_count(n: u128) -> u32 {
+    let mut digits = 1;
+    let mut rest = n / 10;
+    while rest != 0 {
+        digits += 1;
+        rest /= 10;
+    }
+    digits
+}
+
+impl fmt::Display for PrecisionDecimal {
+    /// Keeps the scale, because the scale is part of the value.
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let (negative, coefficient, exponent) = match self.0 {
+            Pd::NaN => return f.write_str("NaN"),
+            Pd::Infinity { negative: true } => return f.write_str("-INF"),
+            Pd::Infinity { negative: false } => return f.write_str("INF"),
+            Pd::Finite {
+                negative,
+                coefficient,
+                exponent,
+            } => (negative, coefficient, exponent),
+        };
+        if negative {
+            f.write_str("-")?;
+        }
+        let digits = coefficient.to_string();
+        match exponent {
+            // No fractional part, and small enough to write out in full.
+            0 => f.write_str(&digits),
+            e if e > 0 && e <= 6 => write!(f, "{digits}{}", "0".repeat(e as usize)),
+            e if e < 0 && (-e as usize) < digits.len() => {
+                let split = digits.len() - (-e as usize);
+                write!(f, "{}.{}", &digits[..split], &digits[split..])
+            }
+            e if e < 0 && (-e) <= 6 => {
+                write!(f, "0.{}{digits}", "0".repeat((-e) as usize - digits.len()))
+            }
+            // Far from the point, where writing it out would be all zeroes.
+            e => write!(f, "{digits}E{e}"),
+        }
+    }
+}
+
+impl PartialOrd for PrecisionDecimal {
+    /// Numeric order, which ignores the scale: `1.0`, `1.00` and `10e-1` are
+    /// one number three ways. `NaN` is ordered against nothing, and the two
+    /// zeroes are equal despite their signs.
+    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
+        use std::cmp::Ordering::*;
+        let rank = |v: &Self| match v.0 {
+            Pd::NaN => None,
+            Pd::Infinity { negative: true } => Some(-1i8),
+            Pd::Infinity { negative: false } => Some(1),
+            Pd::Finite { .. } => Some(0),
+        };
+        let (a, b) = (rank(self)?, rank(other)?);
+        if a != b {
+            return Some(a.cmp(&b));
+        }
+        if a != 0 {
+            // Both are the same infinity.
+            return Some(Equal);
+        }
+        let (
+            Pd::Finite {
+                negative: an,
+                coefficient: ac,
+                exponent: ae,
+            },
+            Pd::Finite {
+                negative: bn,
+                coefficient: bc,
+                exponent: be,
+            },
+        ) = (self.0, other.0)
+        else {
+            unreachable!("both ranked as finite");
+        };
+        // Zero has no sign for the purpose of ordering, so `-0` and `0` are
+        // equal and both sit between the negatives and the positives.
+        match (ac == 0, bc == 0) {
+            (true, true) => return Some(Equal),
+            (true, false) => return Some(if bn { Greater } else { Less }),
+            (false, true) => return Some(if an { Less } else { Greater }),
+            (false, false) => {}
+        }
+        if an != bn {
+            return Some(if an { Less } else { Greater });
+        }
+        let magnitude = compare_magnitude((ac, ae), (bc, be));
+        Some(if an { magnitude.reverse() } else { magnitude })
+    }
+}
+
+/// Compares two non-zero coefficients scaled by their exponents.
+///
+/// Through the digit strings rather than by scaling one side up: the exponents
+/// can differ by enough that any common scaling overflows, and comparison is
+/// not hot enough to be worth the risk.
+fn compare_magnitude(a: (u128, i32), b: (u128, i32)) -> std::cmp::Ordering {
+    let (ad, bd) = (a.0.to_string(), b.0.to_string());
+    // Where the number sits, independent of how many digits were written.
+    let adjusted = |digits: &str, exponent: i32| exponent + digits.len() as i32 - 1;
+    match adjusted(&ad, a.1).cmp(&adjusted(&bd, b.1)) {
+        std::cmp::Ordering::Equal => {}
+        other => return other,
+    }
+    // Same magnitude, so the digits line up from the left.
+    let width = ad.len().max(bd.len());
+    let pad = |s: &str| {
+        let mut out = s.to_string();
+        out.push_str(&"0".repeat(width - s.len()));
+        out
+    };
+    pad(&ad).cmp(&pad(&bd))
+}
+
+impl PartialEq for PrecisionDecimal {
+    /// The order relation, so `1.0` equals `1.00` and `NaN` equals nothing.
+    fn eq(&self, other: &Self) -> bool {
+        self.partial_cmp(other) == Some(std::cmp::Ordering::Equal)
+    }
+}

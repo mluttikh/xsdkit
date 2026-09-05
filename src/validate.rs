@@ -343,6 +343,10 @@ fn compose(base: &FacetSet, step: &FacetSet) -> FacetSet {
     if step.enumeration.is_some() {
         out.enumeration = step.enumeration.clone();
     }
+    // Every `Option` field of `FacetSet` where a step simply replaces what it
+    // inherited. **A new field belongs here**: the list is written out, so one
+    // that is forgotten silently stops composing, and the facet then applies
+    // only on the step that declared it.
     macro_rules! take {
         ($($f:ident),*) => { $( if step.$f.is_some() { out.$f = step.$f.clone(); } )* };
     }
@@ -353,7 +357,9 @@ fn compose(base: &FacetSet, step: &FacetSet) -> FacetSet {
         white_space,
         total_digits,
         fraction_digits,
-        explicit_timezone
+        explicit_timezone,
+        min_scale,
+        max_scale
     );
     // A bound of one kind displaces the other, as it does within a step.
     if step.min_inclusive.is_some() {

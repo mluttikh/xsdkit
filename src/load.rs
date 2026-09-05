@@ -1560,6 +1560,10 @@ impl<'r> Loader<'r> {
                 "minInclusive" => Some(Facet::MinInclusive(v.to_string())),
                 "minExclusive" => Some(Facet::MinExclusive(v.to_string())),
                 "totalDigits" => v.parse().ok().map(Facet::TotalDigits),
+                // Signed, unlike every other count here: a scale of -2 says
+                // the value is a multiple of a hundred.
+                "minScale" => v.parse().ok().map(Facet::MinScale),
+                "maxScale" => v.parse().ok().map(Facet::MaxScale),
                 "fractionDigits" => v.parse().ok().map(Facet::FractionDigits),
                 "explicitTimezone" => match v {
                     "optional" => Some(Facet::ExplicitTimezone(ExplicitTimezone::Optional)),

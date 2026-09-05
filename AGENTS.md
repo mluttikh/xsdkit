@@ -199,8 +199,8 @@ crate:
 
 | | |
 |---|---|
-| valid schemas accepted | **99.2%** — it reads real schemas |
-| invalid schemas rejected | **60.4%** — partial: see `src/restriction.rs` |
+| valid schemas accepted | **99.7%** — it reads real schemas |
+| invalid schemas rejected | **58.8%** — partial: see `src/restriction.rs` |
 
 That asymmetry is by construction, not neglect: the Schema Component
 Constraints and the Derivation Valid rules are largely unimplemented (see §7).
@@ -219,8 +219,8 @@ is fifty cases one rule buys.
 
 The instance half — 21,671 documents — is `#[ignore]`d because it takes
 minutes where the schema half takes seconds (4.5 minutes in `--release`; run
-it that way). Run it with `-- --ignored`. It scores 21,540 of them, 95.1%
-correct: **95.7%** of valid documents accepted, **94.4%** of invalid ones
+it that way). Run it with `-- --ignored`. It scores 21,565 of them, 95.3%
+correct: **95.8%** of valid documents accepted, **94.6%** of invalid ones
 rejected.
 
 That first figure was 88.1% until a one-line bug turned up: an *enumeration on
@@ -536,13 +536,24 @@ has the wrong number of particles.
    suite found a fifth that no amount of fuzzing would have: **equality on the
    temporal types is the order relation, not the fields**, because
    `13:00+01:00` and `12:00Z` are one instant written two ways.
-8. **`precisionDecimal`.** 40 of the 58 remaining false rejections — 27
+8. ~~**`precisionDecimal`.**~~ **Done** — `src/atomic.rs`, and
+   `tests/precision_decimal.rs` for the semantics, which came from the suite's
+   own data rather than from a specification: the type never made it into a
+   normative REC. It is optional in XSD 1.1 and this crate has it, so
+   `vc:typeAvailable="xs:precisionDecimal"` answers yes.
+
+   Three things it does that nothing else does. It **remembers its scale**, so
+   `1.0` and `1.00` are the same number and different values, and `totalDigits`
+   counts the digits as *written* — `1.000` has four where an `xs:decimal`
+   would say one. Its `minScale` is **signed**, which is why it replaces
+   `fractionDigits` rather than joining it. And it has infinities, a NaN and a
+   signed zero, which makes it a **primitive in its own right** rather than a
+   decimal.
+
+   Was, before this: 40 of the 58 false rejections — 27
    unresolved `xs:precisionDecimal` plus 13 `minScale`/`maxScale` facets. It is
-   the largest single cluster *and* an optional XSD 1.1 feature that did not
-   survive into the required conformance set, so it buys a number rather than
-   correctness. It also needs a decimal type of our own, which makes it the one
-   item on this list that argues for writing a datatype ourselves — additively,
-   not as a replacement.
+   the largest single cluster. It took the false rejections from 41 to **17**
+   and the instance half from 20,492 correct to 20,541.
 
 ## Planned, not present
 

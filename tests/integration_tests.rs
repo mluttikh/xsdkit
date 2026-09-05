@@ -83,7 +83,9 @@ fn builtins_are_real_components() {
     let int = s.builtin(Builtin::Int);
     assert!(s.derives_from(int, s.builtin(Builtin::Decimal)));
     assert!(s.derives_from(int, s.builtin(Builtin::AnyType)));
-    assert_eq!(s.component_counts().types, 50);
+    // Every built-in is installed, `xs:precisionDecimal` included — it is
+    // optional in XSD 1.1 and this crate has it.
+    assert_eq!(s.component_counts().types, Builtin::all().len());
 }
 
 // ---------------------------------------------------------------------------

@@ -129,6 +129,11 @@ pub enum Facet {
     TotalDigits(u32),
     FractionDigits(u32),
     ExplicitTimezone(ExplicitTimezone),
+    /// XSD 1.1 `minScale`, for `xs:precisionDecimal`. Signed: a scale of -2
+    /// means the value is a multiple of a hundred.
+    MinScale(i32),
+    /// XSD 1.1 `maxScale`, for `xs:precisionDecimal`.
+    MaxScale(i32),
     /// An XPath 2.0 expression, stored unevaluated until XSD 1.1 lands.
     Assertion(String),
 }
@@ -153,6 +158,8 @@ pub enum FacetKind {
     TotalDigits,
     FractionDigits,
     ExplicitTimezone,
+    MinScale,
+    MaxScale,
     Assertion,
 }
 
@@ -173,6 +180,8 @@ impl FacetKind {
             FacetKind::TotalDigits => "totalDigits",
             FacetKind::FractionDigits => "fractionDigits",
             FacetKind::ExplicitTimezone => "explicitTimezone",
+            FacetKind::MinScale => "minScale",
+            FacetKind::MaxScale => "maxScale",
             FacetKind::Assertion => "assertion",
         }
     }
@@ -220,6 +229,8 @@ impl Facet {
             Facet::TotalDigits(_) => FacetKind::TotalDigits,
             Facet::FractionDigits(_) => FacetKind::FractionDigits,
             Facet::ExplicitTimezone(_) => FacetKind::ExplicitTimezone,
+            Facet::MinScale(_) => FacetKind::MinScale,
+            Facet::MaxScale(_) => FacetKind::MaxScale,
             Facet::Assertion(_) => FacetKind::Assertion,
         }
     }
@@ -246,6 +257,9 @@ pub struct FacetSet {
     pub total_digits: Option<u32>,
     pub fraction_digits: Option<u32>,
     pub explicit_timezone: Option<ExplicitTimezone>,
+    /// XSD 1.1 scale bounds, for `xs:precisionDecimal`.
+    pub min_scale: Option<i32>,
+    pub max_scale: Option<i32>,
     pub assertions: Vec<String>,
 }
 
@@ -292,6 +306,8 @@ impl FacetSet {
                 Facet::TotalDigits(v) => out.total_digits = Some(*v),
                 Facet::FractionDigits(v) => out.fraction_digits = Some(*v),
                 Facet::ExplicitTimezone(v) => out.explicit_timezone = Some(*v),
+                Facet::MinScale(v) => out.min_scale = Some(*v),
+                Facet::MaxScale(v) => out.max_scale = Some(*v),
                 Facet::Assertion(a) => out.assertions.push(a.clone()),
             }
         }
@@ -391,6 +407,14 @@ pub enum Builtin {
     YearMonthDuration,
     DayTimeDuration,
     DateTimeStamp,
+
+    /// XSD 1.1's optional decimal that remembers its scale. A primitive in its
+    /// own right, not a decimal: it has infinities, a NaN and a signed zero,
+    /// none of which `xs:decimal` has.
+    ///
+    /// Last, because `BUILTINS` is indexed by `Builtin as usize` and the two
+    /// orders have to agree — `table_and_enum_agree` pins that.
+    PrecisionDecimal,
 }
 
 /// What kind of built-in a [`Builtin`] is.
@@ -499,6 +523,15 @@ impl Builtin {
                     B::Decimal => {
                         facet.is_bound()
                             || matches!(facet, F::TotalDigits | F::FractionDigits | F::Enumeration)
+                    }
+                    // Scale in place of `fractionDigits`: the scale may be
+                    // negative, which a count of fractional digits cannot be.
+                    B::PrecisionDecimal => {
+                        facet.is_bound()
+                            || matches!(
+                                facet,
+                                F::TotalDigits | F::MinScale | F::MaxScale | F::Enumeration
+                            )
                     }
                     B::Float | B::Double | B::Duration => {
                         facet.is_bound() || facet == F::Enumeration
@@ -677,9 +710,15 @@ static BUILTINS: &[Entry] = &[
     ),
     ("dayTimeDuration", Some(B::Duration), K::Atomic, W::Collapse),
     ("dateTimeStamp", Some(B::DateTime), K::Atomic, W::Collapse),
+    (
+        "precisionDecimal",
+        Some(B::AnyAtomicType),
+        K::Atomic,
+        W::Collapse,
+    ),
 ];
 
-static ALL_BUILTINS: [Builtin; 50] = [
+static ALL_BUILTINS: [Builtin; 51] = [
     B::AnyType,
     B::AnySimpleType,
     B::AnyAtomicType,
@@ -730,6 +769,7 @@ static ALL_BUILTINS: [Builtin; 50] = [
     B::YearMonthDuration,
     B::DayTimeDuration,
     B::DateTimeStamp,
+    B::PrecisionDecimal,
 ];
 
 #[cfg(test)]
@@ -745,17 +785,32 @@ mod tests {
     }
 
     #[test]
-    fn there_are_nineteen_primitives() {
+    fn there_are_nineteen_primitives_plus_the_optional_one() {
         let n = Builtin::all().iter().filter(|b| b.is_primitive()).count();
         assert_eq!(
-            n, 19,
-            "XSD 1.1 Part 2 defines exactly 19 primitive datatypes"
+            n, 20,
+            "XSD 1.1 Part 2 defines 19 required primitives, and `precisionDecimal` \
+             is the optional twentieth"
         );
+        assert!(Builtin::PrecisionDecimal.is_primitive());
     }
 
+    /// `precisionDecimal` is optional in XSD 1.1 — a conforming processor need
+    /// not have it, and the suite's `vc:typeAvailable` exists partly to ask.
+    /// This one does, so the answer is yes.
     #[test]
-    fn precision_decimal_is_not_a_builtin() {
-        assert!(Builtin::from_local_name("precisionDecimal").is_none());
+    fn precision_decimal_is_available() {
+        assert_eq!(
+            Builtin::from_local_name("precisionDecimal"),
+            Some(Builtin::PrecisionDecimal)
+        );
+        // A primitive in its own right, not a decimal: it has infinities, a
+        // NaN and a signed zero, none of which `xs:decimal` has.
+        assert_eq!(
+            Builtin::PrecisionDecimal.primitive(),
+            Some(Builtin::PrecisionDecimal)
+        );
+        assert!(!Builtin::PrecisionDecimal.derives_from(Builtin::Decimal));
     }
 
     #[test]
