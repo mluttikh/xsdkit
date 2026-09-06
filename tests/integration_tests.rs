@@ -862,7 +862,10 @@ fn wildcards_record_their_namespace_constraint() {
     let p = c.content.particle().unwrap();
     let kid = s.child_particles(p)[0];
     match &s[kid].term {
-        // ##other excludes the target namespace, and admits everything else.
+        // `##other` means "somebody else's namespace", which is not the
+        // same as "unqualified": it bars the target namespace *and* absent.
+        // XSD 1.0 says so in Wildcard allows Namespace Name, clause 2.3;
+        // 1.1 by putting absent in the set.
         Term::Wildcard(w) => {
             let tns = s.documents().iter().find_map(|d| d.target_namespace);
             assert!(tns.is_some());
@@ -871,8 +874,14 @@ fn wildcards_record_their_namespace_constraint() {
                 "##other must exclude the target namespace"
             );
             assert!(
-                w.namespace.admits(None),
-                "##other admits no-namespace names"
+                !w.namespace.admits(None),
+                "##other must exclude no-namespace names"
+            );
+            // Another namespace entirely is what it does admit.
+            assert!(
+                w.namespace
+                    .admits_uri(s.names(), Some("urn:somewhere-else")),
+                "##other must admit a namespace that is neither"
             );
         }
         other => panic!("expected a wildcard, got {other:?}"),

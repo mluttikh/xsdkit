@@ -171,13 +171,15 @@ cannot express this.
   chain can be walked — so these wait in `Loader::simple_content_facets` and
   `resolve_simple_content` fills them in before its own walk. Reading them as
   nothing, which is what used to happen, made the whole restriction do nothing.
-- **`##other` admits no namespace, and the specification does not.** It is
-  built as `Not([target_ns])`, and `admits` is a plain "not in the list", so a
-  name in no namespace passes. XSD 1.0 says a `not(X)` constraint excludes
-  absent as well, and 1.1 spells `##other` as `not({tns, absent})`. Ours is
-  the more permissive reading. Tightening it would change wildcard matching in
-  *instance validation* too, so it wants its own change and its own
-  measurement — not a line slipped into an adjacent fix.
+- **`##other` bars no namespace as well as the target one**, and only
+  `##other` does. XSD 1.0 says so in *Wildcard allows Namespace Name* clause
+  2.3, 1.1 by putting absent in the set: a wildcard meaning "somebody else's
+  namespace" does not mean "unqualified". `notNamespace` is the opposite case
+  — it bars what it lists, and `##local` is how it names absent — so the rule
+  belongs on the `##other` arm of `read_wildcard` and nowhere else. A test
+  used to assert the permissive reading; it was recording the implementation,
+  which is what §3's warning about writing expectations from the code is
+  about.
 - **`read_facets` is shared by both restriction shapes.** A `simpleContent`
   one legitimately carries `xs:attribute`, `xs:attributeGroup`,
   `xs:anyAttribute` and `xs:assert` beside its facets. `not_a_facet` is the
@@ -294,7 +296,7 @@ is fifty cases one rule buys.
 
 The instance half — 21,671 documents — is `#[ignore]`d because it takes
 minutes where the schema half takes seconds (4.5 minutes in `--release`; run
-it that way). Run it with `-- --ignored`. It scores 21,575 of them, 97.5%
+it that way). Run it with `-- --ignored`. It scores 21,575 of them, 97.6%
 correct: **99.5%** of valid documents accepted, **95.1%** of invalid ones
 rejected.
 

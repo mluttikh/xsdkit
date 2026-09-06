@@ -2015,7 +2015,16 @@ impl<'r> Loader<'r> {
         let namespace = match (node.attribute("namespace"), node.attribute("notNamespace")) {
             (Some(v), _) => match v.trim() {
                 "##any" => NamespaceConstraint::Any,
-                "##other" => NamespaceConstraint::Not(vec![ctx.target_ns]),
+                // `##other` bars *no namespace* as well as the target one.
+                // 1.0 says it in a separate rule ("and must not be absent"),
+                // 1.1 by putting absent in the set; either way a wildcard
+                // meaning "somebody else's namespace" does not mean
+                // "unqualified". `notNamespace` is different — it bars what it
+                // lists, and `##local` is how it would name absent.
+                "##other" => NamespaceConstraint::Not(match ctx.target_ns {
+                    Some(t) => vec![Some(t), None],
+                    None => vec![None],
+                }),
                 other => NamespaceConstraint::Enumeration(list(self, other)),
             },
             (None, Some(v)) => NamespaceConstraint::Not(list(self, v)),

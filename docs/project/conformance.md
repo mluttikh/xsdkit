@@ -47,8 +47,8 @@ the list is short enough to be worked through.
 | | |
 |---|---|
 | valid documents accepted | **99.5%** (11,849 / 11,907) |
-| invalid documents rejected | **95.1%** (9,197 / 9,668) |
-| overall correct | **97.5%** (21,046 / 21,575) |
+| invalid documents rejected | **95.1%** (9,198 / 9,668) |
+| overall correct | **97.6%** (21,047 / 21,575) |
 
 Here the two rows are much closer, because validating a document against a
 model you already built is the part that is finished.
