@@ -285,27 +285,31 @@ impl<'a, S: FnMut(PsviEvent)> Run<'a, '_, S> {
     /// over the *collapsed* value, which is why ` aaa ` and `aaa` are one
     /// identifier rather than two.
     fn record_identifiers(&mut self, ty: TypeId, lexical: &str, scope: u32, line: u32) {
-        let kind = match self.id_roles.get(&ty) {
+        // Whatever each *token* is validated against: a list's item type, or
+        // the type itself. A list of unions resolves its members item by
+        // item, so the question has to be asked at that granularity.
+        let item = item_type(self.v.schemas, ty);
+        let kind = match self.id_roles.get(&item) {
             Some(k) => *k,
             None => {
-                let k = id_kind(self.v.schemas, ty);
-                self.id_roles.insert(ty, k);
+                let k = id_kind(self.v.schemas, item);
+                self.id_roles.insert(item, k);
                 k
             }
         };
-        let role = match kind {
-            None => return,
-            Some(IdKind::Defines) => IdRole::Defines,
-            Some(IdKind::References) => IdRole::References,
-            // A union's members are tried in order and the first that
-            // validates wins, so which one it was decides the role — and that
-            // is a question about the value, not about the type.
-            Some(IdKind::PerValue) => match self.union_member_role(ty, lexical) {
-                Some(r) => r,
-                None => return,
-            },
-        };
+        let Some(kind) = kind else { return };
         for token in lexical.split_whitespace() {
+            let role = match kind {
+                IdKind::Defines => IdRole::Defines,
+                IdKind::References => IdRole::References,
+                // A union's members are tried in order and the first that
+                // validates wins, so which one it was decides the role — and
+                // that is a question about this token, not about the type.
+                IdKind::PerValue => match self.union_member_role(item, token) {
+                    Some(r) => r,
+                    None => continue,
+                },
+            };
             match role {
                 IdRole::Defines => {
                     let claimed = self.ids.entry(token.to_string()).or_insert(scope);
@@ -323,7 +327,7 @@ impl<'a, S: FnMut(PsviEvent)> Run<'a, '_, S> {
         }
     }
 
-    /// The role a union value plays, found the way the validator found its
+    /// The role one token plays, found the way the validator found its
     /// member: in declaration order, first one that validates.
     fn union_member_role(&self, ty: TypeId, lexical: &str) -> Option<IdRole> {
         let members = self.v.schemas[ty].as_simple()?.member_types.clone();
@@ -334,7 +338,7 @@ impl<'a, S: FnMut(PsviEvent)> Run<'a, '_, S> {
                 .validate_in(m, lexical, &Scopes(&self.namespaces))
                 .is_ok()
             {
-                return match id_kind(self.v.schemas, m) {
+                return match id_kind(self.v.schemas, item_type(self.v.schemas, m)) {
                     Some(IdKind::Defines) => Some(IdRole::Defines),
                     Some(IdKind::References) => Some(IdRole::References),
                     _ => None,
@@ -1230,18 +1234,22 @@ fn predefined_entity(name: &str) -> Option<&'static str> {
     }
 }
 
-/// Whether values of this type can be document-scope identifiers.
+/// The type each whitespace-separated token is validated against.
 ///
-/// A list of either plays the same role item by item, so the item type
-/// decides for one. A union cannot be answered from the type alone — which
-/// member matched decides — so it defers to the value.
-fn id_kind(schemas: &Schemas, ty: TypeId) -> Option<IdKind> {
-    let simple = schemas[ty].as_simple();
-    let target = match simple {
+/// One step only: a list's items are atomic or union, never lists again.
+fn item_type(schemas: &Schemas, ty: TypeId) -> TypeId {
+    match schemas[ty].as_simple() {
         Some(t) if t.variety == crate::datatypes::Variety::List => t.item_type.unwrap_or(ty),
         _ => ty,
-    };
-    if let Some(t) = schemas[target].as_simple() {
+    }
+}
+
+/// Whether values of this type can be document-scope identifiers.
+///
+/// A union cannot be answered from the type alone — which member matched
+/// decides — so it defers to the value.
+fn id_kind(schemas: &Schemas, ty: TypeId) -> Option<IdKind> {
+    if let Some(t) = schemas[ty].as_simple() {
         if t.variety == crate::datatypes::Variety::Union {
             // Only worth asking per value if some member could be one.
             let any = t
@@ -1251,7 +1259,7 @@ fn id_kind(schemas: &Schemas, ty: TypeId) -> Option<IdKind> {
             return any.then_some(IdKind::PerValue);
         }
     }
-    match nearest_builtin(schemas, target) {
+    match nearest_builtin(schemas, ty) {
         Some(crate::datatypes::Builtin::Id) => Some(IdKind::Defines),
         Some(crate::datatypes::Builtin::IdRef | crate::datatypes::Builtin::IdRefs) => {
             Some(IdKind::References)

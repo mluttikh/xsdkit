@@ -403,6 +403,54 @@ fn an_idref_must_match_an_id_somewhere_in_the_document() {
     );
 }
 
+/// A list of unions settles the question for each item separately: the list
+/// type has no members of its own, so asking it once for the whole value
+/// resolves nothing at all.
+#[test]
+fn a_list_of_unions_resolves_each_item_on_its_own() {
+    let s = schema(
+        r#"<xs:element name="doc">
+             <xs:complexType><xs:sequence>
+               <xs:element name="n" maxOccurs="unbounded">
+                 <xs:complexType>
+                   <xs:attribute name="id" type="tns:IdList"/>
+                   <xs:attribute name="refs" type="tns:RefList"/>
+                 </xs:complexType>
+               </xs:element>
+             </xs:sequence></xs:complexType>
+           </xs:element>
+           <xs:simpleType name="IdList"><xs:list itemType="tns:IdOrInt"/></xs:simpleType>
+           <xs:simpleType name="RefList"><xs:list itemType="tns:RefOrInt"/></xs:simpleType>
+           <xs:simpleType name="IdOrInt">
+             <xs:union memberTypes="xs:ID xs:integer"/>
+           </xs:simpleType>
+           <xs:simpleType name="RefOrInt">
+             <xs:union memberTypes="xs:IDREF xs:integer"/>
+           </xs:simpleType>"#,
+    );
+    // The names are identifiers; the integers among them are not.
+    valid(
+        &s,
+        r#"<doc xmlns="urn:example"><n id="aaa 23 bbb"/><n refs="bbb 29 aaa"/></doc>"#,
+    );
+    invalid(
+        &s,
+        r#"<doc xmlns="urn:example"><n id="aaa 23"/><n refs="nope"/></doc>"#,
+        DiagCode::UnresolvedIdRef,
+    );
+    invalid(
+        &s,
+        r#"<doc xmlns="urn:example"><n id="aaa"/><n id="aaa"/></doc>"#,
+        DiagCode::DuplicateId,
+    );
+    // `23` is not an NCName, so it never reaches the `xs:IDREF` member and
+    // there is no reference to leave dangling.
+    valid(
+        &s,
+        r#"<doc xmlns="urn:example"><n id="23"/><n refs="23"/></doc>"#,
+    );
+}
+
 /// A union's members are tried in order and the first that validates wins, so
 /// whether a value is an identifier is a question about the *value*, not
 /// about the type.

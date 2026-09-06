@@ -210,6 +210,11 @@ cannot express this.
   their own negative counterparts, which add a *third* element carrying that
   value and expect invalid. No rule counting distinct elements satisfies both,
   so the specification wins and those two stay as false alarms.
+- **Identifier roles are settled per *token*, not per value.** A list's item
+  type is what each whitespace-separated token validates against, and when
+  that item type is a union the member is resolved for each token separately.
+  Asking the *list* type for its union members finds none — a list has none —
+  so `list of (IDREF | integer)` recorded nothing at all until this was fixed.
 - **Whether a union value is an identifier depends on the member that
   matched**, not on the type: members are tried in declaration order and the
   first that validates wins, so `union of (integer, boolean, ID)` makes `abc`
@@ -332,7 +337,7 @@ is fifty cases one rule buys.
 The instance half — 21,671 documents — is `#[ignore]`d because it takes
 minutes where the schema half takes seconds (4.5 minutes in `--release`; run
 it that way). Run it with `-- --ignored`. It scores 21,575 of them, 98.6%
-correct: **99.5%** of valid documents accepted, **97.5%** of invalid ones
+correct: **99.5%** of valid documents accepted, **97.6%** of invalid ones
 rejected.
 
 That first figure was 88.1% until a one-line bug turned up: an *enumeration on
