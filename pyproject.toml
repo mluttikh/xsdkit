@@ -38,4 +38,4 @@ include = ["python/xsdkit/*.pyi", "python/xsdkit/py.typed"]
 
 
 [dependency-groups]
-dev = ["pytest>=8", "maturin>=1.7"]
+dev = ["pytest>=8", "maturin>=1.7", "ipython>=8"]
