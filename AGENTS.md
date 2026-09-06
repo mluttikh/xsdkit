@@ -210,6 +210,11 @@ cannot express this.
   their own negative counterparts, which add a *third* element carrying that
   value and expect invalid. No rule counting distinct elements satisfies both,
   so the specification wins and those two stay as false alarms.
+- **A sibling declaration governs over a global one.** When a wildcard admits
+  a name the content model also writes out, that model's declaration is the
+  one the element is validated against — the wildcard does not reach past a
+  declaration already standing beside it. `wild064` is the case: local
+  `xs:integer`, global `xs:decimal`, and `93.7` has to fail.
 - **Element Declarations Consistent is *dynamic* in XSD 1.1.** 1.0 rejected a
   schema where a wildcard could admit a name the model also declares; 1.1
   accepts it and reports the clash only when a document reaches it, which is
@@ -749,6 +754,13 @@ has the wrong number of particles.
    and the instance half from 20,492 correct to 20,541.
 
 ## Planned, not present
+
+**`notQName="##defined"` counts our predeclared attributes.** `xml:lang`,
+`xml:space`, `xml:base` and `xml:id` are installed so a schema need not fetch
+`xml.xsd`, which makes them look like declarations the *schema* made — so a
+wildcard excluding `##defined` refuses them. `saxonData/Wild/wild054` expects
+`xml:lang` admitted. Telling the two apart needs `Schemas` to remember which
+declarations were predeclared, which it does not carry.
 
 **Identity constraints over unassessed content.** A selector matches element
 information items whatever their assessment, but `open_identity` runs only on

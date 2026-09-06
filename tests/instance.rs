@@ -368,12 +368,27 @@ fn related_declarations_are_consistent() {
         &edc_schema(r#"type="xs:integer""#, r#"type="xs:positiveInteger""#),
         r#"<doc xmlns="urn:example"><e>-12</e><f>x</f><e>12</e></doc>"#,
     );
-    valid(
-        &edc_schema(r#"type="xs:integer""#, r#"type="xs:decimal""#),
-        r#"<doc xmlns="urn:example"><e>12</e><f>x</f><e>1.5</e></doc>"#,
-    );
     // The same declaration on both sides.
     valid(&edc_schema(r#"type="xs:date""#, r#"type="xs:date""#), TWO);
+}
+
+/// The declaration standing in the content model governs, even though a
+/// wildcard is what admitted the element. The wildcard does not get to reach
+/// past a declaration already beside it to a global one.
+#[test]
+fn a_sibling_declaration_governs_over_the_global_one() {
+    // Local `xs:integer`, global `xs:decimal`: `1.5` is a decimal but not an
+    // integer, and the local declaration is the one that applies.
+    let s = edc_schema(r#"type="xs:integer""#, r#"type="xs:decimal""#);
+    valid(
+        &s,
+        r#"<doc xmlns="urn:example"><e>12</e><f>x</f><e>34</e></doc>"#,
+    );
+    invalid(
+        &s,
+        r#"<doc xmlns="urn:example"><e>12</e><f>x</f><e>1.5</e></doc>"#,
+        DiagCode::InvalidValue,
+    );
 }
 
 /// A union and its members are related too, which the base chain does not

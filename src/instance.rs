@@ -973,7 +973,12 @@ impl<'a, S: FnMut(PsviEvent)> Run<'a, '_, S> {
                         return (None, true);
                     }
                 }
-                return match (mode, global) {
+                // When the model writes the name out itself, *that*
+                // declaration governs — the wildcard admitted the element,
+                // but it does not get to reach past a declaration already
+                // standing beside it.
+                let chosen = sibling.or(global);
+                return match (mode, chosen) {
                     (ProcessContents::Skip, _) => (None, true),
                     (_, Some(id)) => (Some(id), false),
                     (ProcessContents::Lax, None) => (None, true),
