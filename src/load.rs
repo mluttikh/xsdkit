@@ -2032,13 +2032,42 @@ impl<'r> Loader<'r> {
         let mut not_qname = Vec::new();
         let mut not_defined = false;
         let mut not_defined_sibling = false;
+        let span = Span::new(&ctx.uri, line_of(ctx, node));
         for tok in raw.split_whitespace() {
             match tok {
                 "##defined" => not_defined = true,
                 "##definedSibling" => not_defined_sibling = true,
                 _ if tok.starts_with("##") => {}
                 _ => {
-                    if let Some(q) = self.attr_qname(node, tok, ctx, &Span::new(&ctx.uri, 0)) {
+                    // `xml:xml:lang` resolves a prefix and leaves a local part
+                    // with a colon in it, which is not a name.
+                    let local = tok.rsplit(':').next().unwrap_or(tok);
+                    if !crate::values::is_ncname(local) || tok.matches(':').count() > 1 {
+                        self.diags.push(
+                            Diagnostic::error(
+                                DiagCode::InvalidAttributeValue,
+                                format!("`notQName` contains `{tok}`, which is not a QName"),
+                            )
+                            .at(span.clone()),
+                        );
+                        continue;
+                    }
+                    if let Some(q) = self.attr_qname(node, tok, ctx, &span) {
+                        // A name the wildcard could never have matched cannot
+                        // be excluded from it — the schema is describing a
+                        // set it already does not contain.
+                        if !namespace.admits(q.ns) {
+                            let shown = self.names.display(q);
+                            self.diags.push(
+                                Diagnostic::error(
+                                    DiagCode::InvalidAttributeValue,
+                                    format!(
+                                        "`notQName` excludes `{shown}`, which this wildcard does not admit anyway"
+                                    ),
+                                )
+                                .at(span.clone()),
+                            );
+                        }
                         not_qname.push(q);
                     }
                 }

@@ -171,6 +171,13 @@ cannot express this.
   chain can be walked — so these wait in `Loader::simple_content_facets` and
   `resolve_simple_content` fills them in before its own walk. Reading them as
   nothing, which is what used to happen, made the whole restriction do nothing.
+- **`##other` admits no namespace, and the specification does not.** It is
+  built as `Not([target_ns])`, and `admits` is a plain "not in the list", so a
+  name in no namespace passes. XSD 1.0 says a `not(X)` constraint excludes
+  absent as well, and 1.1 spells `##other` as `not({tns, absent})`. Ours is
+  the more permissive reading. Tightening it would change wildcard matching in
+  *instance validation* too, so it wants its own change and its own
+  measurement — not a line slipped into an adjacent fix.
 - **`read_facets` is shared by both restriction shapes.** A `simpleContent`
   one legitimately carries `xs:attribute`, `xs:attributeGroup`,
   `xs:anyAttribute` and `xs:assert` beside its facets. `not_a_facet` is the
@@ -268,7 +275,7 @@ crate:
 | | |
 |---|---|
 | valid schemas accepted | **99.7%** — it reads real schemas |
-| invalid schemas rejected | **64.4%** — partial: see `src/restriction.rs` |
+| invalid schemas rejected | **66.0%** — partial: see `src/restriction.rs` |
 
 That asymmetry is by construction, not neglect: the Schema Component
 Constraints and the Derivation Valid rules are largely unimplemented (see §7).

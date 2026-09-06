@@ -12,8 +12,8 @@ are regenerated rather than remembered.
 | | |
 |---|---|
 | valid schemas accepted | **99.7%** (5,231 / 5,247) |
-| invalid schemas rejected | **64.4%** (309 / 480) |
-| overall correct | **96.7%** (5,540 / 5,727) |
+| invalid schemas rejected | **66.0%** (317 / 480) |
+| overall correct | **96.9%** (5,548 / 5,727) |
 
 **The gap between those two rows is the honest description of this library.**
 

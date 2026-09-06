@@ -218,3 +218,49 @@ fn mixed_may_not_contradict_itself() {
            </xs:complexType>"#,
     );
 }
+
+/// `notQName` excludes names from what a wildcard admits, so every name in
+/// it has to be one the wildcard could have matched — and has to be a name.
+#[test]
+fn not_qname_entries_must_be_names_the_wildcard_admits() {
+    // Two colons is not a QName.
+    assert_eq!(
+        count(
+            r#"<xs:complexType name="T"><xs:sequence/>
+                 <xs:anyAttribute notQName="xml:xml:lang"/>
+               </xs:complexType>"#,
+            DiagCode::InvalidAttributeValue
+        ),
+        1
+    );
+    // `##other` here excludes the target namespace, so a name in it is one
+    // the wildcard never admitted.
+    assert_eq!(
+        count(
+            r###"<xs:complexType name="T">
+                  <xs:sequence>
+                    <xs:any namespace="##other" notQName="tns:a" minOccurs="0"/>
+                  </xs:sequence>
+                </xs:complexType>"###,
+            DiagCode::InvalidAttributeValue
+        ),
+        1
+    );
+    // Excluding a name the wildcard does admit is the point of the attribute.
+    clean(
+        r###"<xs:element name="a" type="xs:string"/>
+            <xs:complexType name="T">
+              <xs:sequence>
+                <xs:any namespace="##targetNamespace" notQName="tns:a" minOccurs="0"/>
+              </xs:sequence>
+            </xs:complexType>"###,
+    );
+    // And the two keywords are not names at all.
+    clean(
+        r###"<xs:complexType name="T">
+              <xs:sequence>
+                <xs:any namespace="##any" notQName="##defined" minOccurs="0"/>
+              </xs:sequence>
+            </xs:complexType>"###,
+    );
+}

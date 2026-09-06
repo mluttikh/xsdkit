@@ -628,7 +628,7 @@ fn is_xml_name(s: &str) -> bool {
     chars.next().is_some_and(is_name_start_char) && chars.all(is_name_char)
 }
 
-fn is_ncname(s: &str) -> bool {
+pub(crate) fn is_ncname(s: &str) -> bool {
     is_xml_name(s) && !s.contains(':')
 }
 
