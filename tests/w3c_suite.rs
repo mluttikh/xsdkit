@@ -19,7 +19,7 @@
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
-use xsdkit::{Conformance, SchemaSetBuilder, Version};
+use xsdkit::{Compilation, Conformance, SchemaSetBuilder, Version};
 
 /// The `validity` the suite prescribes for a test, read at the version we
 /// actually run it as.
@@ -218,11 +218,9 @@ fn accepts(case: &SchemaCase) -> bool {
     // Loading is deliberately done inside `catch_unwind`: a panic on a
     // hostile schema is itself a conformance failure worth counting rather
     // than one that aborts the run.
-    std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        b.build_with_warnings().1.has_errors()
-    }))
-    .map(|has_errors| !has_errors)
-    .unwrap_or(false)
+    std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| b.compile().has_errors()))
+        .map(|has_errors| !has_errors)
+        .unwrap_or(false)
 }
 
 #[derive(Default, Debug)]
@@ -277,11 +275,11 @@ fn children_agrees_with_the_predicates_across_the_suite() {
         // Every case, not just the ones the suite calls valid: a schema with
         // errors still compiles to components, and its content models are as
         // good an oracle as any. A panic is another test's business.
-        let Ok((s, _)) =
-            std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| b.build_with_warnings()))
+        let Ok(compiled) = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| b.compile()))
         else {
             continue;
         };
+        let s = compiled.schemas;
 
         for (tid, def) in s.iter_types() {
             if def.as_complex().is_none() {
@@ -477,7 +475,10 @@ fn w3c_instance_conformance() {
                 b = b.file(d.display().to_string());
             }
             std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                let (schemas, diags) = b.build_with_warnings();
+                let Compilation {
+                    schemas,
+                    diagnostics: diags,
+                } = b.compile();
                 // A schema this crate could not load says nothing about the
                 // document, so those are counted apart rather than scored.
                 (!diags.has_errors()).then_some(schemas)
@@ -487,7 +488,7 @@ fn w3c_instance_conformance() {
         let verdict = match entry {
             None => Ok(None),
             Some(schemas) => std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                Some(schemas.instance_validator().validate(&xml).is_valid())
+                Some(schemas.document_validator().validate(&xml).is_valid())
             })),
         };
         let t = by_set.entry(c.set.clone()).or_default();

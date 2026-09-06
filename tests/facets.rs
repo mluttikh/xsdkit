@@ -20,8 +20,8 @@ fn diags(body: &str) -> Diagnostics {
     SchemaSetBuilder::new()
         .version(Version::Xsd11)
         .text(schema(body), "mem://main.xsd")
-        .build_with_warnings()
-        .1
+        .compile()
+        .diagnostics
 }
 
 /// The one code, and how many errors carry it.
@@ -465,9 +465,12 @@ fn a_repeated_facet_under_simple_content_is_reported() {
           </xs:simpleContent>
         </xs:complexType>
       </xs:schema>"#;
-    let (_, d) = SchemaSetBuilder::new()
+    let Compilation {
+        schemas: _,
+        diagnostics: d,
+    } = SchemaSetBuilder::new()
         .text(xsd.to_string(), "mem://sc.xsd")
-        .build_with_warnings();
+        .compile();
     assert!(
         d.errors().any(|e| e.code == DiagCode::ConflictingFacets),
         "expected a duplicate-facet report, got:\n{d}"
@@ -497,9 +500,10 @@ fn explicit_timezone_is_enforced() {
     let s = SchemaSetBuilder::new()
         .version(Version::Xsd11)
         .text(xsd.to_string(), "mem://tz.xsd")
-        .build()
+        .compile()
+        .into_result()
         .unwrap_or_else(|d| panic!("{d}"));
-    let check = |xml: &str| s.instance_validator().validate(xml).is_valid();
+    let check = |xml: &str| s.document_validator().validate(xml).is_valid();
 
     assert!(check(r#"<r xmlns="urn:example">2001-01-01T00:00:00Z</r>"#));
     assert!(check(

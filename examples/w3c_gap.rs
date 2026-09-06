@@ -101,7 +101,7 @@ fn main() {
                 // A panic is not an acceptance, but it is not a rejection
                 // either; count it with the misses so it cannot hide.
                 let accepted = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                    !b.build_with_warnings().1.has_errors()
+                    !b.compile().has_errors()
                 }))
                 .unwrap_or(true);
 

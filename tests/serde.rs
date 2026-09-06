@@ -76,7 +76,8 @@ fn kitchen_sink() -> Schemas {
     );
     SchemaSetBuilder::new()
         .text(xsd, "mem://main.xsd")
-        .build()
+        .compile()
+        .into_result()
         .unwrap_or_else(|d| panic!("{d}"))
 }
 
@@ -110,7 +111,7 @@ const DOCS: &[&str] = &[
 fn verdicts(s: &Schemas) -> Vec<String> {
     DOCS.iter()
         .map(|xml| {
-            let d = s.instance_validator().validate(xml).diagnostics;
+            let d = s.document_validator().validate(xml).diagnostics;
             format!("{d}")
         })
         .collect()
@@ -198,7 +199,8 @@ fn a_round_trip_keeps_what_the_components_do_not_say() {
                 ),
                 "mem://v.xsd",
             )
-            .build()
+            .compile()
+            .into_result()
             .unwrap_or_else(|d| panic!("{d}"));
         let copy: Schemas =
             postcard::from_bytes(&postcard::to_allocvec(&original).unwrap()).unwrap();
@@ -209,7 +211,7 @@ fn a_round_trip_keeps_what_the_components_do_not_say() {
         // `+INF` is an XSD 1.1 double and not an XSD 1.0 one, which is the
         // difference `xsd_version` is carrying.
         let d = copy
-            .instance_validator()
+            .document_validator()
             .validate(r#"<d xmlns="urn:example">+INF</d>"#)
             .diagnostics;
         assert_eq!(d.has_errors(), version == Version::Xsd10, "{d}");

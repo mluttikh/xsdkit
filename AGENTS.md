@@ -193,8 +193,9 @@ cannot express this.
   it declared. Both live in `compile.rs`; the operations are
   `NamespaceConstraint::intersect` / `union`.
 - **Substitution blocking belongs in the admits sets, not the matcher.**
-  Whether a member may stand in for a head is static, so `substitutable_for`
-  filters the closure once at build time and `ContentMatcher` stays unaware.
+  Whether a member may stand in for a head is static, so
+  `permitted_substitutes` filters the group once at build time and
+  `ContentMatcher` stays unaware.
   The blocking constraint is the head element's `block` *unioned with its
   type's* — a type can refuse to be restricted into a substitute while the
   element says nothing. And the derivation chain is only walked when a method
@@ -629,9 +630,9 @@ replacing any one type is an internal change.
    *right* is not the same as a rejection being *correct*.
 2. ~~**`values::parse` does not know the version.**~~ **Done.** `Schemas` now
    carries the XSD it was read as (`Schemas::xsd_version`), and
-   `values::parse_in` takes it. The bare `values::parse` still reads the 1.1
-   superset — with no schema in hand there is nothing to say which language
-   applies.
+   `values::parse_with` takes it on a `ParseContext`. The bare `values::parse`
+   still reads the 1.1 superset — with no schema in hand there is nothing to
+   say which language applies.
 3. ~~**Four UPA false positives.**~~ **Done**, and they were two unrelated
    gaps rather than one bug in the checker. `notNamespace` was never parsed,
    so such a wildcard silently became `##any` and two wildcards *partitioning*

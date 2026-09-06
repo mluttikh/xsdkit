@@ -18,8 +18,8 @@ fn diags(body: &str) -> Diagnostics {
     SchemaSetBuilder::new()
         .version(Version::Xsd11)
         .text(xsd, "mem://main.xsd")
-        .build_with_warnings()
-        .1
+        .compile()
+        .diagnostics
 }
 
 fn blocked(body: &str) -> usize {
@@ -142,8 +142,8 @@ fn hash_all_and_final_default_both_seal() {
     );
     let d = SchemaSetBuilder::new()
         .text(xsd, "mem://main.xsd")
-        .build_with_warnings()
-        .1;
+        .compile()
+        .diagnostics;
     assert_eq!(
         d.errors()
             .filter(|x| x.code == DiagCode::DerivationBlocked)

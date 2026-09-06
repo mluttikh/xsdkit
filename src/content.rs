@@ -55,18 +55,38 @@ use fxhash::{FxHashMap, FxHashSet};
 ///
 /// This one is generous: a flat sequence of hundreds of distinct elements is
 /// perfectly ordinary and must not be truncated.
+///
+/// Not API: an artefact of compiling content models as Glushkov position
+/// automata, hidden so the strategy stays changeable. [`ContentMatcher`] is
+/// the supported way to ask what a content model accepts.
+#[doc(hidden)]
 pub const MAX_POSITIONS: usize = 4096;
 
 /// Cap on unrolled copies of a single particle.
 ///
 /// Deliberately far tighter than [`MAX_POSITIONS`], because unrolling is
 /// quadratic in the copy count while a flat model is linear in its size.
+///
+/// Not API: an artefact of compiling content models as Glushkov position
+/// automata, hidden so the strategy stays changeable. [`ContentMatcher`] is
+/// the supported way to ask what a content model accepts.
+#[doc(hidden)]
 pub const MAX_UNROLL: u32 = 64;
 
 /// Index of a position within one [`ContentAutomaton`].
+///
+/// Not API: an artefact of compiling content models as Glushkov position
+/// automata, hidden so the strategy stays changeable. [`ContentMatcher`] is
+/// the supported way to ask what a content model accepts.
+#[doc(hidden)]
 pub type PositionId = u32;
 
 /// What a position matches.
+///
+/// Not API: an artefact of compiling content models as Glushkov position
+/// automata, hidden so the strategy stays changeable. [`ContentMatcher`] is
+/// the supported way to ask what a content model accepts.
+#[doc(hidden)]
 #[derive(Clone, PartialEq, Eq, Debug)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub enum Label {
@@ -79,6 +99,11 @@ pub enum Label {
 }
 
 /// One occurrence of an element or wildcard in a content model.
+///
+/// Not API: an artefact of compiling content models as Glushkov position
+/// automata, hidden so the strategy stays changeable. [`ContentMatcher`] is
+/// the supported way to ask what a content model accepts.
+#[doc(hidden)]
 #[derive(Clone, Debug)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct Position {
@@ -96,6 +121,11 @@ pub struct Position {
 }
 
 /// A Glushkov position automaton over a content model.
+///
+/// Not API: an artefact of compiling content models as Glushkov position
+/// automata, hidden so the strategy stays changeable. [`ContentMatcher`] is
+/// the supported way to ask what a content model accepts.
+#[doc(hidden)]
 #[derive(Clone, Debug)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct ContentAutomaton {
@@ -306,7 +336,7 @@ impl<'a> Builder<'a> {
 
     fn add_position(&mut self, particle: ParticleId, label: Label) -> PositionId {
         let admits = match &label {
-            Label::Element(e) => self.schemas.substitutable_for(*e),
+            Label::Element(e) => self.schemas.permitted_substitutes(*e),
             Label::Wildcard => Vec::new(),
         };
         let id = self.positions.len() as PositionId;
@@ -643,7 +673,7 @@ fn build_all_group(schemas: &Schemas, particles: &[ParticleId]) -> AllGroup {
             _ => continue,
         };
         let admits = match &label {
-            Label::Element(e) => schemas.substitutable_for(*e),
+            Label::Element(e) => schemas.permitted_substitutes(*e),
             Label::Wildcard => Vec::new(),
         };
         members.push(AllMember {
@@ -1329,13 +1359,13 @@ impl<'a> ContentMatcher<'a> {
 /// a declaration for it.
 /// Whether a wildcard's XSD 1.1 `notQName` list excludes this name.
 fn excluded(schemas: &Schemas, w: &Wildcard, ns_uri: Option<&str>, local: &str) -> bool {
-    w.not_qname.iter().any(|q| {
-        let ns_matches = match (q.ns, ns_uri) {
+    w.not_qname.iter().any(|&q| {
+        let ns_matches = match (schemas.namespace_of(q), ns_uri) {
             (None, None) | (None, Some("")) => true,
-            (Some(n), Some(u)) => schemas.names().resolve_ns(n) == u,
+            (Some(n), Some(u)) => n == u,
             _ => false,
         };
-        ns_matches && schemas.names().resolve(q.local) == local
+        ns_matches && schemas.local_of(q) == local
     })
 }
 

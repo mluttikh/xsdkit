@@ -22,7 +22,7 @@
 //! accessor, so dropping back down to the id API costs nothing either.
 //!
 //! ```no_run
-//! # let schemas = xsdkit::SchemaSetBuilder::new().file("report.xsd").build().unwrap();
+//! # let schemas = xsdkit::SchemaSetBuilder::new().file("report.xsd").compile().into_result().unwrap();
 //! let report = schemas.element(Some("urn:example"), "report").unwrap();
 //! for child in report.children() {
 //!     println!(
@@ -112,15 +112,12 @@ impl<'s> ElementRef<'s> {
     }
 
     pub fn local_name(self) -> &'s str {
-        self.schemas.names().resolve(self.decl().name.local)
+        self.schemas.local_of(self.name())
     }
 
     /// The namespace URI, absent when the name is unqualified.
     pub fn namespace(self) -> Option<&'s str> {
-        self.decl()
-            .name
-            .ns
-            .map(|ns| self.schemas.names().resolve_ns(ns))
+        self.schemas.namespace_of(self.name())
     }
 
     /// The name in James Clark notation, `{ns}local`.
@@ -177,12 +174,24 @@ impl<'s> ElementRef<'s> {
     /// Every element that may stand in for this one, this one included when
     /// it is not abstract.
     ///
-    /// Substitution is transitive, so this is the closure — the set of names
-    /// that may actually appear where this element is permitted.
+    /// The names that may actually appear where this element is permitted:
+    /// transitive, and with `block` applied, so this agrees with what the
+    /// compiled content model admits. [`Schemas::substitution_group`] is the
+    /// membership question, which is a different one.
     pub fn substitutes(self) -> impl Iterator<Item = ElementRef<'s>> {
         let schemas = self.schemas;
         schemas
-            .substitution_closure(self.id)
+            .permitted_substitutes(self.id)
+            .into_iter()
+            .map(move |id| ElementRef { schemas, id })
+    }
+
+    /// Every element in this one's substitution group, whether or not `block`
+    /// permits it to stand in. See [`Schemas::substitution_group`].
+    pub fn substitution_group(self) -> impl Iterator<Item = ElementRef<'s>> {
+        let schemas = self.schemas;
+        schemas
+            .substitution_group(self.id)
             .into_iter()
             .map(move |id| ElementRef { schemas, id })
     }
@@ -243,13 +252,11 @@ impl<'s> TypeRef<'s> {
     }
 
     pub fn local_name(self) -> Option<&'s str> {
-        self.name().map(|q| self.schemas.names().resolve(q.local))
+        self.name().map(|q| self.schemas.local_of(q))
     }
 
     pub fn namespace(self) -> Option<&'s str> {
-        self.name()
-            .and_then(|q| q.ns)
-            .map(|ns| self.schemas.names().resolve_ns(ns))
+        self.name().and_then(|q| self.schemas.namespace_of(q))
     }
 
     /// The name in Clark notation, or `(anonymous)` for an inline type.
@@ -485,14 +492,11 @@ impl<'s> AttributeRef<'s> {
     }
 
     pub fn local_name(self) -> &'s str {
-        self.schemas.names().resolve(self.decl().name.local)
+        self.schemas.local_of(self.name())
     }
 
     pub fn namespace(self) -> Option<&'s str> {
-        self.decl()
-            .name
-            .ns
-            .map(|ns| self.schemas.names().resolve_ns(ns))
+        self.schemas.namespace_of(self.name())
     }
 
     pub fn display_name(self) -> String {
@@ -626,7 +630,7 @@ impl Schemas {
     /// Resolves any component id to a navigable reference.
     ///
     /// ```no_run
-    /// # let schemas = xsdkit::SchemaSetBuilder::new().file("s.xsd").build().unwrap();
+    /// # let schemas = xsdkit::SchemaSetBuilder::new().file("s.xsd").compile().into_result().unwrap();
     /// # let id = schemas.element_id(None, "e").unwrap();
     /// let element = schemas.get(id);
     /// ```
@@ -637,7 +641,7 @@ impl Schemas {
     /// Looks up a global element declaration.
     ///
     /// ```no_run
-    /// # let schemas = xsdkit::SchemaSetBuilder::new().file("report.xsd").build().unwrap();
+    /// # let schemas = xsdkit::SchemaSetBuilder::new().file("report.xsd").compile().into_result().unwrap();
     /// let report = schemas.element(Some("urn:example"), "report").unwrap();
     /// ```
     pub fn element(&self, ns: Option<&str>, local: &str) -> Option<ElementRef<'_>> {

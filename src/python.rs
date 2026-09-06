@@ -26,7 +26,7 @@ use crate::model::*;
 use crate::names::QName;
 use crate::refs::{AttributeRef, ElementRef, TypeRef};
 use crate::values::Value;
-use crate::{Conformance, FileResolver, SchemaSetBuilder, Version};
+use crate::{Compilation, Conformance, FileResolver, SchemaSetBuilder, Version};
 use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
 use pyo3::types::{PyBytes, PyDict, PyList, PyTuple, PyType};
@@ -336,9 +336,11 @@ impl PySchemaSet {
         // `SimpleType::builtin` and so cannot see `xs:anyType`, which is
         // complex. Everything predeclared lives in the XSD namespace, and
         // nothing a document declares may.
-        self.inner.globals().types.iter().filter(|(q, _)| {
-            q.ns.is_none_or(|ns| self.inner.names().resolve_ns(ns) != crate::names::XS)
-        })
+        self.inner
+            .globals()
+            .types
+            .iter()
+            .filter(|(q, _)| self.inner.namespace_of(**q) != Some(crate::names::XS))
     }
 }
 
@@ -361,7 +363,10 @@ impl PySchemaSet {
             .file(path_from(path)?);
         // Compilation is the only slow part, and `Schemas` is Send + Sync
         // precisely so this is legal.
-        let (schemas, diags) = py.detach(|| b.build_with_warnings());
+        let Compilation {
+            schemas,
+            diagnostics: diags,
+        } = py.detach(|| b.compile());
         if diags.has_errors() {
             return Err(schema_error(py, diags));
         }
@@ -383,7 +388,10 @@ impl PySchemaSet {
         resolver: Option<Py<PyAny>>,
     ) -> PyResult<Self> {
         let b = builder(search_paths, conformance, version, nodes_limit, resolver)?.text(xsd, uri);
-        let (schemas, diags) = py.detach(|| b.build_with_warnings());
+        let Compilation {
+            schemas,
+            diagnostics: diags,
+        } = py.detach(|| b.compile());
         if diags.has_errors() {
             return Err(schema_error(py, diags));
         }
@@ -409,7 +417,10 @@ impl PySchemaSet {
     ) -> PyResult<Self> {
         let b =
             builder(search_paths, conformance, version, nodes_limit, resolver)?.bytes(data, uri);
-        let (schemas, diags) = py.detach(|| b.build_with_warnings());
+        let Compilation {
+            schemas,
+            diagnostics: diags,
+        } = py.detach(|| b.compile());
         if diags.has_errors() {
             return Err(schema_error(py, diags));
         }
@@ -426,7 +437,7 @@ impl PySchemaSet {
                 uri: d.uri.clone(),
                 target_namespace: d
                     .target_namespace
-                    .map(|n| self.inner.names().resolve_ns(n).to_string()),
+                    .map(|n| self.inner.namespace_uri(n).to_string()),
                 chameleon: d.chameleon,
                 version: d.version.clone(),
             })
@@ -457,7 +468,7 @@ impl PySchemaSet {
         Ok(self.inner.globals().elements.contains_key(&q)
             || self.inner.globals().types.contains_key(&q)
                 && q.ns
-                    .is_none_or(|ns| self.inner.names().resolve_ns(ns) != crate::names::XS))
+                    .is_none_or(|ns| self.inner.namespace_uri(ns) != crate::names::XS))
     }
 
     /// The element or type of that name, raising `KeyError` when there is
@@ -484,7 +495,7 @@ impl PySchemaSet {
                 // of this schema's declarations, and `type()` is the way to
                 // resolve one.
                 if q.ns
-                    .is_none_or(|ns| self.inner.names().resolve_ns(ns) != crate::names::XS)
+                    .is_none_or(|ns| self.inner.namespace_uri(ns) != crate::names::XS)
                 {
                     return PyType_ {
                         s: self.inner.clone(),
@@ -642,7 +653,7 @@ impl PySchemaSet {
         // No Python is called back into, so the GIL can go.
         let report = py.detach(|| {
             schemas
-                .instance_validator()
+                .document_validator()
                 .validate_named(&xml, uri, |_| {})
         });
         let valid = report.is_valid();
@@ -677,7 +688,7 @@ impl PySchemaSet {
         let mut failed: Option<PyErr> = None;
         let report = self
             .inner
-            .instance_validator()
+            .document_validator()
             .validate_named(&xml, uri, |ev| {
                 if failed.is_some() {
                     return;
@@ -720,7 +731,7 @@ impl PySchemaSet {
         // and `on_event` is Python code.
         let report = self
             .inner
-            .instance_validator()
+            .document_validator()
             .validate_named(&xml, uri, |ev| {
                 if callback_error.is_some() {
                     return;
@@ -839,8 +850,8 @@ impl PySchemaSet {
     fn psvi_to_py<'py>(&self, py: Python<'py>, ev: RustPsvi) -> PyResult<Bound<'py, PyPsviEvent>> {
         let name_of = |q: crate::names::QName| {
             (
-                q.ns.map(|n| self.inner.names().resolve_ns(n).to_string()),
-                self.inner.names().resolve(q.local).to_string(),
+                self.inner.namespace_of(q).map(str::to_string),
+                self.inner.local_of(q).to_string(),
             )
         };
         let wrapped = match ev {
@@ -1036,7 +1047,11 @@ impl PyElement {
     }
 
     /// Every element that may appear where this one is permitted, including
-    /// itself when it is not abstract. Substitution is transitive.
+    /// itself when it is not abstract.
+    ///
+    /// Transitive, and with `block` applied — so this is what a document may
+    /// actually name here, not merely who is in the substitution group. A
+    /// head that blocks substitution has members that this does not list.
     #[getter]
     fn substitutes(&self) -> Vec<PyElement> {
         self.r()
@@ -2035,7 +2050,7 @@ impl PyType_ {
     ///
     /// Raises `ValueError` with the reason when the value is not valid.
     fn validate(&self, py: Python<'_>, lexical: &str) -> PyResult<Py<PyAny>> {
-        let validator = self.s.validator();
+        let validator = self.s.value_validator();
         match validator.validate(self.id, lexical) {
             Ok(v) => Ok(value_to_py(py, &v)?.unbind()),
             Err(e) => Err(PyValueError::new_err(e.to_string())),
@@ -2044,7 +2059,7 @@ impl PyType_ {
 
     /// Whether a lexical form is valid against this type.
     fn is_valid(&self, lexical: &str) -> bool {
-        self.s.validator().validate(self.id, lexical).is_ok()
+        self.s.value_validator().validate(self.id, lexical).is_ok()
     }
 
     // -- simple types ------------------------------------------------------
@@ -3036,7 +3051,10 @@ fn load(
 ) -> PyResult<(PySchemaSet, Vec<PyDiagnostic>)> {
     let b =
         builder(search_paths, conformance, version, nodes_limit, resolver)?.file(path_from(path)?);
-    let (schemas, diags) = py.detach(|| b.build_with_warnings());
+    let Compilation {
+        schemas,
+        diagnostics: diags,
+    } = py.detach(|| b.compile());
     Ok((
         PySchemaSet::wrap(schemas),
         diags.into_iter().map(PyDiagnostic).collect(),
@@ -3057,7 +3075,10 @@ fn load_string(
     resolver: Option<Py<PyAny>>,
 ) -> PyResult<(PySchemaSet, Vec<PyDiagnostic>)> {
     let b = builder(search_paths, conformance, version, nodes_limit, resolver)?.text(xsd, uri);
-    let (schemas, diags) = py.detach(|| b.build_with_warnings());
+    let Compilation {
+        schemas,
+        diagnostics: diags,
+    } = py.detach(|| b.compile());
     Ok((
         PySchemaSet::wrap(schemas),
         diags.into_iter().map(PyDiagnostic).collect(),

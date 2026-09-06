@@ -9,7 +9,7 @@
 //! ```
 use std::collections::BTreeMap;
 use std::path::PathBuf;
-use xsdkit::{Conformance, SchemaSetBuilder, Version};
+use xsdkit::{Compilation, Conformance, SchemaSetBuilder, Version};
 
 fn main() {
     let root = PathBuf::from(std::env::var("XSDTESTS").expect("XSDTESTS"));
@@ -101,7 +101,10 @@ fn main() {
                         b = b.file(d.display().to_string());
                     }
                     std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                        let (s, d) = b.build_with_warnings();
+                        let Compilation {
+                            schemas: s,
+                            diagnostics: d,
+                        } = b.compile();
                         (!d.has_errors()).then_some(s)
                     }))
                     .unwrap_or(None)
@@ -109,7 +112,7 @@ fn main() {
                 // A schema we could not load says nothing about the document.
                 let Some(s) = entry else { continue };
                 let report = match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                    s.instance_validator().validate(&xml)
+                    s.document_validator().validate(&xml)
                 })) {
                     Ok(r) => r,
                     Err(_) => {

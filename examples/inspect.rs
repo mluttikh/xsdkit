@@ -32,14 +32,17 @@ fn main() {
         builder = builder.file(f);
     }
 
-    let (schemas, diags) = builder.build_with_warnings();
+    let Compilation {
+        schemas,
+        diagnostics: diags,
+    } = builder.compile();
 
     let c = schemas.component_counts();
     println!("documents           {}", schemas.documents().len());
     for d in schemas.documents() {
         let ns = d
             .target_namespace
-            .map(|n| schemas.names().resolve_ns(n))
+            .map(|n| schemas.namespace_uri(n))
             .unwrap_or("(none)");
         let cham = if d.chameleon { "  [chameleon]" } else { "" };
         println!("  {ns}{cham}\n    {}", d.uri);

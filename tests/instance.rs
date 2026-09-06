@@ -13,12 +13,13 @@ fn schema(body: &str) -> Schemas {
     );
     SchemaSetBuilder::new()
         .text(xsd, "mem://main.xsd")
-        .build()
+        .compile()
+        .into_result()
         .unwrap_or_else(|d| panic!("{d}"))
 }
 
 fn check(s: &Schemas, xml: &str) -> Diagnostics {
-    s.instance_validator().validate(xml).diagnostics
+    s.document_validator().validate(xml).diagnostics
 }
 
 fn valid(s: &Schemas, xml: &str) {
@@ -293,7 +294,7 @@ fn a_narrowed_simple_content_keeps_its_attributes() {
     let s = narrowed_simple_content();
     valid(&s, r#"<e xmlns="urn:example" k="v">ab</e>"#);
     let mut typed = Vec::new();
-    s.instance_validator()
+    s.document_validator()
         .validate_with(r#"<e xmlns="urn:example">ab</e>"#, |ev| {
             if let PsviEvent::Text { value: Some(v), .. } = ev {
                 typed.push(v);
@@ -783,7 +784,7 @@ fn a_skip_attribute_wildcard_looks_no_further() {
 fn an_attribute_admitted_by_a_wildcard_reaches_the_psvi_typed() {
     let s = attributes_wrapped_in("strict");
     let mut seen = Vec::new();
-    let r = s.instance_validator().validate_with(
+    let r = s.document_validator().validate_with(
         r#"<out xmlns="urn:example" xmlns:t="urn:example" t:k="5"/>"#,
         |ev| {
             if let PsviEvent::StartElement { attributes, .. } = ev {
@@ -911,7 +912,7 @@ fn an_attribute_fixed_value_compares_values_not_strings() {
 /// The character content the PSVI reports for a one-element document.
 fn text_of(s: &Schemas, xml: &str) -> Vec<String> {
     let mut out = Vec::new();
-    s.instance_validator().validate_with(xml, |ev| {
+    s.document_validator().validate_with(xml, |ev| {
         if let PsviEvent::Text { lexical, .. } = ev {
             out.push(lexical);
         }
@@ -972,7 +973,7 @@ fn an_empty_element_takes_its_declarations_default() {
     let s = defaulted_schema();
     let mut seen = Vec::new();
     let r = s
-        .instance_validator()
+        .document_validator()
         .validate_with(r#"<doc xmlns="urn:example"><d/></doc>"#, |ev| {
             if let PsviEvent::Text {
                 value, from_schema, ..
@@ -1027,7 +1028,8 @@ fn whitespace_content_is_not_an_absent_value() {
 fn from_xsd(xsd: &str) -> Schemas {
     SchemaSetBuilder::new()
         .text(xsd.to_string(), "mem://qname.xsd")
-        .build()
+        .compile()
+        .into_result()
         .unwrap_or_else(|d| panic!("{d}"))
 }
 
@@ -1168,9 +1170,12 @@ fn a_prefixed_qname_enumeration_literal_is_not_a_schema_error() {
                </xs:restriction>
              </xs:simpleType>
            </xs:schema>"#;
-    let (_, diags) = SchemaSetBuilder::new()
+    let Compilation {
+        schemas: _,
+        diagnostics: diags,
+    } = SchemaSetBuilder::new()
         .text(xsd.to_string(), "mem://qname.xsd")
-        .build_with_warnings();
+        .compile();
     assert!(!diags.has_errors(), "{diags}");
 }
 
@@ -1710,7 +1715,7 @@ fn an_abstract_element_may_not_appear_in_a_document() {
 fn the_psvi_carries_typed_values() {
     let s = report_schema();
     let mut texts = Vec::new();
-    let report = s.instance_validator().validate_with(
+    let report = s.document_validator().validate_with(
         r#"<report xmlns="urn:example" id="r1">
              <title>Quarterly</title><count>42</count>
            </report>"#,
@@ -1732,7 +1737,7 @@ fn the_psvi_carries_typed_values() {
 fn the_psvi_reports_the_declaration_and_type_in_force() {
     let s = derived_schema();
     let mut starts = Vec::new();
-    s.instance_validator().validate_with(
+    s.document_validator().validate_with(
         r#"<thing xmlns="urn:example" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
                   xmlns:tns="urn:example" xsi:type="tns:Derived">
              <a>x</a><b>y</b>
@@ -1762,7 +1767,7 @@ fn the_psvi_reports_the_declaration_and_type_in_force() {
 fn attributes_reach_the_psvi_typed() {
     let s = report_schema();
     let mut attrs = Vec::new();
-    s.instance_validator().validate_with(
+    s.document_validator().validate_with(
         r#"<report xmlns="urn:example" id="r1" lang="en">
              <title>t</title><count>1</count>
            </report>"#,
@@ -1847,7 +1852,7 @@ fn a_fixed_attribute_is_supplied_when_absent() {
     );
     let mut attrs = Vec::new();
     let report =
-        s.instance_validator()
+        s.document_validator()
             .validate_with(r#"<len xmlns="urn:example">3.2</len>"#, |ev| {
                 if let PsviEvent::StartElement { attributes, .. } = ev {
                     attrs = attributes;
@@ -1872,7 +1877,7 @@ fn a_default_attribute_is_supplied_too() {
            </xs:element>"#,
     );
     let mut attrs = Vec::new();
-    s.instance_validator()
+    s.document_validator()
         .validate_with(r#"<v xmlns="urn:example">7</v>"#, |ev| {
             if let PsviEvent::StartElement { attributes, .. } = ev {
                 attrs = attributes;
@@ -1896,7 +1901,7 @@ fn a_written_attribute_is_not_marked_as_from_the_schema() {
            </xs:element>"#,
     );
     let mut attrs = Vec::new();
-    s.instance_validator()
+    s.document_validator()
         .validate_with(r#"<len xmlns="urn:example" uom="m">3.2</len>"#, |ev| {
             if let PsviEvent::StartElement { attributes, .. } = ev {
                 attrs = attributes;
@@ -1923,7 +1928,7 @@ fn an_inherited_fixed_attribute_is_supplied() {
     );
     let mut attrs = Vec::new();
     let report =
-        s.instance_validator()
+        s.document_validator()
             .validate_with(r#"<depth xmlns="urn:example">120.5</depth>"#, |ev| {
                 if let PsviEvent::StartElement { attributes, .. } = ev {
                     attrs = attributes;
@@ -1955,7 +1960,7 @@ fn a_prohibited_attribute_is_not_supplied() {
            <xs:element name="ratio" type="tns:Unitless"/>"#,
     );
     let mut attrs = Vec::new();
-    s.instance_validator()
+    s.document_validator()
         .validate_with(r#"<ratio xmlns="urn:example">0.5</ratio>"#, |ev| {
             if let PsviEvent::StartElement { attributes, .. } = ev {
                 attrs = attributes;
@@ -2108,7 +2113,7 @@ fn a_qname_reaches_the_psvi_resolved() {
 
     let value_of = |xml: &str| {
         let mut found = None;
-        let report = s.instance_validator().validate_with(xml, |ev| {
+        let report = s.document_validator().validate_with(xml, |ev| {
             if let PsviEvent::Text { value: Some(v), .. } = ev {
                 found = Some(v);
             }
@@ -2157,7 +2162,7 @@ fn an_undeclared_default_namespace_leaves_a_qname_unqualified() {
     );
 
     let mut found = None;
-    let report = s.instance_validator().validate_with(
+    let report = s.document_validator().validate_with(
         &format!(
             r#"<p:outer xmlns:p="{NS}" xmlns="urn:d">
                  <p:inner xmlns="">thing</p:inner>

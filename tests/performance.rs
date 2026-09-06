@@ -40,7 +40,8 @@ fn load(src: &str) -> Duration {
     let start = Instant::now();
     let set = SchemaSetBuilder::new()
         .text(src, "urn:scale")
-        .build()
+        .compile()
+        .into_result()
         .expect("the generated schema must compile");
     let elapsed = start.elapsed();
     assert!(set.element_id(Some("urn:scale"), "e0").is_some());

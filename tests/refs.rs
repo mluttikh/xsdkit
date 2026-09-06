@@ -16,7 +16,8 @@ fn build(body: &str) -> Schemas {
     );
     SchemaSetBuilder::new()
         .text(xsd, "mem://main.xsd")
-        .build()
+        .compile()
+        .into_result()
         .unwrap_or_else(|d| panic!("{d}"))
 }
 
@@ -227,7 +228,11 @@ fn the_two_layers_agree_everywhere() {
         assert_eq!(e.display_name(), s.display_name(decl.name));
         assert_eq!(
             e.substitutes().map(|x| x.id()).collect::<Vec<_>>(),
-            s.substitution_closure(id)
+            s.permitted_substitutes(id)
+        );
+        assert_eq!(
+            e.substitution_group().map(|x| x.id()).collect::<Vec<_>>(),
+            s.substitution_group(id)
         );
         checked += 1;
     }
@@ -267,4 +272,52 @@ fn debug_prints_the_component() {
         format!("{:?}", e.type_of()),
         format!("TypeRef({{{NS}}}Report)")
     );
+}
+
+/// `substitutes` and `substitution_group` answer different questions, and
+/// both return the same type for the same argument — so the only thing
+/// stopping a caller reaching for the wrong one is that they disagree here
+/// visibly.
+///
+/// `block="substitution"` on the head bars standing in for it. The members
+/// are still *in* the group; none of them may appear where the head is
+/// permitted. `substitutes` is the one that says so, and it has to agree with
+/// what the content model admits — otherwise browsing the schema and
+/// validating a document give different answers.
+#[test]
+fn block_separates_the_group_from_what_may_appear() {
+    let s = build(
+        r#"<xs:element name="shape" type="xs:string" block="substitution"/>
+           <xs:element name="circle" type="xs:string" substitutionGroup="tns:shape"/>
+           <xs:complexType name="Holder">
+             <xs:sequence><xs:element ref="tns:shape"/></xs:sequence>
+           </xs:complexType>
+           <xs:element name="holder" type="tns:Holder"/>"#,
+    );
+    let shape = s.element(Some(NS), "shape").unwrap();
+
+    let group: Vec<_> = shape.substitution_group().map(|e| e.local_name()).collect();
+    assert_eq!(group, ["shape", "circle"], "circle is in the group");
+
+    let allowed: Vec<_> = shape.substitutes().map(|e| e.local_name()).collect();
+    assert_eq!(allowed, ["shape"], "but block bars it from standing in");
+
+    // The content model is the arbiter, and it agrees with `substitutes`.
+    let admitted: Vec<_> = s
+        .element(Some(NS), "holder")
+        .unwrap()
+        .children()
+        .map(|c| c.local_name())
+        .collect();
+    assert_eq!(admitted, allowed);
+
+    // And so does the validator, which is what makes the distinction matter.
+    let rejected = s
+        .document_validator()
+        .validate(&format!(
+            r#"<holder xmlns="{NS}"><circle>o</circle></holder>"#
+        ))
+        .diagnostics
+        .has_errors();
+    assert!(rejected, "a barred substitute must be rejected");
 }

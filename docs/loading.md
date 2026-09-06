@@ -22,7 +22,8 @@ encoding you would rather not guess at.
 
     let schemas = SchemaSetBuilder::new()
         .file("report.xsd")
-        .build()?;
+        .compile()
+    .into_result()?;
     # Ok::<_, xsdkit::Diagnostics>(())
     ```
 
@@ -47,7 +48,8 @@ let schemas = SchemaSetBuilder::new()
     .file("common.xsd")
     .file("orders.xsd")
     .file("shipping.xsd")
-    .build()?;
+    .compile()
+    .into_result()?;
 # Ok::<_, xsdkit::Diagnostics>(())
 ```
 
@@ -131,7 +133,8 @@ message becomes the diagnostic.
     let schemas = SchemaSetBuilder::new()
         .resolver(Vendored)
         .file("report.xsd")
-        .build()?;
+        .compile()
+    .into_result()?;
     # Ok::<_, xsdkit::Diagnostics>(())
     ```
 
@@ -226,16 +229,19 @@ keep.
 === "Rust"
 
     ```rust
-    use xsdkit::{Conformance, SchemaSetBuilder};
+    use xsdkit::{Compilation, Conformance, SchemaSetBuilder};
 
-    let (schemas, diagnostics) = SchemaSetBuilder::new()
+    let Compilation { schemas, diagnostics } = SchemaSetBuilder::new()
         .conformance(Conformance::Lax)
         .file("vendor/partial.xsd")
-        .build_with_warnings();
+        .compile();
     ```
 
-    `build()` returns `Result<Schemas, Diagnostics>`; `build_with_warnings()`
-    always returns a `Schemas` alongside everything that was found.
+    `compile()` always returns both halves — a schema with errors still
+    compiles to components, and one without them can still have warnings worth
+    reading. `Compilation::into_result()` is where the `Result` shape is asked
+    for, and where the choice to discard warnings on success is made
+    explicitly.
 
 ## Cost
 

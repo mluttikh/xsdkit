@@ -13,13 +13,14 @@ fn build(body: &str) -> Schemas {
     );
     SchemaSetBuilder::new()
         .text(xsd, "mem://main.xsd")
-        .build()
+        .compile()
+        .into_result()
         .unwrap_or_else(|d| panic!("{d}"))
 }
 
 /// Validates `lexical` against the named global simple type.
 fn check(s: &Schemas, name: &str, lexical: &str) -> Result<Value, ValidationError> {
-    let v = s.validator();
+    let v = s.value_validator();
     v.validate(s.type_id(Some(NS), name).expect("type"), lexical)
 }
 
@@ -172,7 +173,7 @@ fn a_union_reports_which_member_matched() {
     let s = build(
         r#"<xs:simpleType name="U"><xs:union memberTypes="xs:int xs:date"/></xs:simpleType>"#,
     );
-    let v = s.validator();
+    let v = s.value_validator();
     let u = s.type_id(Some(NS), "U").unwrap();
     assert_eq!(
         v.union_member(u, "42"),
@@ -268,7 +269,7 @@ fn uncompilable_patterns_are_reported_not_ignored() {
              <xs:restriction base="xs:string"><xs:pattern value="[a-z"/></xs:restriction>
            </xs:simpleType>"#,
     );
-    let v = s.validator();
+    let v = s.value_validator();
     assert!(
         !v.pattern_errors().is_empty(),
         "an invalid pattern must be surfaced"
@@ -281,11 +282,14 @@ fn uncompilable_patterns_are_reported_not_ignored() {
 
 #[test]
 fn the_schema_for_schemas_validates_its_own_vocabulary() {
-    let (s, _) = SchemaSetBuilder::new()
+    let Compilation {
+        schemas: s,
+        diagnostics: _,
+    } = SchemaSetBuilder::new()
         .file("tests/fixtures/XMLSchema.xsd")
         .conformance(Conformance::Lax)
-        .build_with_warnings();
-    let v = s.validator();
+        .compile();
+    let v = s.value_validator();
     let xs = "http://www.w3.org/2001/XMLSchema";
 
     // xs:derivationControl is an enumeration of five tokens.
@@ -397,10 +401,11 @@ fn the_two_lexical_spaces_xsd11_widened() {
         let s = SchemaSetBuilder::new()
             .version(version)
             .text(xsd, "mem://main.xsd")
-            .build()
+            .compile()
+            .into_result()
             .unwrap_or_else(|d| panic!("{d}"));
         let t = s.type_id(Some(NS), "T").expect("type");
-        s.validator().validate(t, lexical).is_ok()
+        s.value_validator().validate(t, lexical).is_ok()
     }
 
     let date = r#"<xs:simpleType name="T"><xs:restriction base="xs:date"/></xs:simpleType>"#;
@@ -427,18 +432,39 @@ fn the_two_lexical_spaces_xsd11_widened() {
 }
 
 /// The bare `values::parse` has no schema to ask, so it reads the 1.1
-/// superset. `parse_in` is the one that takes a side.
+/// superset. `parse_with` is the one that takes a side.
 #[test]
 fn a_bare_parse_reads_the_superset() {
     use xsdkit::datatypes::Builtin;
-    use xsdkit::values::{parse, parse_in};
+    use xsdkit::values::{ParseContext, parse, parse_with};
 
     assert!(parse(Builtin::Double, "+INF").is_ok());
-    assert!(parse_in(Builtin::Double, "+INF", Version::Xsd11).is_ok());
-    assert!(parse_in(Builtin::Double, "+INF", Version::Xsd10).is_err());
+    assert!(
+        parse_with(
+            Builtin::Double,
+            "+INF",
+            &ParseContext::new().version(Version::Xsd11)
+        )
+        .is_ok()
+    );
+    assert!(
+        parse_with(
+            Builtin::Double,
+            "+INF",
+            &ParseContext::new().version(Version::Xsd10)
+        )
+        .is_err()
+    );
 
     // The rule reaches into a list's items, not just the top-level form.
-    assert!(parse_in(Builtin::Entities, "a b", Version::Xsd10).is_ok());
+    assert!(
+        parse_with(
+            Builtin::Entities,
+            "a b",
+            &ParseContext::new().version(Version::Xsd10)
+        )
+        .is_ok()
+    );
 }
 
 /// `Value` is public, so whatever it holds is this crate's API. These wrappers

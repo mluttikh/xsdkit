@@ -258,10 +258,10 @@ fn err(builtin: Builtin, lexical: &str, reason: impl Into<String>) -> ValueError
 /// Reads the **XSD 1.1** lexical spaces, which are a superset of 1.0's. With
 /// no schema in hand there is nothing to say which language applies, and
 /// refusing a form that some schema somewhere admits is the more surprising
-/// answer. Use [`parse_in`] where the version is known — validating against a
-/// schema does, and [`crate::validate::Validator`] passes it through.
+/// answer. Use [`parse_with`] where the version is known — validating against
+/// a schema does, and [`crate::ValueValidator`] passes it through.
 pub fn parse(builtin: Builtin, lexical: &str) -> Result<Value, ValueError> {
-    parse_in(builtin, lexical, Version::Xsd11)
+    parse_with(builtin, lexical, &ParseContext::new())
 }
 
 /// A QName in the *value* space.
@@ -364,30 +364,85 @@ fn split_qname(s: &str) -> Result<(Option<&str>, &str), ValueError> {
     Ok((prefix, local))
 }
 
-/// Parses a lexical form in a particular version of XSD.
+/// Everything a lexical form is read against beyond its datatype.
 ///
-/// The two languages differ in exactly two places among the built-ins, both
-/// widenings that 1.1 made and 1.0 forbids:
+/// There were three entry points here — `parse`, `parse_in` and
+/// `parse_qualified` — where the suffix stood for how many extra arguments
+/// followed rather than for what they meant, and a reader had to learn the
+/// convention to pick one. Naming the axes and putting them in a context
+/// leaves two: the defaults, and everything. A third axis later is a field
+/// here rather than a fourth function.
 ///
-/// - the year `0000`, which 1.1 admits as 1 BCE and 1.0 prohibits outright;
-/// - `+INF`, which 1.1 added to the special values and 1.0 does not have.
-pub fn parse_in(builtin: Builtin, lexical: &str, version: Version) -> Result<Value, ValueError> {
-    parse_qualified(builtin, lexical, version, &NoNamespaces)
+/// ```
+/// # use xsdkit::{Version, values::{ParseContext, parse_with}, datatypes::Builtin};
+/// let cx = ParseContext::new().version(Version::Xsd10);
+/// assert!(parse_with(Builtin::Double, "+INF", &cx).is_err());
+/// ```
+#[derive(Copy, Clone)]
+pub struct ParseContext<'a> {
+    version: Version,
+    namespaces: &'a dyn Namespaces,
 }
 
-/// [`parse_in`], with the namespace bindings a QName needs.
-///
-/// Only `xs:QName` and `xs:NOTATION` consult `ns`; every other datatype's
-/// value is a function of its lexical form alone.
-pub fn parse_qualified(
+impl std::fmt::Debug for ParseContext<'_> {
+    /// The bindings are behind a trait object with no `Debug` bound, so this
+    /// says whether there are any rather than what they are.
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ParseContext")
+            .field("version", &self.version)
+            .field("namespaces", &"..")
+            .finish()
+    }
+}
+
+impl Default for ParseContext<'_> {
+    fn default() -> Self {
+        Self {
+            // The superset, for the same reason [`parse`] reads it: with no
+            // schema in hand, refusing a form some schema admits is the more
+            // surprising answer.
+            version: Version::Xsd11,
+            namespaces: &NoNamespaces,
+        }
+    }
+}
+
+impl<'a> ParseContext<'a> {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Which XSD's lexical spaces to read.
+    ///
+    /// The two languages differ in exactly two places among the built-ins,
+    /// both widenings that 1.1 made and 1.0 forbids:
+    ///
+    /// - the year `0000`, which 1.1 admits as 1 BCE and 1.0 prohibits;
+    /// - `+INF`, which 1.1 added to the special values and 1.0 lacks.
+    pub fn version(mut self, version: Version) -> Self {
+        self.version = version;
+        self
+    }
+
+    /// The namespace bindings in scope where the value was written.
+    ///
+    /// Only `xs:QName` and `xs:NOTATION` consult them; every other datatype's
+    /// value is a function of its lexical form alone.
+    pub fn namespaces(mut self, namespaces: &'a dyn Namespaces) -> Self {
+        self.namespaces = namespaces;
+        self
+    }
+}
+
+/// Parses a lexical form, saying explicitly what it is read against.
+pub fn parse_with(
     builtin: Builtin,
     lexical: &str,
-    version: Version,
-    ns: &dyn Namespaces,
+    cx: &ParseContext<'_>,
 ) -> Result<Value, ValueError> {
     let normalized = builtin.white_space().normalize(lexical);
     let s = normalized.as_ref();
-    parse_normalized(builtin, s, lexical, version, ns)
+    parse_normalized(builtin, s, lexical, cx.version, cx.namespaces)
 }
 
 /// Parses an already-whitespace-normalised lexical form.
@@ -406,7 +461,16 @@ fn parse_normalized(
     if let BuiltinKind::List(item) = builtin.kind() {
         let items = s
             .split_whitespace()
-            .map(|tok| parse_qualified(item, tok, version, ns))
+            .map(|tok| {
+                parse_with(
+                    item,
+                    tok,
+                    &ParseContext {
+                        version,
+                        namespaces: ns,
+                    },
+                )
+            })
             .collect::<Result<Vec<_>, _>>()?;
         return Ok(Value::List(items));
     }
@@ -839,14 +903,14 @@ pub fn check_facets(
     //
     // A list is the exception. Its enumeration literals are lists too, and
     // comparing them means parsing each one against the *item* type, which is
-    // not reachable from here — so `Validator::list` does that itself and this
+    // not reachable from here — so `ValueValidator::list` does that itself and this
     // would only ever compare a list against a string and reject everything.
     if let Some(allowed) = facets.enumeration.as_ref().filter(|_| !value.is_list()) {
         // A QName literal resolves against the *schema's* bindings, captured
         // with the facet. Every other datatype ignores them.
         let ns = &facets.namespaces;
         let matched = allowed.iter().any(|lex| {
-            parse_qualified(builtin, lex, Version::Xsd11, ns)
+            parse_with(builtin, lex, &ParseContext::new().namespaces(ns))
                 .map(|v| &v == value)
                 .unwrap_or(false)
         });

@@ -8,7 +8,7 @@
 
 use xsdkit::Version;
 use xsdkit::datatypes::Builtin as B;
-use xsdkit::values::{parse, parse_in};
+use xsdkit::values::{ParseContext, parse, parse_with};
 
 #[track_caller]
 fn canonical(b: B, lexical: &str) -> String {
@@ -189,10 +189,38 @@ fn orderings_are_in_the_value_space() {
 /// than through a schema.
 #[test]
 fn the_version_decides_two_lexical_spaces() {
-    assert!(parse_in(B::Double, "+INF", Version::Xsd11).is_ok());
-    assert!(parse_in(B::Double, "+INF", Version::Xsd10).is_err());
-    assert!(parse_in(B::Date, "0000-01-01", Version::Xsd11).is_ok());
-    assert!(parse_in(B::Date, "0000-01-01", Version::Xsd10).is_err());
+    assert!(
+        parse_with(
+            B::Double,
+            "+INF",
+            &ParseContext::new().version(Version::Xsd11)
+        )
+        .is_ok()
+    );
+    assert!(
+        parse_with(
+            B::Double,
+            "+INF",
+            &ParseContext::new().version(Version::Xsd10)
+        )
+        .is_err()
+    );
+    assert!(
+        parse_with(
+            B::Date,
+            "0000-01-01",
+            &ParseContext::new().version(Version::Xsd11)
+        )
+        .is_ok()
+    );
+    assert!(
+        parse_with(
+            B::Date,
+            "0000-01-01",
+            &ParseContext::new().version(Version::Xsd10)
+        )
+        .is_err()
+    );
     // The bare `parse` reads the superset.
     assert!(parse(B::Double, "+INF").is_ok());
 }

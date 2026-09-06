@@ -18,7 +18,7 @@ decision you make, not one inferred from the file.
     let schemas = SchemaSetBuilder::new()
         .version(Version::Xsd11)
         .file("report.xsd")
-        .build()?;
+        .compile().into_result()?;
     # Ok::<_, xsdkit::Diagnostics>(())
     ```
 

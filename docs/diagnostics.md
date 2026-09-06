@@ -40,11 +40,11 @@ Four parts, and each one is addressable:
 === "Rust"
 
     ```rust
-    # use xsdkit::{Conformance, SchemaSetBuilder};
-    let (schemas, diagnostics) = SchemaSetBuilder::new()
+    # use xsdkit::{Compilation, Conformance, SchemaSetBuilder};
+    let Compilation { schemas, diagnostics } = SchemaSetBuilder::new()
         .conformance(Conformance::Lax)
         .file("report.xsd")
-        .build_with_warnings();
+        .compile();
 
     for d in diagnostics.iter() {
         println!("{d}");
@@ -61,7 +61,7 @@ Two shapes, because two situations.
 | | Schema is expected to be sound | Schema is expected to be imperfect |
 |---|---|---|
 | Python | `SchemaSet.from_file(...)` raises `SchemaError` | `xsdkit.load(...)` returns `(schemas, diagnostics)` |
-| Rust | `build()` → `Result<Schemas, Diagnostics>` | `build_with_warnings()` → `(Schemas, Diagnostics)` |
+| Rust | `compile().into_result()` → `Result<Schemas, Diagnostics>` | `compile()` → `Compilation { schemas, diagnostics }` |
 
 `SchemaError` carries the whole list, so the raising form loses nothing:
 

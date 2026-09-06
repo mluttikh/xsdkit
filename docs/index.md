@@ -47,7 +47,7 @@ schema onto a dataframe, or writing a converter.
     ```rust
     use xsdkit::SchemaSetBuilder;
 
-    let schemas = SchemaSetBuilder::new().file("report.xsd").build()?;
+    let schemas = SchemaSetBuilder::new().file("report.xsd").compile().into_result()?;
     let report = schemas.element(Some("urn:example"), "report").unwrap();
 
     for child in report.children() {

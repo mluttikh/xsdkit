@@ -679,3 +679,28 @@ def test_a_substitution_group_member_is_optional():
 
     # And the validator agrees, which is the point.
     assert s.validate(f'<e xmlns="{NS}"><circle>o</circle></e>').is_valid
+
+
+def test_block_excludes_a_substitute_that_is_still_in_the_group():
+    """`substitutes` says what may appear, not who is in the group.
+
+    Both are one call away from each other and both return elements, so the
+    only guard against reaching for the wrong one is that they disagree
+    visibly — and that this one agrees with the validator.
+    """
+    s = build(
+        '<xs:element name="shape" type="xs:string" block="substitution"/>'
+        '<xs:element name="circle" type="xs:string" substitutionGroup="tns:shape"/>'
+        '<xs:complexType name="Holder">'
+        '<xs:sequence><xs:element ref="tns:shape"/></xs:sequence>'
+        "</xs:complexType>"
+        '<xs:element name="holder" type="tns:Holder"/>'
+    )
+    shape = s.element(NS, "shape")
+    assert [e.local_name for e in shape.substitutes] == ["shape"]
+
+    holder = s.element(NS, "holder")
+    assert [c.local_name for c in holder.children] == ["shape"]
+    assert not s.validate(
+        f'<holder xmlns="{NS}"><circle>o</circle></holder>'
+    ).is_valid

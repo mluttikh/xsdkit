@@ -11,17 +11,17 @@
 //!
 //! Runs against the assembled `Schemas` because every rule needs the type
 //! resolved, and the value check needs the composed facet set that
-//! [`crate::validate::Validator`] builds.
+//! [`crate::validate::ValueValidator`] builds.
 
 use crate::datatypes::Builtin;
 use crate::diagnostics::{DiagCode, Diagnostic, Diagnostics, Span};
 use crate::load::Version;
 use crate::model::{ContentType, Schemas, TypeId, ValueConstraint};
-use crate::validate::{ValidationError, Validator};
+use crate::validate::{ValidationError, ValueValidator};
 
 pub(crate) fn check_all(schemas: &Schemas) -> Diagnostics {
     let mut diags = Diagnostics::new();
-    let v = schemas.validator();
+    let v = schemas.value_validator();
 
     for (_, a) in schemas.iter_attributes() {
         let Some(vc) = &a.value_constraint else {
@@ -95,7 +95,7 @@ pub(crate) fn check_all(schemas: &Schemas) -> Diagnostics {
 /// bounds and all, which is why this goes through the validator rather than
 /// through `values::parse`.
 fn check_value(
-    v: &Validator<'_>,
+    v: &ValueValidator<'_>,
     schemas: &Schemas,
     ty: TypeId,
     vc: &ValueConstraint,

@@ -55,7 +55,7 @@ Pass `uri="orders/report.xml"` to have the spans name the file instead of
     ```rust
     # use xsdkit::Schemas;
     # fn demo(schemas: &Schemas, xml: &str) {
-    let report = schemas.instance_validator().validate(xml);
+    let report = schemas.document_validator().validate(xml);
     if !report.is_valid() {
         for d in report.diagnostics.iter() {
             println!("{d}");

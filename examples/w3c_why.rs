@@ -67,7 +67,7 @@ fn main() {
                     b = b.file(d.display().to_string());
                 }
                 let diags = match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                    b.build_with_warnings().1
+                    b.compile().diagnostics
                 })) {
                     Ok(d) => d,
                     Err(_) => {

@@ -30,14 +30,16 @@ impl Resolver for MapResolver {
 fn build(xsd: &str) -> Schemas {
     SchemaSetBuilder::new()
         .text(xsd, "mem://main.xsd")
-        .build()
+        .compile()
+        .into_result()
         .unwrap_or_else(|d| panic!("expected a clean build, got:\n{d}"))
 }
 
 fn errors(xsd: &str) -> Diagnostics {
     SchemaSetBuilder::new()
         .text(xsd, "mem://main.xsd")
-        .build()
+        .compile()
+        .into_result()
         .expect_err("expected diagnostics")
 }
 
@@ -173,7 +175,8 @@ fn element_form_default_governs_local_qualification() {
             ),
             "mem://u.xsd",
         )
-        .build()
+        .compile()
+        .into_result()
         .unwrap();
     let ty = unqualified[unqualified.element_id(Some(NS), "a").unwrap()].type_id;
     let p = unqualified[ty]
@@ -434,7 +437,7 @@ fn substitution_closure_is_transitive_and_skips_abstract_heads() {
     ));
     let feature = s.element_id(Some(NS), "feature").unwrap();
     let mut members: Vec<_> = s
-        .substitution_closure(feature)
+        .substitution_group(feature)
         .into_iter()
         .map(|e| s.names().resolve(s[e].name.local).to_string())
         .collect();
@@ -446,7 +449,7 @@ fn substitution_closure_is_transitive_and_skips_abstract_heads() {
 
     let curve = s.element_id(Some(NS), "curve").unwrap();
     let mut sub: Vec<_> = s
-        .substitution_closure(curve)
+        .substitution_group(curve)
         .into_iter()
         .map(|e| s.names().resolve(s[e].name.local).to_string())
         .collect();
@@ -490,7 +493,8 @@ fn include_merges_into_the_same_namespace() {
     let s = SchemaSetBuilder::new()
         .resolver(MapResolver::default().with("part.xsd", &part))
         .text(&main, "mem://main.xsd")
-        .build()
+        .compile()
+        .into_result()
         .unwrap();
     let root = s.element_id(Some(NS), "root").unwrap();
     assert_eq!(s[root].type_id, s.type_id(Some(NS), "Shared").unwrap());
@@ -513,7 +517,8 @@ fn chameleon_include_absorbs_the_includers_namespace() {
     let s = SchemaSetBuilder::new()
         .resolver(MapResolver::default().with("part.xsd", part))
         .text(&main, "mem://main.xsd")
-        .build()
+        .compile()
+        .into_result()
         .unwrap();
 
     // It answers to the includer's namespace, not to no-namespace.
@@ -540,7 +545,8 @@ fn import_brings_in_another_namespace() {
     let s = SchemaSetBuilder::new()
         .resolver(MapResolver::default().with("other.xsd", other))
         .text(&main, "mem://main.xsd")
-        .build()
+        .compile()
+        .into_result()
         .unwrap();
     let root = s.element_id(Some(NS), "root").unwrap();
     assert_eq!(s[root].type_id, s.type_id(Some("urn:other"), "Id").unwrap());
@@ -563,7 +569,8 @@ fn circular_includes_terminate() {
     let s = SchemaSetBuilder::new()
         .resolver(MapResolver::default().with("a.xsd", &a).with("b.xsd", &b))
         .text(&a, "a.xsd")
-        .build()
+        .compile()
+        .into_result()
         .unwrap();
     assert!(s.element_id(Some(NS), "a").is_some());
     assert!(s.element_id(Some(NS), "b").is_some());
@@ -575,7 +582,8 @@ fn a_missing_schema_location_is_an_error_but_lax_downgrades_it() {
     let d = SchemaSetBuilder::new()
         .resolver(MapResolver::default())
         .text(&main, "mem://main.xsd")
-        .build()
+        .compile()
+        .into_result()
         .expect_err("strict mode must fail");
     assert!(
         d.errors()
@@ -583,11 +591,14 @@ fn a_missing_schema_location_is_an_error_but_lax_downgrades_it() {
         "{d}"
     );
 
-    let (_, d) = SchemaSetBuilder::new()
+    let Compilation {
+        schemas: _,
+        diagnostics: d,
+    } = SchemaSetBuilder::new()
         .resolver(MapResolver::default())
         .conformance(Conformance::Lax)
         .text(&main, "mem://main.xsd")
-        .build_with_warnings();
+        .compile();
     assert!(!d.has_errors(), "lax mode should warn, not fail:\n{d}");
     assert!(!d.is_empty(), "lax mode should still say something");
 }
@@ -656,15 +667,18 @@ fn a_simple_type_cannot_contain_itself() {
 
     // And the validator survives one even when the model keeps it, which is
     // what `Conformance::Lax` does.
-    let (s, _) = SchemaSetBuilder::new()
+    let Compilation {
+        schemas: s,
+        diagnostics: _,
+    } = SchemaSetBuilder::new()
         .conformance(Conformance::Lax)
         .text(
             schema(r#"<xs:simpleType name="L"><xs:list itemType="tns:L"/></xs:simpleType>"#),
             "mem://main.xsd",
         )
-        .build_with_warnings();
+        .compile();
     let t = s.type_id(Some(NS), "L").expect("type");
-    assert!(s.validator().validate(t, "anything").is_err());
+    assert!(s.value_validator().validate(t, "anything").is_err());
 }
 
 /// The invariant `Schemas` carries is that no placeholder survives compilation
@@ -673,7 +687,10 @@ fn a_simple_type_cannot_contain_itself() {
 /// panicked. Found by fuzzing, like the particle case below it.
 #[test]
 fn an_unresolved_type_reference_never_reaches_schemas() {
-    let (s, d) = SchemaSetBuilder::new()
+    let Compilation {
+        schemas: s,
+        diagnostics: d,
+    } = SchemaSetBuilder::new()
         .conformance(Conformance::Lax)
         .text(
             schema(
@@ -694,7 +711,7 @@ fn an_unresolved_type_reference_never_reaches_schemas() {
             ),
             "mem://main.xsd",
         )
-        .build_with_warnings();
+        .compile();
     assert!(d.iter().any(|x| x.code == DiagCode::UnresolvedReference));
 
     // Every type in the arena, and everything each one points at, resolves.
@@ -743,7 +760,8 @@ fn an_identity_constraint_can_be_referenced_instead_of_defined() {
             ),
             "mem://main.xsd",
         )
-        .build()
+        .compile()
+        .into_result()
         .unwrap_or_else(|d| panic!("expected a clean build, got:\n{d}"));
 
     let first = s.element_id(Some(NS), "first").unwrap();
@@ -760,7 +778,10 @@ fn an_identity_constraint_can_be_referenced_instead_of_defined() {
 /// for a constraint that is not there.
 #[test]
 fn an_unresolved_identity_constraint_reference_drops_the_slot() {
-    let (s, d) = SchemaSetBuilder::new()
+    let Compilation {
+        schemas: s,
+        diagnostics: d,
+    } = SchemaSetBuilder::new()
         .version(Version::Xsd11)
         .conformance(Conformance::Lax)
         .text(
@@ -771,7 +792,7 @@ fn an_unresolved_identity_constraint_reference_drops_the_slot() {
             ),
             "mem://main.xsd",
         )
-        .build_with_warnings();
+        .compile();
     assert!(d.iter().any(|x| x.code == DiagCode::UnresolvedReference));
 
     let e = s.element_id(Some(NS), "e").unwrap();
@@ -947,7 +968,8 @@ fn duplicate_globals_collide_only_within_one_symbol_space() {
 fn malformed_xml_is_a_diagnostic_not_a_panic() {
     let d = SchemaSetBuilder::new()
         .text("<xs:schema><unclosed>", "mem://bad.xsd")
-        .build()
+        .compile()
+        .into_result()
         .expect_err("malformed input must not build");
     assert!(d.errors().any(|e| e.code == DiagCode::MalformedXml), "{d}");
 }
@@ -956,7 +978,8 @@ fn malformed_xml_is_a_diagnostic_not_a_panic() {
 fn a_non_schema_root_is_rejected() {
     let d = SchemaSetBuilder::new()
         .text("<html><body/></html>", "mem://page.html")
-        .build()
+        .compile()
+        .into_result()
         .expect_err("a non-schema document must not build");
     assert!(
         d.errors().any(|e| e.code == DiagCode::NotASchemaDocument),
@@ -981,7 +1004,8 @@ fn the_default_resolver_refuses_the_network() {
             schema(r#"<xs:include schemaLocation="https://example.com/a.xsd"/>"#),
             "mem://main.xsd",
         )
-        .build()
+        .compile()
+        .into_result()
         .expect_err("network fetches are opt-in");
     let e = d
         .errors()
@@ -1019,7 +1043,8 @@ fn a_latin1_schema_loads() {
     );
     let s = SchemaSetBuilder::new()
         .bytes(latin1(&xsd), "mem://latin1.xsd")
-        .build()
+        .compile()
+        .into_result()
         .unwrap_or_else(|d| panic!("a Latin-1 schema must load:\n{d}"));
 
     let e = s.element_id(Some(NS), "messgroesse").expect("element");
@@ -1043,7 +1068,8 @@ fn a_utf16_schema_loads() {
     );
     let s = SchemaSetBuilder::new()
         .bytes(utf16le(&xsd), "mem://utf16.xsd")
-        .build()
+        .compile()
+        .into_result()
         .unwrap_or_else(|d| panic!("{d}"));
     assert!(s.element_id(Some(NS), "temperatur").is_some());
 }
@@ -1054,7 +1080,8 @@ fn a_utf8_bom_does_not_break_the_parse() {
     b.extend_from_slice(schema(r#"<xs:element name="a" type="xs:string"/>"#).as_bytes());
     let s = SchemaSetBuilder::new()
         .bytes(b, "mem://bom.xsd")
-        .build()
+        .compile()
+        .into_result()
         .unwrap_or_else(|d| panic!("{d}"));
     assert!(s.element_id(Some(NS), "a").is_some());
 }
@@ -1069,7 +1096,8 @@ fn an_encoding_failure_blames_the_encoding() {
     );
     let d = SchemaSetBuilder::new()
         .bytes(xsd.into_bytes(), "mem://bad.xsd")
-        .build()
+        .compile()
+        .into_result()
         .expect_err("an unknown encoding must not build");
     assert!(
         d.errors().any(|e| e.code == DiagCode::UnsupportedEncoding),
@@ -1089,7 +1117,8 @@ fn bytes_that_contradict_their_declaration_are_reported() {
     b.extend_from_slice(b" --></xs:schema>");
     let d = SchemaSetBuilder::new()
         .bytes(b, "mem://mismatch.xsd")
-        .build()
+        .compile()
+        .into_result()
         .expect_err("mismatched bytes must not build");
     assert!(
         d.errors().any(|e| e.code == DiagCode::MalformedEncoding),
@@ -1128,7 +1157,8 @@ fn an_included_document_is_decoded_on_its_own_terms() {
     let s = SchemaSetBuilder::new()
         .resolver(Bytes(map))
         .text(main, "mem://main.xsd")
-        .build()
+        .compile()
+        .into_result()
         .unwrap_or_else(|d| panic!("{d}"));
 
     assert!(
@@ -1258,7 +1288,8 @@ fn the_schema_version_attribute_is_reported_verbatim() {
             ),
             "mem://main.xsd",
         )
-        .build()
+        .compile()
+        .into_result()
         .unwrap();
     assert_eq!(s.documents()[0].version.as_deref(), Some("3.2.2"));
 }
@@ -1283,7 +1314,8 @@ fn the_namespace_and_the_version_attribute_are_separate_facts() {
                </xs:schema>"#,
             "mem://main.xsd",
         )
-        .build()
+        .compile()
+        .into_result()
         .unwrap();
     let d = &s.documents()[0];
     let ns = s.names().resolve_ns(d.target_namespace.unwrap());
@@ -1308,7 +1340,10 @@ fn the_namespace_and_the_version_attribute_are_separate_facts() {
 /// from, so it reached `Schemas` as a placeholder.
 #[test]
 fn a_type_whose_whole_content_is_a_dangling_group_ref_does_not_panic() {
-    let (s, d) = SchemaSetBuilder::new()
+    let Compilation {
+        schemas: s,
+        diagnostics: d,
+    } = SchemaSetBuilder::new()
         .conformance(Conformance::Lax)
         .text(
             schema(
@@ -1319,7 +1354,7 @@ fn a_type_whose_whole_content_is_a_dangling_group_ref_does_not_panic() {
             ),
             "mem://main.xsd",
         )
-        .build_with_warnings();
+        .compile();
     assert!(d.iter().any(|x| x.code == DiagCode::UnresolvedReference));
     // The type survives with empty content rather than a placeholder.
     let t = s.type_id(Some(NS), "T").unwrap();
@@ -1339,7 +1374,10 @@ fn a_type_whose_whole_content_is_a_dangling_group_ref_does_not_panic() {
 /// panicked.
 #[test]
 fn no_placeholder_survives_anywhere_in_the_particle_arena() {
-    let (s, d) = SchemaSetBuilder::new()
+    let Compilation {
+        schemas: s,
+        diagnostics: d,
+    } = SchemaSetBuilder::new()
         .conformance(Conformance::Lax)
         .text(
             schema(
@@ -1355,7 +1393,7 @@ fn no_placeholder_survives_anywhere_in_the_particle_arena() {
             ),
             "mem://main.xsd",
         )
-        .build_with_warnings();
+        .compile();
     assert!(d.iter().any(|x| x.code == DiagCode::UnresolvedReference));
 
     // Every particle in the arena, not just the reachable ones.
@@ -1398,7 +1436,8 @@ fn the_xsi_attributes_are_predeclared() {
     );
     let s = SchemaSetBuilder::new()
         .text(xsd, "mem://main.xsd")
-        .build()
+        .compile()
+        .into_result()
         .unwrap_or_else(|d| panic!("{d}"));
 
     assert!(s.attribute_id(Some(XSI), "type").is_some());

@@ -873,7 +873,7 @@ pub struct SourceDocument {
 
 /// A compiled set of schema components.
 ///
-/// Produced only by [`crate::SchemaSetBuilder::build`], so it never exists in
+/// Produced only by [`crate::SchemaSetBuilder::compile`], so it never exists in
 /// an unresolved state — "did you call `Compile()`?", the .NET footgun, is
 /// not representable here.
 #[derive(Clone, Debug)]
@@ -1067,18 +1067,46 @@ impl Schemas {
         self[id].as_simple().and_then(|t| t.builtin)
     }
 
+    /// The namespace URI of a name, absent when it is unqualified.
+    ///
+    /// Interning is how names stay `Copy` and compare as integers, and that
+    /// is a decision about the inside of this crate — a caller turning a name
+    /// back into text should not have to be party to it, nor to reach through
+    /// [`Self::names`] to do it.
+    pub fn namespace_of(&self, q: QName) -> Option<&str> {
+        q.ns.map(|ns| self.names.resolve_ns(ns))
+    }
+
+    /// The local part of a name, without its namespace.
+    pub fn local_of(&self, q: QName) -> &str {
+        self.names.resolve(q.local)
+    }
+
+    /// The URI a [`Namespace`] stands for.
+    ///
+    /// For the namespaces that are not part of a name — a document's
+    /// `targetNamespace`, say.
+    pub fn namespace_uri(&self, ns: Namespace) -> &str {
+        self.names.resolve_ns(ns)
+    }
+
     /// Renders a name in James Clark notation, `{ns}local`.
+    ///
+    /// Allocates, unlike [`Self::namespace_of`] and [`Self::local_of`], since
+    /// the two halves are stored apart.
     pub fn display_name(&self, q: QName) -> String {
         self.names.display(q)
     }
 
-    /// Every element that may appear where `head` is permitted, `head`
-    /// included when it is not abstract.
+    /// Every element in `head`'s substitution group, `head` included when it
+    /// is not abstract.
     ///
-    /// Substitution is transitive, so this is the closure, not the direct
-    /// members. Without it you cannot know which element names may appear at
-    /// a position in a GML, UBL or WITSML document.
-    pub fn substitution_closure(&self, head: ElementId) -> Vec<ElementId> {
+    /// Membership, transitively — not what may actually appear. `block` on
+    /// the head can bar a member from standing in for it, and
+    /// [`Self::permitted_substitutes`] is the one that applies it. Reach for
+    /// that when the question is "what names may I meet here?"; this one when
+    /// the question is about the group itself.
+    pub fn substitution_group(&self, head: ElementId) -> Vec<ElementId> {
         let mut out = Vec::new();
         if !self[head].is_abstract {
             out.push(head);
@@ -1089,14 +1117,18 @@ impl Schemas {
         out
     }
 
-    /// The substitution-group members that may actually stand in for `head`.
+    /// The elements that may actually stand in for `head`.
     ///
-    /// [`Self::substitution_closure`] answers which elements *are* in the
-    /// group; this answers which the head permits to replace it. `block` on
+    /// [`Self::substitution_group`] answers which elements *are* in the
+    /// group; this answers which the head permits to replace it, and so is
+    /// the one that says what a document may name at a position. `block` on
     /// the head bars substitution outright, or bars the derivation method a
     /// member's type used to reach the head's — so a member is admitted only
     /// if its type reaches the head's without a barred step.
-    pub fn substitutable_for(&self, head: ElementId) -> Vec<ElementId> {
+    ///
+    /// This is what the compiled content model admits, so a query that
+    /// disagrees with it disagrees with validation.
+    pub fn permitted_substitutes(&self, head: ElementId) -> Vec<ElementId> {
         let head_decl = &self[head];
         // The element's `{disallowed substitutions}` *and* the head type's
         // `{prohibited substitutions}`: a type may bar being restricted or
@@ -1108,7 +1140,7 @@ impl Schemas {
                 .unwrap_or_default(),
         );
         if blocked.is_empty() {
-            return self.substitution_closure(head);
+            return self.substitution_group(head);
         }
         let head_type = head_decl.type_id;
         // Only when a derivation method is actually barred is the chain worth
@@ -1116,7 +1148,7 @@ impl Schemas {
         // a *schema* validity question, answered elsewhere — asking it here
         // would throw out members of a group the schema already accepted.
         let by_derivation = blocked.extension || blocked.restriction;
-        self.substitution_closure(head)
+        self.substitution_group(head)
             .into_iter()
             .filter(|&m| {
                 m == head

@@ -248,7 +248,9 @@ class Element:
     def substitutes(self) -> list[Element]:
         """Every element that may appear here, transitively.
 
-        Includes this one unless it is abstract.
+        Includes this one unless it is abstract, and excludes any the head's
+        ``block`` bars from standing in — so this is what a document may name,
+        not merely who is in the substitution group.
         """
     @property
     def default(self) -> str | None: ...

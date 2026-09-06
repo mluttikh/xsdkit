@@ -9,10 +9,11 @@ use xsdkit::*;
 const XS: &str = "http://www.w3.org/2001/XMLSchema";
 
 fn schema_for_schemas() -> (Schemas, Diagnostics) {
-    SchemaSetBuilder::new()
+    let c = SchemaSetBuilder::new()
         .file("tests/fixtures/XMLSchema.xsd")
         .conformance(Conformance::Lax)
-        .build_with_warnings()
+        .compile();
+    (c.schemas, c.diagnostics)
 }
 
 #[test]
@@ -188,7 +189,8 @@ fn appinfo_survives_a_real_schema() {
 fn strict_mode_rejects_what_lax_accepts() {
     let strict = SchemaSetBuilder::new()
         .file("tests/fixtures/XMLSchema.xsd")
-        .build();
+        .compile()
+        .into_result();
     assert!(
         strict.is_err(),
         "the unfetchable import is an error in strict mode"

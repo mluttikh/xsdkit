@@ -29,13 +29,13 @@
 use crate::datatypes::{Builtin, FacetKind, FacetSet, Variety};
 use crate::diagnostics::{DiagCode, Diagnostic, Diagnostics, Span};
 use crate::model::{Schemas, SimpleType, TypeId};
-use crate::validate::{self, Validator};
-use crate::values;
+use crate::validate::{self, ValueValidator};
+use crate::values::{self, ParseContext};
 use std::cmp::Ordering;
 
 pub(crate) fn check_all(schemas: &Schemas) -> Diagnostics {
     let mut diags = Diagnostics::new();
-    let v = schemas.validator();
+    let v = schemas.value_validator();
     for (id, def) in schemas.iter_types() {
         let Some(s) = def.as_simple() else { continue };
         // The built-ins are installed by this crate, not read from a
@@ -50,7 +50,7 @@ pub(crate) fn check_all(schemas: &Schemas) -> Diagnostics {
 
 fn check_one(
     schemas: &Schemas,
-    v: &Validator<'_>,
+    v: &ValueValidator<'_>,
     id: TypeId,
     s: &SimpleType,
     diags: &mut Diagnostics,
@@ -71,7 +71,7 @@ fn check_one(
 /// is never what the author meant and is not a legal type.
 fn narrows(
     schemas: &Schemas,
-    v: &Validator<'_>,
+    v: &ValueValidator<'_>,
     id: TypeId,
     s: &SimpleType,
     diags: &mut Diagnostics,
@@ -147,9 +147,20 @@ fn narrows(
         return;
     }
     let cmp = |a: &str, b: &str| {
-        values::parse_in(builtin, a, schemas.xsd_version)
-            .ok()?
-            .partial_cmp_value(&values::parse_in(builtin, b, schemas.xsd_version).ok()?)
+        values::parse_with(
+            builtin,
+            a,
+            &ParseContext::new().version(schemas.xsd_version),
+        )
+        .ok()?
+        .partial_cmp_value(
+            &values::parse_with(
+                builtin,
+                b,
+                &ParseContext::new().version(schemas.xsd_version),
+            )
+            .ok()?,
+        )
     };
 
     // Half one: each bound declared here against the one it inherits.
@@ -287,7 +298,11 @@ fn values_are_in_the_base_space(
     if ordered {
         for (kind, value) in bounds {
             let Some(v) = value else { continue };
-            if let Err(e) = values::parse_in(builtin, v, schemas.xsd_version) {
+            if let Err(e) = values::parse_with(
+                builtin,
+                v,
+                &ParseContext::new().version(schemas.xsd_version),
+            ) {
                 diags.push(
                     Diagnostic::error(
                         DiagCode::InvalidFacetValue,
@@ -302,7 +317,13 @@ fn values_are_in_the_base_space(
         }
     }
     for v in f.enumeration.iter().flatten() {
-        if let Err(e) = values::parse_qualified(builtin, v, schemas.xsd_version, &f.namespaces) {
+        if let Err(e) = values::parse_with(
+            builtin,
+            v,
+            &ParseContext::new()
+                .version(schemas.xsd_version)
+                .namespaces(&f.namespaces),
+        ) {
             diags.push(
                 Diagnostic::error(
                     DiagCode::InvalidFacetValue,

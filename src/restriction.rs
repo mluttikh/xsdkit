@@ -366,7 +366,7 @@ fn type_derivation_ok(
 /// global `A1` that joined the group, and comparing ids would miss it.
 fn substitutes_for(schemas: &Schemas, name: QName, head: crate::model::ElementId) -> bool {
     schemas
-        .substitution_closure(head)
+        .substitution_group(head)
         .into_iter()
         .any(|m| schemas[m].name == name)
 }

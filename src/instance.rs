@@ -25,7 +25,7 @@ use crate::content::ContentMatcher;
 use crate::diagnostics::{DiagCode, Diagnostic, Diagnostics, Span};
 use crate::model::*;
 use crate::names::{QName, XSI};
-use crate::validate::{Validator, nearest_builtin};
+use crate::validate::{ValueValidator, nearest_builtin};
 use crate::values::{Namespaces, Value};
 use fxhash::{FxHashMap, FxHashSet};
 use quick_xml::NsReader;
@@ -115,19 +115,19 @@ struct RawAttr {
 
 /// Validates instance documents against a compiled schema.
 ///
-/// Holds a [`Validator`], so simple types are prepared once and reused across
+/// Holds a [`ValueValidator`], so simple types are prepared once and reused across
 /// documents.
 #[derive(Debug)]
-pub struct InstanceValidator<'a> {
+pub struct DocumentValidator<'a> {
     schemas: &'a Schemas,
-    values: Validator<'a>,
+    values: ValueValidator<'a>,
 }
 
-impl<'a> InstanceValidator<'a> {
+impl<'a> DocumentValidator<'a> {
     pub fn new(schemas: &'a Schemas) -> Self {
         Self {
             schemas,
-            values: Validator::new(schemas),
+            values: ValueValidator::new(schemas),
         }
     }
 
@@ -194,7 +194,7 @@ impl<'a> InstanceValidator<'a> {
 }
 
 struct Run<'a, 'b, S: FnMut(PsviEvent)> {
-    v: &'b InstanceValidator<'a>,
+    v: &'b DocumentValidator<'a>,
     diags: Diagnostics,
     stack: Vec<Frame<'a>>,
     /// Namespace declarations from the elements currently open, outermost
@@ -547,7 +547,7 @@ impl<'a, S: FnMut(PsviEvent)> Run<'a, '_, S> {
             if self
                 .v
                 .values
-                .validate_in(m, lexical, &Scopes(&self.namespaces))
+                .validate_with(m, lexical, &Scopes(&self.namespaces))
                 .is_ok()
             {
                 return match id_kind(self.v.schemas, item_type(self.v.schemas, m)) {
@@ -1155,7 +1155,7 @@ impl<'a, S: FnMut(PsviEvent)> Run<'a, '_, S> {
                         match self
                             .v
                             .values
-                            .validate_in(ty, &a.value, &Scopes(&self.namespaces))
+                            .validate_with(ty, &a.value, &Scopes(&self.namespaces))
                         {
                             Ok(v) => Some(v),
                             Err(e) => {
@@ -1182,7 +1182,7 @@ impl<'a, S: FnMut(PsviEvent)> Run<'a, '_, S> {
                             let want = self
                                 .v
                                 .values
-                                .validate_in(ty, vc.value(), &Scopes(&self.namespaces))
+                                .validate_with(ty, vc.value(), &Scopes(&self.namespaces))
                                 .ok();
                             if want.as_ref() != Some(v) {
                                 let shown = self.show(q);
@@ -1234,7 +1234,7 @@ impl<'a, S: FnMut(PsviEvent)> Run<'a, '_, S> {
                     let value = match declaration {
                         Some(id) => {
                             let ty = self.v.schemas[id].type_id;
-                            let v = match self.v.values.validate_in(
+                            let v = match self.v.values.validate_with(
                                 ty,
                                 &a.value,
                                 &Scopes(&self.namespaces),
@@ -1295,7 +1295,7 @@ impl<'a, S: FnMut(PsviEvent)> Run<'a, '_, S> {
             let value = self
                 .v
                 .values
-                .validate_in(ty, &lexical, &Scopes(&self.namespaces))
+                .validate_with(ty, &lexical, &Scopes(&self.namespaces))
                 .ok();
             // A schema-supplied `xs:ID` is still an identifier in the
             // document it lands in.
@@ -1407,17 +1407,18 @@ impl<'a, S: FnMut(PsviEvent)> Run<'a, '_, S> {
                 Some(vc) if from_schema => vc.value().to_string(),
                 _ => frame.text.clone(),
             };
-            let value = match self
-                .v
-                .values
-                .validate_in(target, &lexical, &Scopes(&self.namespaces))
-            {
-                Ok(v) => Some(v),
-                Err(e) => {
-                    self.error(DiagCode::InvalidValue, line, format!("`{shown}`: {e}"));
-                    None
-                }
-            };
+            let value =
+                match self
+                    .v
+                    .values
+                    .validate_with(target, &lexical, &Scopes(&self.namespaces))
+                {
+                    Ok(v) => Some(v),
+                    Err(e) => {
+                        self.error(DiagCode::InvalidValue, line, format!("`{shown}`: {e}"));
+                        None
+                    }
+                };
             // `fixed` is a constraint, not a default: content the document
             // did write may not differ from it. Compared in the value space,
             // so `1.0` satisfies a decimal fixed at `1.00`.
@@ -1426,7 +1427,7 @@ impl<'a, S: FnMut(PsviEvent)> Run<'a, '_, S> {
                     let want = self
                         .v
                         .values
-                        .validate_in(target, vc.value(), &Scopes(&self.namespaces))
+                        .validate_with(target, vc.value(), &Scopes(&self.namespaces))
                         .ok();
                     if want.as_ref() != Some(v) {
                         let msg =
@@ -1603,8 +1604,8 @@ fn count_lines(xml: &str, upto: usize) -> u32 {
 }
 
 impl Schemas {
-    /// Builds an [`InstanceValidator`] over this schema.
-    pub fn instance_validator(&self) -> InstanceValidator<'_> {
-        InstanceValidator::new(self)
+    /// Builds an [`DocumentValidator`] over this schema.
+    pub fn document_validator(&self) -> DocumentValidator<'_> {
+        DocumentValidator::new(self)
     }
 }

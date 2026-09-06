@@ -11,7 +11,7 @@
 //! let schemas = SchemaSetBuilder::new()
 //!     .search_path("schemas/")
 //!     .file("report.xsd")
-//!     .build()?;
+//!     .compile().into_result()?;
 //!
 //! let report = schemas.element(Some("urn:example"), "report").unwrap();
 //! for child in report.children() {
@@ -31,7 +31,12 @@
 //! [`SchemaSetBuilder`] reads documents; [`Schemas`] is the compiled result.
 //! They are separate types on purpose: a `Schemas` never exists in an
 //! unresolved state, so ".NET's did you call `Compile()`?" is not
-//! representable. Compilation is not cheap — build once, query many times.
+//! representable. Compilation is not cheap — compile once, query many times.
+//!
+//! [`SchemaSetBuilder::compile`] hands back a [`Compilation`]: the components
+//! *and* every diagnostic, always. [`Compilation::into_result`] converts to
+//! the `Result` shape, which is also where warnings get discarded — an
+//! explicit step rather than the default one.
 //!
 //! # Two ways to ask
 //!
@@ -44,9 +49,17 @@
 //! ids, for when the id is what you mean to store or compare.
 //! [`Schemas::get`] turns any id back into a reference.
 //!
+//! # Validating
+//!
+//! Two validators, for two different questions.
+//! [`ValueValidator`] checks a lexical form against a simple type;
+//! [`DocumentValidator`] checks a whole document against the schema and
+//! streams a typed PSVI. [`Schemas::value_validator`] and
+//! [`Schemas::document_validator`] build them.
+//!
 //! # Errors
 //!
-//! Building returns *every* diagnostic, not the first. A schema author
+//! Compiling returns *every* diagnostic, not the first. A schema author
 //! fixing a 40-file import graph needs the whole list.
 //!
 //! # Status
@@ -72,7 +85,7 @@
 #![cfg_attr(
     feature = "serde",
     doc = r#"```no_run
-# let schemas = xsdkit::SchemaSetBuilder::new().file("report.xsd").build().unwrap();
+# let schemas = xsdkit::SchemaSetBuilder::new().file("report.xsd").compile().into_result().unwrap();
 let cached = postcard::to_allocvec(&schemas)?;
 let schemas: xsdkit::Schemas = postcard::from_bytes(&cached)?;
 # Ok::<_, Box<dyn std::error::Error>>(())
@@ -101,7 +114,11 @@ pub mod encoding;
 pub(crate) mod facets;
 mod identity;
 pub mod instance;
-pub mod load;
+// Configuration, not a phase: `Version`, `Conformance`, `Resolver` and
+// `FileResolver` are re-exported at the root, which is where a caller looks
+// for them. Naming the module after the step that consumes them made the
+// import path an implementation detail.
+mod load;
 pub mod model;
 pub mod names;
 pub mod refs;
@@ -114,10 +131,10 @@ pub mod values;
 mod python;
 
 pub use content::{
-    AllGroup, AllMember, Child, Content, ContentAutomaton, ContentMatcher, ContentModel,
-    ContentStats, Label, MAX_POSITIONS, Position,
+    AllGroup, AllMember, Child, Content, ContentMatcher, ContentModel, ContentStats,
 };
 pub use diagnostics::{DiagCode, Diagnostic, Diagnostics, Severity, Span};
+pub use instance::{DocumentValidator, ValidationReport};
 pub use load::{Conformance, DEFAULT_NODES_LIMIT, FileResolver, Resolver, Version};
 pub use model::{
     Annotation, AppInfo, AttrGroupId, AttributeDecl, AttributeId, AttributeUse, AttributeUseKind,
@@ -128,6 +145,7 @@ pub use model::{
 };
 pub use names::{Interner, QName};
 pub use refs::{AttributeRef, AttributeUseRef, ChildRef, Component, ElementRef, TypeRef};
+pub use validate::{ValidationError, ValueValidator};
 pub use values::{
     FacetViolation, Namespaces, NoNamespaces, QNameValue, Value, ValueError, check_facets,
 };
@@ -142,7 +160,7 @@ use load::Loader;
 ///     .conformance(Conformance::Lax)
 ///     .search_path("vendor/schemas")
 ///     .file("witsml.xsd")
-///     .build();
+///     .compile().into_result();
 /// ```
 #[derive(Debug)]
 pub struct SchemaSetBuilder {
@@ -259,21 +277,21 @@ impl SchemaSetBuilder {
 
     /// Reads every queued document and compiles the result.
     ///
-    /// Returns `Err` with **all** diagnostics when any is an error;
-    /// warnings alone still yield a `Schemas`, which
-    /// [`Self::build_with_warnings`] hands back alongside them.
-    pub fn build(self) -> Result<Schemas, Diagnostics> {
-        let (schemas, diags) = self.build_with_warnings();
-        if diags.has_errors() {
-            Err(diags)
-        } else {
-            Ok(schemas)
-        }
-    }
-
-    /// Like [`Self::build`], but returns the components even when there were
-    /// errors — a partial model is what an editor or language server wants.
-    pub fn build_with_warnings(self) -> (Schemas, Diagnostics) {
+    /// Always returns both halves. A schema with errors still compiles to
+    /// components — a partial model is what an editor or a language server
+    /// wants — and a schema without them can still have warnings worth
+    /// reading. Call [`Compilation::into_result`] for the `Result` shape.
+    ///
+    /// ```no_run
+    /// # use xsdkit::SchemaSetBuilder;
+    /// let compiled = SchemaSetBuilder::new().file("report.xsd").compile();
+    /// for d in compiled.diagnostics.iter() {
+    ///     eprintln!("{d}");
+    /// }
+    /// let schemas = compiled.into_result()?;
+    /// # Ok::<_, xsdkit::Diagnostics>(())
+    /// ```
+    pub fn compile(self) -> Compilation {
         let default_resolver;
         let resolver: &dyn Resolver = match self.resolver.as_ref() {
             Some(r) => r.as_ref(),
@@ -294,6 +312,46 @@ impl SchemaSetBuilder {
                 Source::Bytes { bytes, uri } => loader.load_bytes(bytes, uri, None),
             }
         }
-        compile::compile(loader, self.mode)
+        let (schemas, diagnostics) = compile::compile(loader, self.mode);
+        Compilation {
+            schemas,
+            diagnostics,
+        }
+    }
+}
+
+/// What compiling a schema set produced: the components, and everything the
+/// compiler had to say about them.
+///
+/// Both halves, always. This crate's position is "every diagnostic, not the
+/// first", and a terminal method that returns a `Result` has to drop the
+/// warnings to honour the success case — so the terminal method returns this
+/// instead, and [`Self::into_result`] is where the choice to discard them is
+/// made explicitly.
+#[derive(Debug)]
+pub struct Compilation {
+    /// The components. Present even when compilation reported errors.
+    pub schemas: Schemas,
+    /// Every diagnostic, errors and warnings alike, in source order.
+    pub diagnostics: Diagnostics,
+}
+
+impl Compilation {
+    /// The components if nothing was an error, every diagnostic if something
+    /// was.
+    ///
+    /// Warnings are discarded on success — which is the point of naming this
+    /// separately rather than making it the terminal method.
+    pub fn into_result(self) -> Result<Schemas, Diagnostics> {
+        if self.diagnostics.has_errors() {
+            Err(self.diagnostics)
+        } else {
+            Ok(self.schemas)
+        }
+    }
+
+    /// Whether any diagnostic was an error.
+    pub fn has_errors(&self) -> bool {
+        self.diagnostics.has_errors()
     }
 }

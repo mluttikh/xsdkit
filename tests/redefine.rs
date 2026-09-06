@@ -37,7 +37,8 @@ fn build(part_body: &str, main_body: &str) -> Schemas {
     SchemaSetBuilder::new()
         .resolver(MapResolver::default().with("part.xsd", &part(part_body)))
         .text(main, "mem://main.xsd")
-        .build()
+        .compile()
+        .into_result()
         .unwrap_or_else(|d| panic!("{d}"))
 }
 
@@ -119,7 +120,7 @@ fn a_redefined_simple_type_restricts_the_original() {
              </xs:simpleType>
            </xs:redefine>"#,
     );
-    let v = s.validator();
+    let v = s.value_validator();
     let code = s.type_id(Some(NS), "Code").unwrap();
     assert!(v.validate(code, "abcd").is_ok());
     assert!(
@@ -221,7 +222,8 @@ fn redefining_a_builtin_is_rejected() {
     let d = SchemaSetBuilder::new()
         .resolver(MapResolver::default().with("part.xsd", &part("")))
         .text(main, "mem://main.xsd")
-        .build()
+        .compile()
+        .into_result()
         .expect_err("redefining a built-in must fail");
     assert!(
         d.errors().any(|e| e.code == DiagCode::DuplicateGlobal),
@@ -325,7 +327,10 @@ fn an_override_replaces_an_attribute_declaration() {
 /// element there is still unrecognised rather than silently applied.
 #[test]
 fn a_redefine_does_not_take_an_element() {
-    let (_, diags) = SchemaSetBuilder::new()
+    let Compilation {
+        schemas: _,
+        diagnostics: diags,
+    } = SchemaSetBuilder::new()
         .resolver(MapResolver::default().with(
             "part.xsd",
             &part(r#"<xs:element name="doc" type="xs:string"/>"#),
@@ -338,7 +343,7 @@ fn a_redefine_does_not_take_an_element() {
             ),
             "mem://main.xsd",
         )
-        .build_with_warnings();
+        .compile();
     assert!(
         diags
             .iter()
@@ -371,7 +376,8 @@ fn untouched_components_survive() {
 fn a_missing_schema_location_is_reported() {
     let d = SchemaSetBuilder::new()
         .text(part(r#"<xs:redefine/>"#), "mem://main.xsd")
-        .build()
+        .compile()
+        .into_result()
         .expect_err("a redefine without a location must fail");
     assert!(
         d.errors().any(|e| e.code == DiagCode::MissingAttribute),
@@ -381,7 +387,10 @@ fn a_missing_schema_location_is_reported() {
 
 #[test]
 fn redefinitions_no_longer_warn_as_unsupported() {
-    let (_, d) = SchemaSetBuilder::new()
+    let Compilation {
+        schemas: _,
+        diagnostics: d,
+    } = SchemaSetBuilder::new()
         .resolver(MapResolver::default().with(
             "part.xsd",
             &part(r#"<xs:simpleType name="C"><xs:restriction base="xs:string"/></xs:simpleType>"#),
@@ -396,7 +405,7 @@ fn redefinitions_no_longer_warn_as_unsupported() {
             ),
             "mem://main.xsd",
         )
-        .build_with_warnings();
+        .compile();
     assert!(
         !d.iter().any(|x| x.code == DiagCode::Unsupported),
         "redefine is implemented now:\n{d}"

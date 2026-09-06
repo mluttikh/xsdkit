@@ -95,7 +95,7 @@ struct Prepared {
 /// Compiling patterns is expensive, so a validator is built once and reused —
 /// the same "compile once, use many" shape as [`Schemas`] itself.
 #[derive(Debug)]
-pub struct Validator<'a> {
+pub struct ValueValidator<'a> {
     schemas: &'a Schemas,
     prepared: Vec<Option<Prepared>>,
     /// Patterns that would not compile, reported rather than silently
@@ -103,7 +103,7 @@ pub struct Validator<'a> {
     pattern_errors: Vec<(TypeId, crate::regex::PatternError)>,
 }
 
-impl<'a> Validator<'a> {
+impl<'a> ValueValidator<'a> {
     /// Prepares every simple type in the schema for value checking.
     pub fn new(schemas: &'a Schemas) -> Self {
         let n = schemas.component_counts().types;
@@ -157,7 +157,7 @@ impl<'a> Validator<'a> {
 
     /// Validates a lexical form against a simple type, returning its value.
     pub fn validate(&self, ty: TypeId, lexical: &str) -> Result<Value, ValidationError> {
-        self.validate_in(ty, lexical, &values::NoNamespaces)
+        self.validate_with(ty, lexical, &values::NoNamespaces)
     }
 
     /// [`Self::validate`], with the namespace bindings in scope where the
@@ -167,7 +167,11 @@ impl<'a> Validator<'a> {
     /// a function of the lexical form alone: `a:x` names whatever `a` is bound
     /// to *there*. Without bindings an unprefixed name is still a value — it
     /// is in no namespace — and a prefixed one cannot be resolved.
-    pub fn validate_in(
+    ///
+    /// The XSD version is not a parameter here the way it is on
+    /// [`crate::values::parse_with`]: the schema this validator was built
+    /// from already settled which language applies.
+    pub fn validate_with(
         &self,
         ty: TypeId,
         lexical: &str,
@@ -220,9 +224,14 @@ impl<'a> Validator<'a> {
         let builtin = p.builtin.unwrap_or(Builtin::String);
         // Already normalised, and the built-in's own whiteSpace is idempotent
         // over its output, so re-applying it inside `parse` changes nothing.
-        let value =
-            values::parse_qualified(builtin, normalized.as_ref(), self.schemas.xsd_version, ns)
-                .map_err(ValidationError::Lexical)?;
+        let value = values::parse_with(
+            builtin,
+            normalized.as_ref(),
+            &values::ParseContext::new()
+                .version(self.schemas.xsd_version)
+                .namespaces(ns),
+        )
+        .map_err(ValidationError::Lexical)?;
         // Facet literals are parsed against the same built-in, so bounds and
         // enumerations compare like with like.
         values::check_facets(&value, &p.facets, builtin).map_err(ValidationError::Facet)?;
@@ -479,8 +488,8 @@ pub(crate) fn nearest_builtin(schemas: &Schemas, id: TypeId) -> Option<Builtin> 
 }
 
 impl Schemas {
-    /// Builds a [`Validator`] over this schema's simple types.
-    pub fn validator(&self) -> Validator<'_> {
-        Validator::new(self)
+    /// Builds a [`ValueValidator`] over this schema's simple types.
+    pub fn value_validator(&self) -> ValueValidator<'_> {
+        ValueValidator::new(self)
     }
 }

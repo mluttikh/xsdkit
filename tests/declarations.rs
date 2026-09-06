@@ -22,8 +22,8 @@ fn diags_v(body: &str, version: Version) -> Diagnostics {
     SchemaSetBuilder::new()
         .version(version)
         .text(schema(body), "mem://main.xsd")
-        .build_with_warnings()
-        .1
+        .compile()
+        .diagnostics
 }
 
 fn count(body: &str, code: DiagCode) -> usize {

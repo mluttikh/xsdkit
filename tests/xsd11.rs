@@ -15,7 +15,8 @@ fn build(body: &str, version: Version) -> Schemas {
     SchemaSetBuilder::new()
         .version(version)
         .text(xsd, "mem://main.xsd")
-        .build()
+        .compile()
+        .into_result()
         .unwrap_or_else(|d| panic!("{d}"))
 }
 
@@ -27,12 +28,12 @@ fn diagnostics(body: &str, version: Version) -> Diagnostics {
     SchemaSetBuilder::new()
         .version(version)
         .text(xsd, "mem://main.xsd")
-        .build_with_warnings()
-        .1
+        .compile()
+        .diagnostics
 }
 
 fn valid(s: &Schemas, xml: &str) -> bool {
-    s.instance_validator().validate(xml).is_valid()
+    s.document_validator().validate(xml).is_valid()
 }
 
 // ---------------------------------------------------------------------------
@@ -518,7 +519,8 @@ fn conditional_inclusion_picks_one_alternative() {
         let s = SchemaSetBuilder::new()
             .version(version)
             .text(xsd, "mem://main.xsd")
-            .build()
+            .compile()
+            .into_result()
             .unwrap_or_else(|d| panic!("{version:?}: {d}"));
         let e = s.element_id(Some(NS), "e").expect("element");
         assert!(
@@ -547,7 +549,8 @@ fn max_version_is_exclusive() {
         SchemaSetBuilder::new()
             .version(v)
             .text(xsd.clone(), "mem://main.xsd")
-            .build()
+            .compile()
+            .into_result()
             .unwrap()
             .element_id(Some(NS), "only10")
             .is_some()
@@ -573,7 +576,8 @@ fn an_excluded_element_takes_its_subtree_with_it() {
     let s = SchemaSetBuilder::new()
         .version(Version::Xsd11)
         .text(xsd, "mem://main.xsd")
-        .build()
+        .compile()
+        .into_result()
         .unwrap_or_else(|d| panic!("the unread subtree should raise nothing:\n{d}"));
     assert!(s.type_id(Some(NS), "T").is_none());
 }
@@ -592,7 +596,8 @@ fn a_whole_document_can_be_excluded() {
     let s = SchemaSetBuilder::new()
         .version(Version::Xsd11)
         .text(xsd, "mem://main.xsd")
-        .build()
+        .compile()
+        .into_result()
         .unwrap_or_else(|d| panic!("{d}"));
     assert!(s.element_id(Some(NS), "gone").is_none());
 }

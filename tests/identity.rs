@@ -18,17 +18,18 @@ fn schema(body: &str) -> Schemas {
     );
     SchemaSetBuilder::new()
         .text(xsd, "mem://idc.xsd")
-        .build()
+        .compile()
+        .into_result()
         .unwrap_or_else(|d| panic!("{d}"))
 }
 
 fn valid(s: &Schemas, xml: &str) {
-    let d = s.instance_validator().validate(xml).diagnostics;
+    let d = s.document_validator().validate(xml).diagnostics;
     assert!(!d.has_errors(), "expected valid, got:\n{d}");
 }
 
 fn invalid(s: &Schemas, xml: &str, code: DiagCode) {
-    let d = s.instance_validator().validate(xml).diagnostics;
+    let d = s.document_validator().validate(xml).diagnostics;
     assert!(
         d.errors().any(|e| e.code == code),
         "expected {code}, got:\n{d}"

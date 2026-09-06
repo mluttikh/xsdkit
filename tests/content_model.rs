@@ -16,22 +16,24 @@ fn schema(body: &str) -> String {
 fn build(body: &str) -> Schemas {
     SchemaSetBuilder::new()
         .text(schema(body), "mem://main.xsd")
-        .build()
+        .compile()
+        .into_result()
         .unwrap_or_else(|d| panic!("expected a clean build, got:\n{d}"))
 }
 
 fn build_lax(body: &str) -> (Schemas, Diagnostics) {
-    SchemaSetBuilder::new()
+    let c = SchemaSetBuilder::new()
         .text(schema(body), "mem://main.xsd")
         .conformance(Conformance::Lax)
-        .build_with_warnings()
+        .compile();
+    (c.schemas, c.diagnostics)
 }
 
 fn diagnostics(body: &str) -> Diagnostics {
     SchemaSetBuilder::new()
         .text(schema(body), "mem://main.xsd")
-        .build_with_warnings()
-        .1
+        .compile()
+        .diagnostics
 }
 
 /// A complex type wrapping `content`, plus enough element declarations to
@@ -359,7 +361,7 @@ fn a_huge_max_occurs_is_widened_rather_than_unrolled() {
         panic!("expected an automaton")
     };
     assert!(
-        a.positions().len() <= MAX_POSITIONS,
+        a.positions().len() <= content::MAX_POSITIONS,
         "unrolling must stay bounded"
     );
     assert!(a.approximated(), "widening must be recorded");

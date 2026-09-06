@@ -48,7 +48,8 @@ use xsdkit::SchemaSetBuilder;
 let schemas = SchemaSetBuilder::new()
     .search_path("schemas/")
     .file("report.xsd")
-    .build()?;
+    .compile()
+    .into_result()?;
 
 let report = schemas.element(Some("urn:example"), "report").unwrap();
 
@@ -268,12 +269,12 @@ components — real schemas ship with dangling imports often enough that the
 mode earns its keep.
 
 ```rust
-use xsdkit::{SchemaSetBuilder, Conformance};
+use xsdkit::{Compilation, Conformance, SchemaSetBuilder};
 
-let (schemas, diagnostics) = SchemaSetBuilder::new()
+let Compilation { schemas, diagnostics } = SchemaSetBuilder::new()
     .conformance(Conformance::Lax)
     .file("vendor/partial.xsd")
-    .build_with_warnings();
+    .compile();
 ```
 
 ## Conformance

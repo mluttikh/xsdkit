@@ -20,7 +20,8 @@ fn main() {
     }
     let schemas = builder
         .file(&path)
-        .build()
+        .compile()
+        .into_result()
         .unwrap_or_else(|d| panic!("{d}"));
     let compile = t.elapsed();
 
