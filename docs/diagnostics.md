@@ -109,6 +109,7 @@ in.
 | `XSD1006` | Unsupported character encoding |
 | `XSD1007` | Bytes contradict the declared encoding |
 | `XSD1008` | `xs:annotation` in a position the content model forbids |
+| `XSD1009` | A required child element is absent |
 
 ### 11xx — composition
 

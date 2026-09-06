@@ -2294,6 +2294,106 @@ fn check_representation(root: roxmltree::Node, ctx: &DocCtx, diags: &mut Diagnos
             );
         }
 
+        // A `ref` names a global declaration whole, so everything that would
+        // describe a *new* one is prohibited beside it — otherwise the schema
+        // says two different things about one name. Occurrence bounds are not
+        // description: they belong to the reference, not the declaration.
+        if matches!(name, "element" | "attribute") && node.has_attribute("ref") {
+            if node.has_attribute("name") {
+                diags.push(
+                    Diagnostic::error(
+                        DiagCode::InvalidAttributeValue,
+                        format!("`xs:{name}` has both `name` and `ref`"),
+                    )
+                    .at(span())
+                    .with_help("`ref` points at a global declaration; `name` makes a new one"),
+                );
+            }
+            let banned: &[&str] = match name {
+                "element" => &["nillable", "default", "fixed", "form", "block", "type"],
+                _ => &["form", "type"],
+            };
+            for attr in banned {
+                if node.has_attribute(*attr) {
+                    diags.push(
+                        Diagnostic::error(
+                            DiagCode::InvalidAttributeValue,
+                            format!("`xs:{name}` may not carry `{attr}` beside `ref`"),
+                        )
+                        .at(span())
+                        .with_help("the referenced declaration already says this"),
+                    );
+                }
+            }
+            for c in node.children().filter(|n| reads(n, ctx.version)) {
+                let child = c.tag_name().name();
+                let describes = match name {
+                    "element" => {
+                        matches!(
+                            child,
+                            "simpleType" | "complexType" | "key" | "keyref" | "unique"
+                        )
+                    }
+                    _ => child == "simpleType",
+                };
+                if describes {
+                    diags.push(
+                        Diagnostic::error(
+                            DiagCode::InvalidAttributeValue,
+                            format!("`xs:{name}` may not contain `xs:{child}` beside `ref`"),
+                        )
+                        .at(Span::new(&ctx.uri, line_of(ctx, c)))
+                        .with_help("the referenced declaration already says this"),
+                    );
+                }
+            }
+        }
+
+        // Open content that is not `none` has to say what it opens *to*.
+        // Without an `xs:any` there is no wildcard to interleave or append,
+        // so the mode describes nothing.
+        if matches!(name, "openContent" | "defaultOpenContent") {
+            let mode = node.attribute("mode").unwrap_or("interleave").trim();
+            let has_any = node
+                .children()
+                .filter(|n| reads(n, ctx.version))
+                .any(|c| c.tag_name().name() == "any");
+            if mode != "none" && !has_any {
+                diags.push(
+                    Diagnostic::error(
+                        DiagCode::MissingElement,
+                        format!("`xs:{name}` with `mode=\"{mode}\"` needs an `xs:any`"),
+                    )
+                    .at(span())
+                    .with_help("only `mode=\"none\"` may leave the wildcard out"),
+                );
+            }
+        }
+
+        // `mixed` may be written on the `xs:complexType` or on its
+        // `xs:complexContent`. Both is fine; disagreeing is not.
+        if name == "complexType" {
+            let inner = node
+                .children()
+                .filter(|n| reads(n, ctx.version))
+                .find(|c| c.tag_name().name() == "complexContent")
+                .and_then(|c| c.attribute("mixed"))
+                .and_then(boolean_value);
+            let outer = node.attribute("mixed").and_then(boolean_value);
+            if let (Some(a), Some(b)) = (outer, inner) {
+                if a != b {
+                    diags.push(
+                        Diagnostic::error(
+                            DiagCode::InvalidAttributeValue,
+                            "`mixed` on `xs:complexType` contradicts the one on `xs:complexContent`"
+                                .to_string(),
+                        )
+                        .at(span()),
+                    );
+                }
+            }
+        }
+
         // `namespace` says which namespaces a wildcard admits and
         // `notNamespace` says which it refuses. Both at once names no set.
         if matches!(name, "any" | "anyAttribute")
@@ -2576,7 +2676,18 @@ fn line_of(ctx: &DocCtx, node: roxmltree::Node) -> u32 {
 /// what `mixed="true"` means. Comparing against `"true"` alone silently drops
 /// the other spelling, which the W3C suite uses.
 fn flag(node: roxmltree::Node, name: &str) -> bool {
-    matches!(node.attribute(name).map(str::trim), Some("true" | "1"))
+    node.attribute(name)
+        .and_then(boolean_value)
+        .unwrap_or(false)
+}
+
+/// An `xs:boolean` lexical form, or `None` when the text is not one.
+fn boolean_value(s: &str) -> Option<bool> {
+    match s.trim() {
+        "true" | "1" => Some(true),
+        "false" | "0" => Some(false),
+        _ => None,
+    }
 }
 
 /// The namespace bindings a facet literal would need, were its type

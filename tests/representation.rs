@@ -119,3 +119,102 @@ fn a_group_definition_holds_exactly_one_model_group() {
            <xs:complexType name="T"><xs:group ref="tns:G"/></xs:complexType>"#,
     );
 }
+
+/// A `ref` names a global declaration whole, so anything that would describe
+/// a new one is prohibited beside it.
+#[test]
+fn a_ref_may_not_redescribe_what_it_points_at() {
+    for bad in [
+        r#"<xs:element name="g" type="xs:string"/>
+           <xs:complexType name="T"><xs:sequence>
+             <xs:element ref="tns:g" nillable="true"/>
+           </xs:sequence></xs:complexType>"#,
+        r#"<xs:element name="g" type="xs:string"/>
+           <xs:complexType name="T"><xs:sequence>
+             <xs:element ref="tns:g" type="xs:int"/>
+           </xs:sequence></xs:complexType>"#,
+        r##"<xs:element name="g" type="xs:string"/>
+           <xs:complexType name="T"><xs:sequence>
+             <xs:element ref="tns:g" block="#all"/>
+           </xs:sequence></xs:complexType>"##,
+        r#"<xs:element name="g" type="xs:string"/>
+           <xs:complexType name="T"><xs:sequence>
+             <xs:element ref="tns:g" default="x"/>
+           </xs:sequence></xs:complexType>"#,
+        // An inline type is the same claim in element form.
+        r#"<xs:element name="g" type="xs:string"/>
+           <xs:complexType name="T"><xs:sequence>
+             <xs:element ref="tns:g"><xs:simpleType>
+               <xs:restriction base="xs:string"/>
+             </xs:simpleType></xs:element>
+           </xs:sequence></xs:complexType>"#,
+        // And an attribute `ref` refuses its own shorter list.
+        r#"<xs:attribute name="a" type="xs:string"/>
+           <xs:complexType name="T"><xs:sequence/>
+             <xs:attribute ref="tns:a" type="xs:int"/>
+           </xs:complexType>"#,
+    ] {
+        assert_eq!(count(bad, DiagCode::InvalidAttributeValue), 1, "{bad}");
+    }
+
+    // Occurrence bounds belong to the reference, not the declaration, and
+    // `use`/`default` are legal on an attribute reference.
+    clean(
+        r#"<xs:element name="g" type="xs:string"/>
+           <xs:attribute name="a" type="xs:string"/>
+           <xs:complexType name="T"><xs:sequence>
+             <xs:element ref="tns:g" minOccurs="0" maxOccurs="3"/>
+           </xs:sequence>
+             <xs:attribute ref="tns:a" use="required"/>
+           </xs:complexType>"#,
+    );
+}
+
+/// Open content that is not `none` has to say what it opens to.
+#[test]
+fn open_content_needs_a_wildcard_unless_its_mode_is_none() {
+    for bad in [
+        r#"<xs:complexType name="T"><xs:openContent/><xs:sequence/></xs:complexType>"#,
+        r#"<xs:complexType name="T"><xs:openContent mode="suffix"/>
+             <xs:sequence/></xs:complexType>"#,
+    ] {
+        assert_eq!(count(bad, DiagCode::MissingElement), 1, "{bad}");
+    }
+    clean(
+        r#"<xs:complexType name="T">
+             <xs:openContent mode="none"/><xs:sequence/>
+           </xs:complexType>"#,
+    );
+    clean(
+        r#"<xs:complexType name="T">
+             <xs:openContent><xs:any processContents="lax"/></xs:openContent>
+             <xs:sequence/>
+           </xs:complexType>"#,
+    );
+}
+
+/// `mixed` may be written in either place, but not disagreeing in both.
+#[test]
+fn mixed_may_not_contradict_itself() {
+    assert_eq!(
+        count(
+            r#"<xs:complexType name="B"><xs:sequence/></xs:complexType>
+               <xs:complexType name="T" mixed="false">
+                 <xs:complexContent mixed="1">
+                   <xs:restriction base="tns:B"><xs:sequence/></xs:restriction>
+                 </xs:complexContent>
+               </xs:complexType>"#,
+            DiagCode::InvalidAttributeValue
+        ),
+        1
+    );
+    // Agreeing in both spellings is fine — `1` and `true` are one value.
+    clean(
+        r#"<xs:complexType name="B" mixed="true"><xs:sequence/></xs:complexType>
+           <xs:complexType name="T" mixed="1">
+             <xs:complexContent mixed="true">
+               <xs:restriction base="tns:B"><xs:sequence/></xs:restriction>
+             </xs:complexContent>
+           </xs:complexType>"#,
+    );
+}

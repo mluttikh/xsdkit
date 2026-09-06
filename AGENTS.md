@@ -256,7 +256,7 @@ crate:
 | | |
 |---|---|
 | valid schemas accepted | **99.7%** — it reads real schemas |
-| invalid schemas rejected | **58.8%** — partial: see `src/restriction.rs` |
+| invalid schemas rejected | **61.7%** — partial: see `src/restriction.rs` |
 
 That asymmetry is by construction, not neglect: the Schema Component
 Constraints and the Derivation Valid rules are largely unimplemented (see §7).
@@ -464,6 +464,14 @@ Things that are easy to get wrong here:
 ## The road to 1.0
 
 Ordered by what gets more expensive the longer it waits, not by size.
+
+**Schema Representation Constraints are the cheap ones.** Three added in one
+pass bought 14 invalid schemas with no false rejection at all, because they
+are answerable from the document alone: a `ref` that also redescribes what it
+points at, an `xs:openContent` whose mode promises a wildcard it does not
+carry, and a `mixed` that contradicts itself across `xs:complexType` and
+`xs:complexContent`. `check_representation` in `load.rs` is where they go.
+Look there before reaching for a component-level rule.
 
 The valid schemas still rejected — 16 by the harness, 17 by
 `examples/w3c_why.rs`, which scores one case differently — break down by
