@@ -160,6 +160,9 @@ in.
 | `XSD2011` | The same `xs:ID` value appears twice |
 | `XSD2012` | An `xs:IDREF` names no `xs:ID` in the document |
 | `XSD2013` | An `abstract` element appears in a document |
+| `XSD2014` | Two nodes carry the same `xs:key` or `xs:unique` value |
+| `XSD2015` | An `xs:key` field is absent |
+| `XSD2016` | An `xs:keyref` matches no key |
 
 ## Rendering
 

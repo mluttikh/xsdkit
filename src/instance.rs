@@ -149,6 +149,9 @@ impl<'a> InstanceValidator<'a> {
             ids: FxHashMap::default(),
             idrefs: Vec::new(),
             elements_seen: 0,
+            path: Vec::new(),
+            scopes: Vec::new(),
+            targets: Vec::new(),
             id_roles: FxHashMap::default(),
             uri: "<instance>".to_string(),
             sink,
@@ -174,6 +177,9 @@ impl<'a> InstanceValidator<'a> {
             ids: FxHashMap::default(),
             idrefs: Vec::new(),
             elements_seen: 0,
+            path: Vec::new(),
+            scopes: Vec::new(),
+            targets: Vec::new(),
             id_roles: FxHashMap::default(),
             uri: uri.to_string(),
             sink,
@@ -207,6 +213,13 @@ struct Run<'a, 'b, S: FnMut(PsviEvent)> {
     /// A counter distinguishing elements, so an `xs:ID` can be attributed to
     /// the one that claimed it.
     elements_seen: u32,
+    /// The names of the open elements, which is what an identity-constraint
+    /// path is matched against — the validator has no tree to walk.
+    path: Vec<QName>,
+    /// Constraints in force, innermost last, and the selector matches whose
+    /// fields are still filling in.
+    scopes: Vec<crate::identity::Scope>,
+    targets: Vec<crate::identity::Target>,
     /// Whether a type plays an identifier role, keyed by type — answering it
     /// walks a base chain, and most attributes are not identifiers.
     id_roles: FxHashMap<TypeId, Option<IdKind>>,
@@ -269,6 +282,183 @@ impl<'a, S: FnMut(PsviEvent)> Run<'a, '_, S> {
     fn error(&mut self, code: DiagCode, line: u32, msg: impl Into<String>) {
         let span = Span::new(&self.uri, line);
         self.diags.push(Diagnostic::error(code, msg).at(span));
+    }
+
+    // -- identity constraints ----------------------------------------------
+
+    /// Opens the constraints this element carries, and any selector matches
+    /// it makes for constraints already open.
+    ///
+    /// Order matters: a constraint's own scope element is its context node,
+    /// so the element cannot be a target of its own constraint. Existing
+    /// scopes are asked first, then the new ones are pushed.
+    fn open_identity(&mut self, declaration: Option<ElementId>) {
+        for i in 0..self.scopes.len() {
+            let scope_depth = self.scopes[i].depth;
+            if scope_depth > self.path.len() {
+                continue;
+            }
+            let idc = self.scopes[i].constraint;
+            let selects = self.v.schemas[idc]
+                .selector_paths
+                .matches(&self.path[scope_depth..]);
+            if selects {
+                let n = self.v.schemas[idc].field_paths.len();
+                self.targets.push(crate::identity::Target {
+                    scope: i,
+                    depth: self.path.len(),
+                    fields: vec![None; n],
+                });
+            }
+        }
+        let Some(d) = declaration else { return };
+        for idc in self.v.schemas[d].identity_constraints.clone() {
+            self.scopes.push(crate::identity::Scope {
+                constraint: idc,
+                depth: self.path.len(),
+                keys: Vec::new(),
+                refs: Vec::new(),
+            });
+        }
+    }
+
+    /// Fills any field of an open target that names one of this element's
+    /// attributes.
+    ///
+    /// Driven from the finished `AttributePsvi` rather than from the raw
+    /// attributes, because a key compares in the value space and only the
+    /// PSVI knows the type: an attribute declared locally has no global
+    /// declaration to look the type up in, and guessing `xs:string` there
+    /// makes an `Integer(12)` element field and a `String("12")` attribute
+    /// field two different keys.
+    fn fill_attribute_fields(&mut self, attributes: &[AttributePsvi]) {
+        for t in 0..self.targets.len() {
+            let depth = self.targets[t].depth;
+            if depth > self.path.len() {
+                continue;
+            }
+            let idc = self.scopes[self.targets[t].scope].constraint;
+            let rel: Vec<QName> = self.path[depth..].to_vec();
+            for f in 0..self.v.schemas[idc].field_paths.len() {
+                if self.targets[t].fields[f].is_some() {
+                    continue;
+                }
+                let Some(want) = self.v.schemas[idc].field_paths[f].attribute_for(&rel) else {
+                    continue;
+                };
+                for a in attributes {
+                    if want.is_none_or(|w| w == a.name) {
+                        if let Some(v) = &a.value {
+                            self.targets[t].fields[f] = Some(v.clone());
+                        }
+                        break;
+                    }
+                }
+            }
+        }
+    }
+
+    /// Fills any field of an open target that names *this* element, using the
+    /// value its type gave it.
+    ///
+    /// The canonical form rather than the lexical one, so `1.0` and `1.00`
+    /// are one key — value equality is what the specification compares.
+    fn fill_content_field(&mut self, value: Option<&Value>) {
+        let Some(value) = value else { return };
+        for t in 0..self.targets.len() {
+            let depth = self.targets[t].depth;
+            if depth > self.path.len() {
+                continue;
+            }
+            let idc = self.scopes[self.targets[t].scope].constraint;
+            let rel: Vec<QName> = self.path[depth..].to_vec();
+            for f in 0..self.v.schemas[idc].field_paths.len() {
+                if self.targets[t].fields[f].is_some() {
+                    continue;
+                }
+                let paths = &self.v.schemas[idc].field_paths[f];
+                // An element field, not an attribute one.
+                if paths
+                    .0
+                    .iter()
+                    .any(|p| p.attribute.is_none() && p.matches(&rel))
+                {
+                    self.targets[t].fields[f] = Some(value.clone());
+                }
+            }
+        }
+    }
+
+    /// Settles every target and scope that ends with this element.
+    fn close_identity_scopes(&mut self, line: u32) {
+        let depth = self.path.len();
+
+        while self.targets.last().is_some_and(|t| t.depth >= depth) {
+            let t = self.targets.pop().expect("checked");
+            let idc = self.scopes[t.scope].constraint;
+            let kind = self.v.schemas[idc].kind;
+            let name = self.show(self.v.schemas[idc].name);
+            let complete = t.fields.iter().all(|f| f.is_some());
+            match kind {
+                // `key` insists every field be present; `unique` simply has
+                // nothing to say about a node that does not have them all.
+                IdcKind::Key if !complete => {
+                    self.error(
+                        DiagCode::MissingKeyField,
+                        line,
+                        format!("`{name}` requires every field, and one is absent here"),
+                    );
+                }
+                IdcKind::Key | IdcKind::Unique if complete => {
+                    let seen = self.scopes[t.scope]
+                        .keys
+                        .iter()
+                        .any(|k| crate::identity::key_eq(k, &t.fields));
+                    if seen {
+                        self.error(
+                            DiagCode::DuplicateKey,
+                            line,
+                            format!("`{name}` is not unique: this key has already appeared"),
+                        );
+                    } else {
+                        self.scopes[t.scope].keys.push(t.fields);
+                    }
+                }
+                IdcKind::KeyRef if complete => self.scopes[t.scope].refs.push((t.fields, line)),
+                _ => {}
+            }
+        }
+
+        while self.scopes.last().is_some_and(|s| s.depth >= depth) {
+            let scope = self.scopes.pop().expect("checked");
+            let idc = scope.constraint;
+            let Some(refer) = self.v.schemas[idc].refer else {
+                continue;
+            };
+            // A `keyref` matches against the table its referenced key built
+            // over the *same* element, so the sibling scope is still here —
+            // it is popped in the same pass, after this one.
+            let table: Vec<crate::identity::Key> = self
+                .scopes
+                .iter()
+                .filter(|s| s.constraint == refer && s.depth == scope.depth)
+                .flat_map(|s| s.keys.iter().cloned())
+                .collect();
+            let name = self.show(self.v.schemas[idc].name);
+            for (key, at) in scope.refs {
+                if !table.iter().any(|k| crate::identity::key_eq(k, &key)) {
+                    let shown: Vec<String> = key.iter().flatten().map(|v| v.to_string()).collect();
+                    self.error(
+                        DiagCode::UnresolvedKeyRef,
+                        at,
+                        format!(
+                            "`{name}` refers to `{}`, which no key matches",
+                            shown.join(", ")
+                        ),
+                    );
+                }
+            }
+        }
     }
 
     /// Records the identifiers a value carries, if its type gives it that
@@ -516,6 +706,11 @@ impl<'a, S: FnMut(PsviEvent)> Run<'a, '_, S> {
         // An `xs:ID` binds a value to *this* element, so it needs an identity
         // before its attributes are read.
         self.elements_seen += 1;
+        // Identity-constraint paths are matched against the open elements, so
+        // the name goes on before anything asks about it and comes off in
+        // `end`, after the subtree has been accounted for.
+        self.path
+            .push(qname.unwrap_or(crate::names::QName::UNKNOWN));
 
         // Inside a skipped subtree nothing is checked, but nesting still has
         // to be tracked so the right `End` closes it.
@@ -609,11 +804,18 @@ impl<'a, S: FnMut(PsviEvent)> Run<'a, '_, S> {
                 && matches!(a.value.trim(), "true" | "1")
         });
 
+        if !skipped {
+            self.open_identity(declaration);
+        }
+
         let attributes = if skipped {
             Vec::new()
         } else {
             self.check_attributes(type_id, &attrs, line)
         };
+        // Now that the attributes are typed, any field naming one can be
+        // filled with a value rather than with text.
+        self.fill_attribute_fields(&attributes);
 
         let matcher = (!skipped)
             .then(|| self.v.schemas.match_content(type_id))
@@ -1077,6 +1279,10 @@ impl<'a, S: FnMut(PsviEvent)> Run<'a, '_, S> {
         // Only now: the text just checked resolved its QNames against this
         // element's own declarations.
         self.namespaces.pop();
+        // And only now: a target's fields are complete once its subtree is,
+        // and a scope's tables once everything it covers has passed.
+        self.close_identity_scopes(line);
+        self.path.pop();
     }
 
     fn finish(&mut self, frame: Frame<'a>, line: u32) {
@@ -1162,6 +1368,7 @@ impl<'a, S: FnMut(PsviEvent)> Run<'a, '_, S> {
                 }
             }
             self.record_identifiers(target, &lexical, frame.id_scope, line);
+            self.fill_content_field(value.as_ref());
             (self.sink)(PsviEvent::Text {
                 value,
                 type_id: target,

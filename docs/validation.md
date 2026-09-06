@@ -195,12 +195,18 @@ when a default means something different from an explicit value.
 element carrying it, no two elements may claim one, and every reference must
 match one somewhere in the document — including one that appears later.
 
-Not yet: **identity constraints** (`xs:key`, `xs:keyref`, `xs:unique`) are read
-into the model but not enforced during validation, and XSD 1.1 **assertions**
-and conditional type assignment are stored and not evaluated. A document that
-violates one of those is currently reported as valid.
+**Identity constraints** are enforced: `xs:key`, `xs:keyref` and `xs:unique`,
+over the restricted XPath subset they take — an optional `.//`, child steps,
+and an attribute as a field's last step. Keys compare in the value space, so
+`07:00:00Z` and `02:00:00-05:00` are one key. Nodes inside a subtree that was
+never assessed — under a `skip` wildcard, or a `lax` one that matched no
+declaration — are not selected.
 
-[Conformance](project/conformance.md) has the measured numbers: 98.7% of the
+Not yet: XSD 1.1 **assertions** and conditional type assignment are stored and
+not evaluated. A document that violates one of those is currently reported as
+valid.
+
+[Conformance](project/conformance.md) has the measured numbers: 98.9% of the
 W3C suite's 21,575 document cases are judged correctly.
 
 ## Next

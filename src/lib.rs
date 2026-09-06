@@ -56,6 +56,7 @@ pub(crate) mod derivation;
 pub mod diagnostics;
 pub mod encoding;
 pub(crate) mod facets;
+mod identity;
 pub mod instance;
 pub mod load;
 pub mod model;

@@ -714,6 +714,10 @@ pub struct IdentityConstraint {
     pub selector: String,
     /// The restricted XPath subsets selecting the key fields.
     pub fields: Vec<String>,
+    /// The same two, parsed. Prefixes bind in the *schema* document, so this
+    /// is settled at load time where those bindings are still in hand.
+    pub(crate) selector_paths: crate::identity::Paths,
+    pub(crate) field_paths: Vec<crate::identity::Paths>,
     /// The key a `keyref` refers to.
     pub refer: Option<IdcId>,
     pub annotation: Option<AnnotationId>,

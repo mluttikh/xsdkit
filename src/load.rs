@@ -1268,7 +1268,7 @@ impl<'r> Loader<'r> {
                 .and_then(|n| n.attribute("xpath"))
                 .unwrap_or_default()
                 .to_string();
-            let fields = c
+            let fields: Vec<String> = c
                 .children()
                 .filter(|n| reads(n, ctx.version))
                 .filter(|n| n.tag_name().name() == "field")
@@ -1276,11 +1276,32 @@ impl<'r> Loader<'r> {
                 .map(str::to_string)
                 .collect();
             let annotation = self.read_annotation(c, ctx);
+            // These paths' prefixes bind here, in the schema document, so
+            // they are parsed now rather than carried as text into a
+            // validator that could no longer resolve them.
+            let selector_node = c
+                .children()
+                .filter(|n| reads(n, ctx.version))
+                .find(|n| n.tag_name().name() == "selector");
+            let selector_paths =
+                self.read_xpath(&selector, false, selector_node.unwrap_or(c), ctx, &span);
+            let field_nodes: Vec<_> = c
+                .children()
+                .filter(|n| reads(n, ctx.version))
+                .filter(|n| n.tag_name().name() == "field")
+                .collect();
+            let field_paths = fields
+                .iter()
+                .zip(field_nodes.iter().chain(std::iter::repeat(&c)))
+                .map(|(f, n)| self.read_xpath(f, true, *n, ctx, &span))
+                .collect();
             let id = IdcId(self.identity_constraints.push(IdentityConstraint {
                 name,
                 kind,
                 selector,
                 fields,
+                selector_paths,
+                field_paths,
                 refer: None,
                 annotation,
                 span: span.clone(),
@@ -2168,6 +2189,61 @@ impl<'r> Loader<'r> {
                 )
                 .at(span),
             );
+        }
+    }
+
+    /// Parses one `xpath` attribute of an identity constraint.
+    ///
+    /// A path that does not parse is reported and treated as selecting
+    /// nothing, which is the only safe reading: guessing at what a malformed
+    /// selector meant would silently change which nodes a key covers.
+    fn read_xpath(
+        &mut self,
+        text: &str,
+        is_field: bool,
+        node: roxmltree::Node,
+        _ctx: &DocCtx,
+        span: &Span,
+    ) -> crate::identity::Paths {
+        struct Names<'a, 'i> {
+            interner: &'a mut crate::names::Interner,
+            node: roxmltree::Node<'i, 'i>,
+        }
+        impl crate::identity::PathNames for Names<'_, '_> {
+            fn namespace(&mut self, prefix: &str) -> Option<crate::names::Namespace> {
+                let uri = if prefix == "xml" {
+                    Some(crate::names::XML)
+                } else {
+                    self.node.lookup_namespace_uri(Some(prefix))
+                }?;
+                Some(crate::names::Namespace::from_symbol(
+                    self.interner.intern(uri),
+                ))
+            }
+            fn intern(&mut self, local: &str) -> crate::names::Symbol {
+                self.interner.intern(local)
+            }
+        }
+
+        let mut names = Names {
+            interner: &mut self.names,
+            node,
+        };
+        match crate::identity::parse(text, is_field, &mut names) {
+            Ok(p) => p,
+            Err(e) => {
+                self.diags.push(
+                    Diagnostic::error(
+                        DiagCode::InvalidAttributeValue,
+                        format!(
+                            "`{text}` is not a valid identity-constraint path: {}",
+                            e.reason
+                        ),
+                    )
+                    .at(span.clone()),
+                );
+                crate::identity::Paths(Vec::new())
+            }
         }
     }
 

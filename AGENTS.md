@@ -210,6 +210,21 @@ cannot express this.
   their own negative counterparts, which add a *third* element carrying that
   value and expect invalid. No rule counting distinct elements satisfies both,
   so the specification wins and those two stay as false alarms.
+- **The XPath in an identity constraint is not XPath.** Appendix I defines a
+  tiny subset — an optional `.//`, child steps, and an attribute as a field's
+  last step — so no engine is needed; `src/identity.rs` is the whole of it.
+  Paths are parsed at *load* time, because their prefixes bind in the schema
+  document, and an unprefixed name in one is in **no** namespace whatever the
+  default declaration says. Matching is against the stack of open elements,
+  never a tree: a scope opens on the element carrying the constraint, a target
+  when the names below it spell the selector, and the tuple settles when the
+  target closes.
+- **Keys compare as values, and every field must be typed the same way.**
+  `07:00:00Z` and `02:00:00-05:00` are one key, and a one-item list equals the
+  value it holds. Filling attribute fields from raw text while element fields
+  carry typed values makes `Integer(12)` and `String("12")` two keys — which
+  is why they come from `AttributePsvi` rather than from a global-declaration
+  lookup that a locally declared attribute would miss.
 - **Identifier roles are settled per *token*, not per value.** A list's item
   type is what each whitespace-separated token validates against, and when
   that item type is a union the member is resolved for each token separately.
@@ -336,8 +351,8 @@ is fifty cases one rule buys.
 
 The instance half — 21,671 documents — is `#[ignore]`d because it takes
 minutes where the schema half takes seconds (4.5 minutes in `--release`; run
-it that way). Run it with `-- --ignored`. It scores 21,575 of them, 98.7%
-correct: **99.5%** of valid documents accepted, **97.7%** of invalid ones
+it that way). Run it with `-- --ignored`. It scores 21,575 of them, 98.9%
+correct: **99.5%** of valid documents accepted, **98.3%** of invalid ones
 rejected.
 
 That first figure was 88.1% until a one-line bug turned up: an *enumeration on
@@ -718,6 +733,16 @@ has the wrong number of particles.
    and the instance half from 20,492 correct to 20,541.
 
 ## Planned, not present
+
+**Identity constraints over unassessed content.** A selector matches element
+information items whatever their assessment, but `open_identity` runs only on
+elements the validator assessed — so nodes under a `skip` wildcard, or a `lax`
+one that matched no declaration, are not selected.
+`sunData/combined/identity/idc006` is the case: its keys sit under a `lax`
+wildcard whose intermediate element has no global declaration. Fixing it means
+matching inside skipped subtrees with *untyped* field values, which brings back
+the mismatch where an `Integer(12)` key cannot equal a `String("12")` one. One
+document is not worth that, so it is stated here instead.
 
 **Namespace bindings for a `default` or `fixed` value.** `xs:QName` and
 `xs:NOTATION` are the only datatypes whose value depends on something outside

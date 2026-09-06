@@ -173,6 +173,13 @@ pub enum DiagCode {
     /// An element declared `abstract` appears in a document. Abstract element
     /// declarations exist to be substituted for, not to be used.
     AbstractElement,
+    /// Two nodes an `xs:key` or `xs:unique` covers carry the same key.
+    DuplicateKey,
+    /// An `xs:key` covers a node that lacks one of its fields. Unlike
+    /// `xs:unique`, a key requires every field to be present.
+    MissingKeyField,
+    /// An `xs:keyref` names a key no node carries.
+    UnresolvedKeyRef,
 }
 
 impl DiagCode {
@@ -222,6 +229,9 @@ impl DiagCode {
             DiagCode::DuplicateId => "XSD2011",
             DiagCode::UnresolvedIdRef => "XSD2012",
             DiagCode::AbstractElement => "XSD2013",
+            DiagCode::DuplicateKey => "XSD2014",
+            DiagCode::MissingKeyField => "XSD2015",
+            DiagCode::UnresolvedKeyRef => "XSD2016",
         }
     }
 }
@@ -401,6 +411,9 @@ mod tests {
             DiagCode::DuplicateId,
             DiagCode::UnresolvedIdRef,
             DiagCode::AbstractElement,
+            DiagCode::DuplicateKey,
+            DiagCode::MissingKeyField,
+            DiagCode::UnresolvedKeyRef,
         ];
         let mut seen = std::collections::HashSet::new();
         for c in all {
