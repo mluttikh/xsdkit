@@ -416,6 +416,86 @@ fn a_strict_wildcard_reaches_the_whole_subtree() {
 // Attribute wildcards
 // ---------------------------------------------------------------------------
 
+/// An `xs:anyAttribute` says how what it admits must be processed, exactly as
+/// `xs:any` does — and an admitted attribute reaches the PSVI typed, not as a
+/// name with no declaration behind it.
+fn attributes_wrapped_in(process_contents: &str) -> Schemas {
+    schema(&format!(
+        r#"<xs:attribute name="k" type="tns:Small"/>
+           <xs:simpleType name="Small">
+             <xs:restriction base="xs:int"><xs:maxInclusive value="10"/></xs:restriction>
+           </xs:simpleType>
+           <xs:element name="out">
+             <xs:complexType><xs:sequence/>
+               <xs:anyAttribute namespace="{}" processContents="{process_contents}"/>
+             </xs:complexType>
+           </xs:element>"#,
+        "##any"
+    ))
+}
+
+#[test]
+fn a_strict_attribute_wildcard_validates_what_it_admits() {
+    let s = attributes_wrapped_in("strict");
+    valid(
+        &s,
+        r#"<out xmlns="urn:example" xmlns:t="urn:example" t:k="5"/>"#,
+    );
+    invalid(
+        &s,
+        r#"<out xmlns="urn:example" xmlns:t="urn:example" t:k="999"/>"#,
+        DiagCode::InvalidValue,
+    );
+    invalid(
+        &s,
+        r#"<out xmlns="urn:example" xmlns:o="urn:other" o:z="x"/>"#,
+        DiagCode::AttributeNotAllowed,
+    );
+}
+
+#[test]
+fn a_lax_attribute_wildcard_validates_only_what_it_can_find() {
+    let s = attributes_wrapped_in("lax");
+    invalid(
+        &s,
+        r#"<out xmlns="urn:example" xmlns:t="urn:example" t:k="999"/>"#,
+        DiagCode::InvalidValue,
+    );
+    valid(
+        &s,
+        r#"<out xmlns="urn:example" xmlns:o="urn:other" o:z="x"/>"#,
+    );
+}
+
+#[test]
+fn a_skip_attribute_wildcard_looks_no_further() {
+    let s = attributes_wrapped_in("skip");
+    valid(
+        &s,
+        r#"<out xmlns="urn:example" xmlns:t="urn:example" t:k="999"/>"#,
+    );
+}
+
+/// The point of `lax` and `strict` beyond the verdict: the attribute arrives
+/// with the declaration the schema has for it, and a typed value.
+#[test]
+fn an_attribute_admitted_by_a_wildcard_reaches_the_psvi_typed() {
+    let s = attributes_wrapped_in("strict");
+    let mut seen = Vec::new();
+    let r = s.instance_validator().validate_with(
+        r#"<out xmlns="urn:example" xmlns:t="urn:example" t:k="5"/>"#,
+        |ev| {
+            if let PsviEvent::StartElement { attributes, .. } = ev {
+                for a in attributes {
+                    seen.push((a.declaration.is_some(), a.value.clone()));
+                }
+            }
+        },
+    );
+    assert!(r.is_valid(), "{}", r.diagnostics);
+    assert_eq!(seen, vec![(true, Some(Value::Integer(5)))]);
+}
+
 /// Wildcards reaching one type from two attribute groups are *intersected* —
 /// an attribute has to satisfy both, not either.
 #[test]

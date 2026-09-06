@@ -200,7 +200,10 @@ cannot express this.
   four step paths (named and foreign, automaton and `xs:all`) and on the
   XSD 1.1 open-content path, which is a wildcard with a mode of its own.
   Treating every wildcard as `skip` left a hole where nothing was checked, and
-  the W3C's own NIST datatype tests sit inside one.
+  the W3C's own NIST datatype tests sit inside one. The same rule applies to
+  `xs:anyAttribute`, through `wildcard_for_attribute` — which returns the mode
+  rather than reporting, so the caller can find the declaration, validate
+  against it, and put it in the PSVI.
 - **A wildcard's presence is not permission.** `report_unknown_attribute` must
   test the namespace constraint, by URI rather than by interned id — a
   wildcard exists to admit names the schema never declared, so `admits_uri`
@@ -306,7 +309,7 @@ is fifty cases one rule buys.
 The instance half — 21,671 documents — is `#[ignore]`d because it takes
 minutes where the schema half takes seconds (4.5 minutes in `--release`; run
 it that way). Run it with `-- --ignored`. It scores 21,575 of them, 98.3%
-correct: **99.5%** of valid documents accepted, **96.8%** of invalid ones
+correct: **99.5%** of valid documents accepted, **96.9%** of invalid ones
 rejected.
 
 That first figure was 88.1% until a one-line bug turned up: an *enumeration on

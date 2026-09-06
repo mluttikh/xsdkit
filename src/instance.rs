@@ -695,13 +695,24 @@ impl<'a, S: FnMut(PsviEvent)> Run<'a, '_, S> {
             }
 
             let Some(q) = self.v.schemas.qname(a.namespace.as_deref(), &a.local) else {
-                self.report_unknown_attribute(
-                    a.namespace.as_deref(),
-                    None,
-                    &a.local,
-                    &wildcard,
-                    line,
-                );
+                // A name the schema never interned has no global declaration
+                // to find, so `lax` has nothing to check it against and only
+                // `strict` has anything to say.
+                let msg = match self.wildcard_for_attribute(a.namespace.as_deref(), None, &wildcard)
+                {
+                    Some(ProcessContents::Strict) => Some(format!(
+                        "attribute `{}` is admitted by a `strict` wildcard, which requires a global attribute declaration",
+                        a.local
+                    )),
+                    Some(_) => None,
+                    None => Some(format!(
+                        "attribute `{}` is not permitted on this element",
+                        a.local
+                    )),
+                };
+                if let Some(msg) = msg {
+                    self.error(DiagCode::AttributeNotAllowed, line, msg);
+                }
                 continue;
             };
 
@@ -778,17 +789,51 @@ impl<'a, S: FnMut(PsviEvent)> Run<'a, '_, S> {
                 }
                 None => {
                     let shown = self.show(q);
-                    self.report_unknown_attribute(
-                        a.namespace.as_deref(),
-                        Some(q),
-                        &shown,
-                        &wildcard,
-                        line,
-                    );
+                    let mode =
+                        self.wildcard_for_attribute(a.namespace.as_deref(), Some(q), &wildcard);
+                    let global = self.v.schemas.globals().attributes.get(&q).copied();
+                    // A wildcard admits the *name*; `processContents` decides
+                    // whether the value is looked at.
+                    let declaration = match (mode, global) {
+                        (None, _) => {
+                            let msg =
+                                format!("attribute `{shown}` is not permitted on this element");
+                            self.error(DiagCode::AttributeNotAllowed, line, msg);
+                            None
+                        }
+                        (Some(ProcessContents::Skip), _) => None,
+                        (Some(_), Some(id)) => Some(id),
+                        (Some(ProcessContents::Lax), None) => None,
+                        (Some(ProcessContents::Strict), None) => {
+                            let msg = format!(
+                                "attribute `{shown}` is admitted by a `strict` wildcard, which requires a global attribute declaration"
+                            );
+                            self.error(DiagCode::AttributeNotAllowed, line, msg);
+                            None
+                        }
+                    };
+                    let value = match declaration {
+                        Some(id) => {
+                            let ty = self.v.schemas[id].type_id;
+                            match self
+                                .v
+                                .values
+                                .validate_in(ty, &a.value, &Scopes(&self.namespaces))
+                            {
+                                Ok(v) => Some(v),
+                                Err(e) => {
+                                    let msg = format!("attribute `{shown}`: {e}");
+                                    self.error(DiagCode::InvalidValue, line, msg);
+                                    None
+                                }
+                            }
+                        }
+                        None => None,
+                    };
                     out.push(AttributePsvi {
                         name: q,
-                        declaration: None,
-                        value: None,
+                        declaration,
+                        value,
                         lexical: a.value.clone(),
                         from_schema: false,
                     });
@@ -843,38 +888,24 @@ impl<'a, S: FnMut(PsviEvent)> Run<'a, '_, S> {
         out
     }
 
-    /// Reports an attribute no declaration matched, unless the type's
-    /// wildcard admits it.
+    /// How the type's wildcard says an attribute that no declaration matched
+    /// should be processed, or `None` when no wildcard admits it at all.
     ///
-    /// `name` is absent when the schema never interned this name — the usual
-    /// case for a wildcard, which exists precisely to admit what the schema
-    /// does not declare, so the namespace is matched by URI rather than by id.
-    fn report_unknown_attribute(
-        &mut self,
+    /// `name` is absent when the schema never interned it — the usual case
+    /// for a wildcard, which exists to admit what the schema does not
+    /// declare, so the namespace is matched by URI rather than by id.
+    fn wildcard_for_attribute(
+        &self,
         ns: Option<&str>,
         name: Option<QName>,
-        shown: &str,
         wildcard: &Option<Wildcard>,
-        line: u32,
-    ) {
-        if let Some(w) = wildcard {
-            // The namespace decides. `processContents` does not: `strict`
-            // would additionally require a global declaration, and that is
-            // not implemented, so an admitted attribute is accepted
-            // unchecked.
-            let admitted = w.namespace.admits_uri(self.v.schemas.names(), ns)
-                && !name.is_some_and(|q| w.not_qname.contains(&q))
-                && !(w.not_defined
-                    && name.is_some_and(|q| self.v.schemas.globals().attributes.contains_key(&q)));
-            if admitted {
-                return;
-            }
-        }
-        self.error(
-            DiagCode::AttributeNotAllowed,
-            line,
-            format!("attribute `{shown}` is not permitted on this element"),
-        );
+    ) -> Option<ProcessContents> {
+        let w = wildcard.as_ref()?;
+        let admitted = w.namespace.admits_uri(self.v.schemas.names(), ns)
+            && !name.is_some_and(|q| w.not_qname.contains(&q))
+            && !(w.not_defined
+                && name.is_some_and(|q| self.v.schemas.globals().attributes.contains_key(&q)));
+        admitted.then_some(w.process_contents)
     }
 
     // -- ends --------------------------------------------------------------

@@ -251,7 +251,7 @@ Document validation is the other half of the suite — 21,575 scored cases,
 | | |
 |---|---|
 | valid documents accepted | **99.5%** (11,849 / 11,907) |
-| invalid documents rejected | **96.8%** (9,358 / 9,668) |
+| invalid documents rejected | **96.9%** (9,366 / 9,668) |
 
 ```bash
 git clone --depth 1 https://github.com/w3c/xsdtests /tmp/xsdtests
