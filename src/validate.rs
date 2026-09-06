@@ -252,9 +252,12 @@ impl<'a> Validator<'a> {
         // it has no item type, and comparing a list against a string rejects
         // every value.
         if let Some(allowed) = &p.facets.enumeration {
+            // The literals came from the schema, so their prefixes resolve
+            // there; only `items` above came from the document.
+            let schema_ns = &p.facets.namespaces;
             let matched = allowed.iter().any(|lex| {
                 lex.split_whitespace()
-                    .map(|tok| self.validate_within(item, tok, depth + 1, ns))
+                    .map(|tok| self.validate_within(item, tok, depth + 1, schema_ns))
                     .collect::<Result<Vec<_>, _>>()
                     .is_ok_and(|want| want == items)
             });
@@ -294,9 +297,10 @@ impl<'a> Validator<'a> {
                         .map_err(ValidationError::Facet)?;
                 }
                 if let Some(allowed) = &p.facets.enumeration {
+                    let schema_ns = &p.facets.namespaces;
                     let ok = allowed.iter().any(|lex| {
                         p.members.iter().any(|m| {
-                            self.validate_within(*m, lex, depth + 1, ns)
+                            self.validate_within(*m, lex, depth + 1, schema_ns)
                                 .map(|x| x == v)
                                 .unwrap_or(false)
                         })
@@ -374,6 +378,10 @@ fn compose(base: &FacetSet, step: &FacetSet) -> FacetSet {
     }
     if step.enumeration.is_some() {
         out.enumeration = step.enumeration.clone();
+        // The bindings resolve *these* literals, so they travel with the
+        // enumeration that replaces the inherited one rather than
+        // accumulating down the chain.
+        out.namespaces = step.namespaces.clone();
     }
     // Every `Option` field of `FacetSet` where a step simply replaces what it
     // inherited. **A new field belongs here**: the list is written out, so one

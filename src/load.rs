@@ -1446,8 +1446,10 @@ impl<'r> Loader<'r> {
                         }
                     }
                 }
-                let facets = self.read_facets(d, ctx);
-                self.simple_mut(id).facets = FacetSet::new().restrict(&facets);
+                let (facets, namespaces) = self.read_facets(d, ctx);
+                let mut set = FacetSet::new().restrict(&facets);
+                set.namespaces = namespaces;
+                self.simple_mut(id).facets = set;
             }
             "list" => {
                 self.set_simple_variety(id, Variety::List);
@@ -1514,8 +1516,15 @@ impl<'r> Loader<'r> {
         self.simple_mut(id).variety = v;
     }
 
-    fn read_facets(&mut self, node: roxmltree::Node, ctx: &DocCtx) -> Vec<Facet> {
+    /// The declared facets, and the namespace bindings any QName literal
+    /// among them would need.
+    fn read_facets(
+        &mut self,
+        node: roxmltree::Node,
+        ctx: &DocCtx,
+    ) -> (Vec<Facet>, Vec<(Option<String>, String)>) {
         let mut out = Vec::new();
+        let mut namespaces = Vec::new();
         for c in node.children().filter(|n| reads(n, ctx.version)) {
             let v = c.attribute("value").unwrap_or_default();
             let span = || Span::new(&ctx.uri, line_of(ctx, c));
@@ -1524,7 +1533,10 @@ impl<'r> Loader<'r> {
                 "minLength" => v.parse().ok().map(Facet::MinLength),
                 "maxLength" => v.parse().ok().map(Facet::MaxLength),
                 "pattern" => Some(Facet::Pattern(v.to_string())),
-                "enumeration" => Some(Facet::Enumeration(v.to_string())),
+                "enumeration" => {
+                    qname_bindings(c, v, &mut namespaces);
+                    Some(Facet::Enumeration(v.to_string()))
+                }
                 "whiteSpace" => match v {
                     "preserve" => Some(Facet::WhiteSpace(WhiteSpace::Preserve)),
                     "replace" => Some(Facet::WhiteSpace(WhiteSpace::Replace)),
@@ -1578,7 +1590,7 @@ impl<'r> Loader<'r> {
             }
         }
         self.check_step_facets(&out, &Span::new(&ctx.uri, line_of(ctx, node)));
-        out
+        (out, namespaces)
     }
 
     /// Facets that contradict each other *on this restriction element*.
@@ -2525,6 +2537,29 @@ fn line_of(ctx: &DocCtx, node: roxmltree::Node) -> u32 {
 /// the other spelling, which the W3C suite uses.
 fn flag(node: roxmltree::Node, name: &str) -> bool {
     matches!(node.attribute(name).map(str::trim), Some("true" | "1"))
+}
+
+/// The namespace bindings a facet literal would need, were its type
+/// `xs:QName` or `xs:NOTATION`.
+///
+/// Captures only the prefix each token actually uses — or the default
+/// declaration, for an unprefixed one. Copying every `xmlns` in scope would
+/// put a schema's whole prologue on every facet set, and the NIST QName tests
+/// declare thirty of them.
+///
+/// The literal is split on whitespace because a list type's enumeration
+/// literal is a whole list, whose items may carry different prefixes. A token
+/// that only looks like a QName costs a failed lookup and nothing else.
+fn qname_bindings(node: roxmltree::Node, literal: &str, out: &mut Vec<(Option<String>, String)>) {
+    for token in literal.split_whitespace() {
+        let prefix = token.split_once(':').map(|(p, _)| p);
+        if out.iter().any(|(p, _)| p.as_deref() == prefix) {
+            continue;
+        }
+        if let Some(uri) = node.lookup_namespace_uri(prefix) {
+            out.push((prefix.map(str::to_owned), uri.to_string()));
+        }
+    }
 }
 
 fn value_constraint(node: roxmltree::Node) -> Option<ValueConstraint> {

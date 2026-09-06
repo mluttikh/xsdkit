@@ -271,38 +271,38 @@ fn values_are_in_the_base_space(
     let Some(builtin) = validate::nearest_builtin(schemas, s.base) else {
         return;
     };
-    // A QName or NOTATION value is a prefix plus a local name, and the prefix
-    // only means something against the namespace bindings in scope where it
-    // was written. Those live in the document, not in the type, so by the time
-    // the model is assembled there is nothing left to check it against — and
-    // `values::parse` says so by refusing every one of them.
-    if matches!(builtin, Builtin::QName | Builtin::Notation) {
-        return;
-    }
     let f = &s.facets;
+    // A QName or NOTATION value is a prefix plus a local name, and the prefix
+    // only means something against the bindings in scope where it was
+    // written. The loader captures those beside the enumeration, so its
+    // literals can be checked — but neither datatype is ordered, so the
+    // bounds below say nothing about them.
+    let ordered = !matches!(builtin, Builtin::QName | Builtin::Notation);
     let bounds = [
         (FacetKind::MinInclusive, &f.min_inclusive),
         (FacetKind::MaxInclusive, &f.max_inclusive),
         (FacetKind::MinExclusive, &f.min_exclusive),
         (FacetKind::MaxExclusive, &f.max_exclusive),
     ];
-    for (kind, value) in bounds {
-        let Some(v) = value else { continue };
-        if let Err(e) = values::parse_in(builtin, v, schemas.xsd_version) {
-            diags.push(
-                Diagnostic::error(
-                    DiagCode::InvalidFacetValue,
-                    format!(
-                        "`xs:{kind}` value `{v}` is not a valid {builtin}: {}",
-                        e.reason
-                    ),
-                )
-                .at(s.span.clone()),
-            );
+    if ordered {
+        for (kind, value) in bounds {
+            let Some(v) = value else { continue };
+            if let Err(e) = values::parse_in(builtin, v, schemas.xsd_version) {
+                diags.push(
+                    Diagnostic::error(
+                        DiagCode::InvalidFacetValue,
+                        format!(
+                            "`xs:{kind}` value `{v}` is not a valid {builtin}: {}",
+                            e.reason
+                        ),
+                    )
+                    .at(s.span.clone()),
+                );
+            }
         }
     }
     for v in f.enumeration.iter().flatten() {
-        if let Err(e) = values::parse_in(builtin, v, schemas.xsd_version) {
+        if let Err(e) = values::parse_qualified(builtin, v, schemas.xsd_version, &f.namespaces) {
             diags.push(
                 Diagnostic::error(
                     DiagCode::InvalidFacetValue,

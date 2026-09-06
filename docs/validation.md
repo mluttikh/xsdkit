@@ -172,6 +172,9 @@ when a default means something different from an explicit value.
   scope, the derivation checked against the declared type, the `block` on
   both, and abstractness.
 - `xsi:nil`, with `nillable` enforced.
+- `xs:QName` and `xs:NOTATION` values, resolved against the namespaces in
+  scope — the document's for a value, the schema's for an `xs:enumeration`
+  literal, which are not the same bindings and need not agree on a prefix.
 - Substitution groups, closed transitively.
 - Wildcards, with `strict`, `lax` and `skip` processing.
 - Mixed content, `xs:all`, and repeated particles.
@@ -184,7 +187,7 @@ into the model but not enforced during validation, and XSD 1.1 **assertions**
 and conditional type assignment are stored and not evaluated. A document that
 violates one of those is currently reported as valid.
 
-[Conformance](project/conformance.md) has the measured numbers: 96.5% of the
+[Conformance](project/conformance.md) has the measured numbers: 96.7% of the
 W3C suite's 21,575 document cases are judged correctly.
 
 ## Next

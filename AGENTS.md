@@ -246,8 +246,8 @@ is fifty cases one rule buys.
 
 The instance half — 21,671 documents — is `#[ignore]`d because it takes
 minutes where the schema half takes seconds (4.5 minutes in `--release`; run
-it that way). Run it with `-- --ignored`. It scores 21,575 of them, 96.5%
-correct: **98.1%** of valid documents accepted, **94.6%** of invalid ones
+it that way). Run it with `-- --ignored`. It scores 21,575 of them, 96.7%
+correct: **98.3%** of valid documents accepted, **94.6%** of invalid ones
 rejected.
 
 That first figure was 88.1% until a one-line bug turned up: an *enumeration on
@@ -436,13 +436,16 @@ Things that are easy to get wrong here:
 
 Ordered by what gets more expensive the longer it waits, not by size.
 
-The 58 valid schemas still rejected break down, by diagnostic code, as: **40**
-`precisionDecimal` (27 unresolved `xs:precisionDecimal`, 13 `minScale`), **7**
-the identity-constraint `ref` bug (now fixed), **4** UPA false positives (also
-fixed), **5** or so
-`vc:` conditional inclusion, and **2** that are correct behaviour — the
+The valid schemas still rejected — 16 by the harness, 17 by
+`examples/w3c_why.rs`, which scores one case differently — break down by
+diagnostic code as: **10** `UnresolvedReference` (the `Assert` and `Missing`
+sets, naming components we do not find), **2** `DuplicateGlobal`, **2**
+`InvalidValueConstraint` (`+INF` as a default), **1** `AmbiguousContentModel`
+on `snbranch.xsd`, and **2** that are correct behaviour — the
 entity-reference-loop guard firing on `ElementDeclarations.xsd`, and
 `FileResolver` refusing to fetch `xlink.xsd` over the network.
+
+The `precisionDecimal` cluster that used to dominate this list is gone.
 
 Regenerate that with `examples/w3c_why.rs` (why we reject valid schemas, by
 code) and `examples/w3c_gap.rs` (which invalid schemas we accept, clustered by
@@ -618,20 +621,20 @@ has the wrong number of particles.
 
 ## Planned, not present
 
-**Namespace bindings on the schema side.** `xs:QName` and `xs:NOTATION` are the
-only datatypes whose value depends on something outside the lexical form, and
-the instance validator resolves them against a namespace stack it keeps as it
-walks. The *schema* side has no equivalent: a prefix written into an
-`xs:enumeration` literal, or into a `default`/`fixed` value, binds in the schema
-document, and the loader does not carry those bindings into the compiled model.
+**Namespace bindings for a `default` or `fixed` value.** `xs:QName` and
+`xs:NOTATION` are the only datatypes whose value depends on something outside
+the lexical form. The instance validator resolves them against a namespace
+stack it keeps as it walks, and `FacetSet::namespaces` now carries the schema's
+own bindings for an `xs:enumeration`'s literals — captured per restriction step,
+because a schema may rebind a prefix on an inner element.
 
-So both are skipped rather than guessed — `check_value` returns early for
-QName-typed constraints, and a QName enumeration cannot match. Resolving them
-against the *instance*'s bindings would be right whenever the two documents
-happen to agree on a prefix and quietly wrong otherwise, which is worse than
-not checking. Fixing it means keeping the bindings in scope at each facet, not
-per document: a schema may rebind a prefix on an inner element, and the W3C
-suite has one that does.
+A `default` or `fixed` value has no equivalent, so `declarations::check_value`
+still returns early for QName-typed constraints. Resolving them against the
+*instance*'s bindings would be right whenever the two documents happen to agree
+on a prefix and quietly wrong otherwise, which is worse than not checking.
+Fixing it means `ValueConstraint` carrying bindings captured at the element or
+attribute node — the same trick one level out, and a change to a public enum's
+shape.
 
 
 Deliberately out of scope until their phase (see `DESIGN.md` §3.11): XSD 1.1

@@ -104,9 +104,10 @@ fn check_value(
     diags: &mut Diagnostics,
 ) {
     // A QName's value depends on the prefix bindings in scope where it was
-    // written — here, in the *schema* document. The loader does not carry them
-    // this far, so checking would reject every prefixed default outright.
-    // Skipping is the honest answer until the schema-side bindings are kept.
+    // written — here, in the *schema* document. `FacetSet::namespaces` keeps
+    // those for an enumeration's literals, but a `default` or `fixed` value
+    // has no equivalent, so checking would reject every prefixed one outright.
+    // Skipping is the honest answer until `ValueConstraint` carries them too.
     if matches!(
         schemas[ty].as_simple().and_then(|t| t.primitive),
         Some(crate::datatypes::Builtin::QName | crate::datatypes::Builtin::Notation)

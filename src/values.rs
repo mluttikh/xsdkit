@@ -302,6 +302,15 @@ pub trait Namespaces {
     fn resolve(&self, prefix: Option<&str>) -> Option<&str>;
 }
 
+/// The bindings captured beside a facet, as the loader found them.
+impl Namespaces for Vec<(Option<String>, String)> {
+    fn resolve(&self, prefix: Option<&str>) -> Option<&str> {
+        self.iter()
+            .find(|(p, _)| p.as_deref() == prefix)
+            .map(|(_, uri)| uri.as_str())
+    }
+}
+
 /// No bindings at all.
 ///
 /// An unprefixed QName still parses — it is simply in no namespace, which is a
@@ -811,9 +820,14 @@ pub fn check_facets(
     // not reachable from here — so `Validator::list` does that itself and this
     // would only ever compare a list against a string and reject everything.
     if let Some(allowed) = facets.enumeration.as_ref().filter(|_| !value.is_list()) {
-        let matched = allowed
-            .iter()
-            .any(|lex| parse(builtin, lex).map(|v| &v == value).unwrap_or(false));
+        // A QName literal resolves against the *schema's* bindings, captured
+        // with the facet. Every other datatype ignores them.
+        let ns = &facets.namespaces;
+        let matched = allowed.iter().any(|lex| {
+            parse_qualified(builtin, lex, Version::Xsd11, ns)
+                .map(|v| &v == value)
+                .unwrap_or(false)
+        });
         if !matched {
             return Err(violation(
                 "enumeration",

@@ -249,6 +249,16 @@ pub struct FacetSet {
     /// The most-derived enumeration. A restriction may only narrow, so the
     /// innermost set is the effective one.
     pub enumeration: Option<Vec<String>>,
+    /// The namespace bindings in scope where [`Self::enumeration`] was
+    /// written, for the prefixes its literals actually use.
+    ///
+    /// `xs:QName` and `xs:NOTATION` are the only datatypes whose value is not
+    /// a function of the lexical form alone, and an enumeration literal binds
+    /// its prefix in the **schema** document — not in the instance being
+    /// validated, which may spell the same namespace differently or not
+    /// declare it at all. Nothing downstream can recover that, so the loader
+    /// captures it here. Empty for every other datatype.
+    pub namespaces: Vec<(Option<String>, String)>,
     pub white_space: Option<WhiteSpace>,
     pub max_inclusive: Option<String>,
     pub max_exclusive: Option<String>,

@@ -250,6 +250,162 @@ fn boolean_schema_attributes_accept_the_numeric_spelling() {
 }
 
 // ---------------------------------------------------------------------------
+// xs:enumeration over QNames
+// ---------------------------------------------------------------------------
+
+/// These schemas declare their own prefixes, so they cannot use the shared
+/// `schema` helper's fixed prologue.
+fn from_xsd(xsd: &str) -> Schemas {
+    SchemaSetBuilder::new()
+        .text(xsd.to_string(), "mem://qname.xsd")
+        .build()
+        .unwrap_or_else(|d| panic!("{d}"))
+}
+
+/// A QName enumeration lists *values*, and a value is a namespace plus a
+/// local name. The literal's prefix binds in the schema, the instance's in
+/// the document, and the two need never agree on the spelling.
+#[test]
+fn a_qname_enumeration_resolves_its_literals_against_the_schema() {
+    let s = from_xsd(
+        r#"<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema"
+                      xmlns:code="urn:codes" xmlns:tns="urn:example"
+                      targetNamespace="urn:example" elementFormDefault="qualified">
+             <xs:simpleType name="Code">
+               <xs:restriction base="xs:QName">
+                 <xs:enumeration value="code:alpha"/>
+                 <xs:enumeration value="code:beta"/>
+               </xs:restriction>
+             </xs:simpleType>
+             <xs:element name="pick" type="tns:Code"/>
+           </xs:schema>"#,
+    );
+    // A different prefix for the same namespace is the same value.
+    valid(
+        &s,
+        r#"<pick xmlns="urn:example" xmlns:x="urn:codes">x:alpha</pick>"#,
+    );
+    valid(
+        &s,
+        r#"<pick xmlns="urn:example" xmlns:code="urn:codes">code:beta</pick>"#,
+    );
+    // The right local name in the wrong namespace is a different value.
+    invalid(
+        &s,
+        r#"<pick xmlns="urn:example" xmlns:x="urn:other">x:alpha</pick>"#,
+        DiagCode::InvalidValue,
+    );
+    // And one the schema never listed.
+    invalid(
+        &s,
+        r#"<pick xmlns="urn:example" xmlns:x="urn:codes">x:gamma</pick>"#,
+        DiagCode::InvalidValue,
+    );
+}
+
+/// An unprefixed literal takes the schema's *default* namespace — which is
+/// the shape the NIST QName tests use, and is not the same as no namespace.
+#[test]
+fn an_unprefixed_qname_literal_takes_the_schemas_default_namespace() {
+    let s = from_xsd(
+        r#"<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema"
+                      xmlns="urn:example" xmlns:tns="urn:example"
+                      targetNamespace="urn:example" elementFormDefault="qualified">
+             <xs:simpleType name="Code">
+               <xs:restriction base="xs:QName">
+                 <xs:enumeration value="alpha"/>
+               </xs:restriction>
+             </xs:simpleType>
+             <xs:element name="pick" type="tns:Code"/>
+           </xs:schema>"#,
+    );
+    valid(&s, r#"<pick xmlns="urn:example">alpha</pick>"#);
+    // No default namespace in the document, so this `alpha` is in no
+    // namespace and is a different value from the schema's.
+    invalid(
+        &s,
+        r#"<t:pick xmlns:t="urn:example">alpha</t:pick>"#,
+        DiagCode::InvalidValue,
+    );
+}
+
+/// The binding nearest the literal wins, which is why these are kept per
+/// facet set rather than once per schema document.
+#[test]
+fn a_qname_literal_uses_the_binding_nearest_it() {
+    let s = from_xsd(
+        r#"<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema"
+                      xmlns:code="urn:outer" xmlns:tns="urn:example"
+                      targetNamespace="urn:example" elementFormDefault="qualified">
+             <xs:simpleType name="Code">
+               <xs:restriction base="xs:QName" xmlns:code="urn:inner">
+                 <xs:enumeration value="code:alpha"/>
+               </xs:restriction>
+             </xs:simpleType>
+             <xs:element name="pick" type="tns:Code"/>
+           </xs:schema>"#,
+    );
+    valid(
+        &s,
+        r#"<pick xmlns="urn:example" xmlns:x="urn:inner">x:alpha</pick>"#,
+    );
+    invalid(
+        &s,
+        r#"<pick xmlns="urn:example" xmlns:x="urn:outer">x:alpha</pick>"#,
+        DiagCode::InvalidValue,
+    );
+}
+
+/// A list's enumeration literal is a whole list, so each item resolves
+/// separately — and still against the schema.
+#[test]
+fn a_qname_list_enumeration_resolves_every_item() {
+    let s = from_xsd(
+        r#"<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema"
+                      xmlns:a="urn:a" xmlns:b="urn:b" xmlns:tns="urn:example"
+                      targetNamespace="urn:example" elementFormDefault="qualified">
+             <xs:simpleType name="Names">
+               <xs:list itemType="xs:QName"/>
+             </xs:simpleType>
+             <xs:simpleType name="Pair">
+               <xs:restriction base="tns:Names">
+                 <xs:enumeration value="a:one b:two"/>
+               </xs:restriction>
+             </xs:simpleType>
+             <xs:element name="pick" type="tns:Pair"/>
+           </xs:schema>"#,
+    );
+    valid(
+        &s,
+        r#"<pick xmlns="urn:example" xmlns:p="urn:a" xmlns:q="urn:b">p:one q:two</pick>"#,
+    );
+    // Both items in one namespace is a different list.
+    invalid(
+        &s,
+        r#"<pick xmlns="urn:example" xmlns:p="urn:a">p:one p:two</pick>"#,
+        DiagCode::InvalidValue,
+    );
+}
+
+/// A prefixed literal is no longer reported as an invalid facet value.
+#[test]
+fn a_prefixed_qname_enumeration_literal_is_not_a_schema_error() {
+    let xsd = r#"<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema"
+                      xmlns:code="urn:codes" xmlns:tns="urn:example"
+                      targetNamespace="urn:example">
+             <xs:simpleType name="Code">
+               <xs:restriction base="xs:QName">
+                 <xs:enumeration value="code:alpha"/>
+               </xs:restriction>
+             </xs:simpleType>
+           </xs:schema>"#;
+    let (_, diags) = SchemaSetBuilder::new()
+        .text(xsd.to_string(), "mem://qname.xsd")
+        .build_with_warnings();
+    assert!(!diags.has_errors(), "{diags}");
+}
+
+// ---------------------------------------------------------------------------
 // Values
 // ---------------------------------------------------------------------------
 

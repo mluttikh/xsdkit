@@ -46,21 +46,21 @@ the list is short enough to be worked through.
 
 | | |
 |---|---|
-| valid documents accepted | **98.1%** (11,683 / 11,907) |
+| valid documents accepted | **98.3%** (11,708 / 11,907) |
 | invalid documents rejected | **94.6%** (9,146 / 9,668) |
-| overall correct | **96.5%** (20,829 / 21,575) |
+| overall correct | **96.7%** (20,854 / 21,575) |
 
 Here the two rows are much closer, because validating a document against a
 model you already built is the part that is finished.
 
-The 224 remaining false alarms are not 224 separate bugs. Grouped by the
+The 199 remaining false alarms are not 199 separate bugs. Grouped by the
 diagnostic we wrongly emit:
 
 | Diagnostic | Documents | Cause |
 |---|---|---|
 | `XSD2005` attribute not allowed | 112 | `xlink:href`, because the suite's own catalogue schema imports `xlink.xsd` over the network and we refuse to fetch it |
-| `XSD2004` invalid value | 55 | `xs:enumeration` over QNames, which needs the *schema*'s namespace bindings rather than the document's |
 | `XSD2002` unexpected element | 35 | Content-model mismatches, not yet traced to a single rule |
+| `XSD2004` invalid value | 30 | A mixed bag; the largest group is an empty `xs:ID`, which is not an `NCName` and which we may be right to reject |
 | five other codes | 22 | A long tail — at most six documents each |
 
 The first is not a defect at all: `schemaLocation` is a hint, network fetching

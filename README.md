@@ -246,11 +246,11 @@ need a conformance checker, use Xerces or Saxon; if you need to read a schema
 that already works, this is built for that.
 
 Document validation is the other half of the suite — 21,575 scored cases,
-96.5% correct:
+96.7% correct:
 
 | | |
 |---|---|
-| valid documents accepted | **98.1%** (11,683 / 11,907) |
+| valid documents accepted | **98.3%** (11,708 / 11,907) |
 | invalid documents rejected | **94.6%** (9,146 / 9,668) |
 
 ```bash
