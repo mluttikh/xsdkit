@@ -164,6 +164,18 @@ cannot express this.
   one argument.
 - **The `xml:` prefix is bound implicitly**, and `xml:lang`/`space`/`base`/`id`
   are predeclared. A schema must not need to fetch `xml.xsd`.
+- **Facets under a `simpleContent` restriction declare a type of their own.**
+  Written with no `xs:simpleType` wrapper, they narrow the base's simple type,
+  so the loader builds an anonymous simple type for them. Its base is what the
+  *complex* base validates against, which is not known until the simple-content
+  chain can be walked — so these wait in `Loader::simple_content_facets` and
+  `resolve_simple_content` fills them in before its own walk. Reading them as
+  nothing, which is what used to happen, made the whole restriction do nothing.
+- **`read_facets` is shared by both restriction shapes.** A `simpleContent`
+  one legitimately carries `xs:attribute`, `xs:attributeGroup`,
+  `xs:anyAttribute` and `xs:assert` beside its facets. `not_a_facet` is the
+  single list of those; it is consulted twice in that function, and extending
+  only one of the two turns a legal attribute into an invalid-value error.
 - **Attribute wildcards combine two ways, in opposite directions.** Those
   arriving from `xs:attributeGroup` references are **intersected** into the
   type's own — an attribute must satisfy every wildcard that reached the type.
@@ -256,7 +268,7 @@ crate:
 | | |
 |---|---|
 | valid schemas accepted | **99.7%** — it reads real schemas |
-| invalid schemas rejected | **61.7%** — partial: see `src/restriction.rs` |
+| invalid schemas rejected | **64.4%** — partial: see `src/restriction.rs` |
 
 That asymmetry is by construction, not neglect: the Schema Component
 Constraints and the Derivation Valid rules are largely unimplemented (see §7).

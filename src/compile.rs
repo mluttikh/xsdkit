@@ -703,6 +703,36 @@ fn effective_wildcard(
 /// Points a `simpleContent` complex type at the simple type it validates
 /// character data against, which is its base's.
 fn resolve_simple_content(l: &mut Loader<'_>) {
+    // A restriction that narrowed its base with facets built an anonymous
+    // simple type for them, whose base is whatever the *complex* base
+    // validates against. That is only knowable once the chain can be walked,
+    // which is here — and the walk must not see these types half-built, so
+    // they are filled in first.
+    for (anon, owner) in std::mem::take(&mut l.simple_content_facets) {
+        let base_of_owner = match l.types.get(owner.0) {
+            TypeDefinition::Complex(c) => c.base,
+            TypeDefinition::Simple(_) => continue,
+        };
+        let resolved = simple_content_of(l, base_of_owner);
+        // A restriction of a list or union is still one, so the variety and
+        // its members come from the type being restricted.
+        let inherited = match l.types.get(resolved.0) {
+            TypeDefinition::Simple(t) => {
+                Some((t.variety, t.item_type, t.member_types.clone(), t.primitive))
+            }
+            TypeDefinition::Complex(_) => None,
+        };
+        if let TypeDefinition::Simple(t) = l.types.get_mut(anon.0) {
+            t.base = resolved;
+            if let Some((variety, item, members, primitive)) = inherited {
+                t.variety = variety;
+                t.item_type = item;
+                t.member_types = members;
+                t.primitive = primitive;
+            }
+        }
+    }
+
     for i in 0..l.types.len() as u32 {
         let (needs, base) = match l.types.get(i) {
             TypeDefinition::Complex(c) => match c.content {

@@ -250,6 +250,84 @@ fn boolean_schema_attributes_accept_the_numeric_spelling() {
 }
 
 // ---------------------------------------------------------------------------
+// simpleContent restrictions
+// ---------------------------------------------------------------------------
+
+/// Facets written straight under a `simpleContent` restriction, with no
+/// `xs:simpleType` wrapper, declare the type the content is validated
+/// against. Dropping them made the whole restriction do nothing.
+fn narrowed_simple_content() -> Schemas {
+    schema(
+        r#"<xs:complexType name="Base">
+             <xs:simpleContent><xs:extension base="xs:string">
+               <xs:attribute name="k" type="xs:string"/>
+             </xs:extension></xs:simpleContent>
+           </xs:complexType>
+           <xs:complexType name="Code">
+             <xs:simpleContent>
+               <xs:restriction base="tns:Base">
+                 <xs:maxLength value="3"/>
+                 <xs:attribute name="k" type="xs:string"/>
+               </xs:restriction>
+             </xs:simpleContent>
+           </xs:complexType>
+           <xs:element name="e" type="tns:Code"/>"#,
+    )
+}
+
+#[test]
+fn facets_on_a_simple_content_restriction_are_enforced() {
+    let s = narrowed_simple_content();
+    valid(&s, r#"<e xmlns="urn:example">abc</e>"#);
+    invalid(
+        &s,
+        r#"<e xmlns="urn:example">abcdefgh</e>"#,
+        DiagCode::InvalidValue,
+    );
+}
+
+/// And the attributes still come through — the restriction narrows the value
+/// space without discarding everything else about the type.
+#[test]
+fn a_narrowed_simple_content_keeps_its_attributes() {
+    let s = narrowed_simple_content();
+    valid(&s, r#"<e xmlns="urn:example" k="v">ab</e>"#);
+    let mut typed = Vec::new();
+    s.instance_validator()
+        .validate_with(r#"<e xmlns="urn:example">ab</e>"#, |ev| {
+            if let PsviEvent::Text { value: Some(v), .. } = ev {
+                typed.push(v);
+            }
+        });
+    assert_eq!(typed, vec![Value::String("ab".into())]);
+}
+
+/// An enumeration there behaves the same way.
+#[test]
+fn an_enumeration_on_a_simple_content_restriction_is_enforced() {
+    let s = schema(
+        r#"<xs:complexType name="Base">
+             <xs:simpleContent><xs:extension base="xs:string"/></xs:simpleContent>
+           </xs:complexType>
+           <xs:complexType name="Pick">
+             <xs:simpleContent>
+               <xs:restriction base="tns:Base">
+                 <xs:enumeration value="red"/>
+                 <xs:enumeration value="green"/>
+               </xs:restriction>
+             </xs:simpleContent>
+           </xs:complexType>
+           <xs:element name="p" type="tns:Pick"/>"#,
+    );
+    valid(&s, r#"<p xmlns="urn:example">red</p>"#);
+    invalid(
+        &s,
+        r#"<p xmlns="urn:example">blue</p>"#,
+        DiagCode::InvalidValue,
+    );
+}
+
+// ---------------------------------------------------------------------------
 // Attribute wildcards
 // ---------------------------------------------------------------------------
 

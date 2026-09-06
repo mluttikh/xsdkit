@@ -295,6 +295,13 @@ pub(crate) struct Loader<'r> {
     /// True while reading the children of a `redefine`/`override`, where a
     /// name colliding with the included document's is the whole point.
     in_redefine: bool,
+    /// Anonymous simple types built for the facets on a `simpleContent`
+    /// restriction, paired with the complex type that owns each.
+    ///
+    /// Their base is the *base complex type's* simple content, which is not
+    /// known until `resolve_simple_content` has walked the chain — too late
+    /// for the ordinary fixup pass, so they wait here instead.
+    pub(crate) simple_content_facets: Vec<(TypeId, TypeId)>,
 }
 
 const MAX_DEPTH: usize = 64;
@@ -331,6 +338,7 @@ impl<'r> Loader<'r> {
             version: Version::default(),
             predeclared: FxHashSet::default(),
             in_redefine: false,
+            simple_content_facets: Vec::new(),
         };
         l.install_builtins();
         l.install_xml_attributes();
@@ -1602,7 +1610,7 @@ impl<'r> Loader<'r> {
                 "assertion" => Some(Facet::Assertion(
                     c.attribute("test").unwrap_or_default().to_string(),
                 )),
-                "annotation" | "simpleType" => None,
+                n if not_a_facet(n) => None,
                 other => {
                     self.diags.push(
                         Diagnostic::warning(
@@ -1616,7 +1624,7 @@ impl<'r> Loader<'r> {
             };
             match facet {
                 Some(f) => out.push(f),
-                None if matches!(c.tag_name().name(), "annotation" | "simpleType") => {}
+                None if not_a_facet(c.tag_name().name()) => {}
                 None => {
                     let n = c.tag_name().name();
                     self.diags.push(
@@ -1765,7 +1773,39 @@ impl<'r> Loader<'r> {
             });
             match inline {
                 Some(c) => ContentType::Simple(self.read_simple_type(c, ctx, false)),
-                None => ContentType::Simple(TypeId::PLACEHOLDER),
+                // A restriction may narrow the base's simple type with facets
+                // written straight under it, with no `xs:simpleType` wrapper.
+                // That declares a new simple type whose base is the one being
+                // restricted — and dropping the facets, as this used to,
+                // makes the whole restriction do nothing.
+                None => {
+                    let step = derivation_node
+                        .filter(|d| d.tag_name().name() == "restriction")
+                        .map(|d| self.read_facets(d, ctx));
+                    match step {
+                        Some((facets, namespaces)) if !facets.is_empty() => {
+                            let mut set = FacetSet::new().restrict(&facets);
+                            set.namespaces = namespaces;
+                            let anon =
+                                TypeId(self.types.push(TypeDefinition::Simple(SimpleType {
+                                    name: None,
+                                    base: TypeId::PLACEHOLDER,
+                                    variety: Variety::Atomic,
+                                    primitive: None,
+                                    builtin: None,
+                                    item_type: None,
+                                    member_types: Vec::new(),
+                                    facets: set,
+                                    final_: DerivationSet::default(),
+                                    annotation: None,
+                                    span: span.clone(),
+                                })));
+                            self.simple_content_facets.push((anon, id));
+                            ContentType::Simple(anon)
+                        }
+                        _ => ContentType::Simple(TypeId::PLACEHOLDER),
+                    }
+                }
             }
         } else {
             match particle {
@@ -2667,6 +2707,18 @@ impl LineIndex {
 
 fn line_of(ctx: &DocCtx, node: roxmltree::Node) -> u32 {
     ctx.lines.line(node.range().start)
+}
+
+/// Children that may sit beside facets without being one.
+///
+/// `xs:simpleType` under a `simpleType` restriction, and the attribute
+/// machinery and `xs:assert` under a `simpleContent` one — which shares this
+/// reader, and whose children are otherwise identical.
+fn not_a_facet(name: &str) -> bool {
+    matches!(
+        name,
+        "annotation" | "simpleType" | "attribute" | "attributeGroup" | "anyAttribute" | "assert"
+    )
 }
 
 /// An `xs:boolean` attribute, read the way the datatype says.

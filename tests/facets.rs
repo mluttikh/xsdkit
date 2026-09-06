@@ -445,3 +445,31 @@ fn the_composed_range_must_hold_something() {
         1
     );
 }
+
+/// A facet may be declared once per restriction step — including on a
+/// `simpleContent` restriction, whose facets used to be read by nothing at
+/// all and so could not collide.
+#[test]
+fn a_repeated_facet_under_simple_content_is_reported() {
+    let xsd = r#"<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema"
+                   xmlns:tns="urn:example" targetNamespace="urn:example">
+        <xs:complexType name="Base">
+          <xs:simpleContent><xs:extension base="xs:string"/></xs:simpleContent>
+        </xs:complexType>
+        <xs:complexType name="T">
+          <xs:simpleContent>
+            <xs:restriction base="tns:Base">
+              <xs:maxLength value="2"/>
+              <xs:maxLength value="2"/>
+            </xs:restriction>
+          </xs:simpleContent>
+        </xs:complexType>
+      </xs:schema>"#;
+    let (_, d) = SchemaSetBuilder::new()
+        .text(xsd.to_string(), "mem://sc.xsd")
+        .build_with_warnings();
+    assert!(
+        d.errors().any(|e| e.code == DiagCode::ConflictingFacets),
+        "expected a duplicate-facet report, got:\n{d}"
+    );
+}
