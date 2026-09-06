@@ -139,7 +139,8 @@ report.tree()          # or print(...); it renders in a notebook either way
 
 report["item"]["price"].type.qname   # walk by name, no `.type` hop
 [child.local_name for child in report]
-report.repeats(report["item"])       # occurrence belongs to the pair
+report["item"].repeats               # occurrence belongs to the pair,
+report["item"]["note"].optional      # and a child carries its own
 
 len(schemas)                         # globals this schema declares
 "{urn:example}report" in schemas     # a mapping: dict(schemas) works too

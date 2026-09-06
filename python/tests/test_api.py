@@ -99,9 +99,16 @@ def test_children_repeat_and_optionality():
     kids = {c.local_name: c for c in t.children}
     assert set(kids) == {"required", "many", "maybe"}
 
-    assert not t.repeats(kids["required"]) and not t.optional(kids["required"])
-    assert t.repeats(kids["many"])
-    assert t.optional(kids["maybe"]) and not t.repeats(kids["maybe"])
+    # A child carries its own occurrence: it is a fact about this pair, and
+    # asking the parent about it separately walked the content model again.
+    assert not kids["required"].repeats and not kids["required"].optional
+    assert kids["many"].repeats
+    assert kids["maybe"].optional and not kids["maybe"].repeats
+
+    # And everything the declaration answers, it answers too.
+    assert kids["many"].type.qname == f"{{{XS}}}string"
+    assert kids["many"].qname == f"{{{NS}}}many"
+    assert kids["many"].element == s.type(NS, "T").children[1].element
     assert t.content == "element-only"
     assert t.content_model == "automaton"
 
@@ -248,8 +255,8 @@ def test_the_schema_for_schemas_is_queryable(schema_for_schemas):
 
     keybase = s.type(XS, "keybase")
     kids = {c.local_name: c for c in keybase.children}
-    assert not keybase.optional(kids["selector"])
-    assert keybase.repeats(kids["field"])
+    assert not kids["selector"].optional
+    assert kids["field"].repeats
     assert keybase.accepts([f"{{{XS}}}selector", f"{{{XS}}}field"])
     assert not keybase.accepts([f"{{{XS}}}field"])
 
@@ -429,9 +436,12 @@ def test_browsing_needs_no_index_arithmetic():
     with pytest.raises(KeyError):
         report["nope"]
 
-    # Occurrence is still a fact about the pair, not the child.
-    assert report.repeats(report["item"])
-    assert report["item"].optional(report["item"]["note"])
+    # Occurrence is a fact about the pair, and a child knows its own.
+    assert report["item"].repeats
+    assert report["item"]["note"].optional
+    # The same declaration under a different parent may say something else,
+    # which is why the flags live on the child and not on the element.
+    assert report["item"].element != report["item"]
 
     # `types` yields types, not pairs.
     assert all(hasattr(t, "is_simple") for t in s.types)
@@ -607,3 +617,65 @@ def test_markup_from_a_schema_cannot_escape_into_the_page(rich):
         html = _html(obj)
         assert "urn:a&amp;b" in html
         assert "urn:a&b<" not in html
+
+
+def test_a_child_is_an_element_that_knows_where_it_is():
+    s = build(
+        '<xs:complexType name="T"><xs:sequence>'
+        '<xs:element name="one" type="xs:string" maxOccurs="unbounded"/>'
+        "</xs:sequence></xs:complexType>"
+        '<xs:element name="e" type="tns:T"/>'
+    )
+    e = s.element(NS, "e")
+    (child,) = e.children
+
+    # Everything the declaration answers.
+    assert child.local_name == "one"
+    assert child.qname == f"{{{NS}}}one"
+    assert child.namespace == NS
+    assert child.type.qname == f"{{{XS}}}string"
+    assert child.is_global is False
+    assert child.nillable is False and child.abstract is False
+    assert child.default is None and child.fixed is None
+    assert child.children == [] and child.attributes == []
+    assert len(child) == 0
+    assert list(child) == []
+
+    # Plus where it is.
+    assert child.repeats and not child.optional
+    assert "one+" in repr(child)
+
+    # Iteration, subscripting and `children` all agree.
+    assert list(e) == e.children == [child]
+    assert e["one"] == child
+    assert child == e.children[0]
+
+    # The declaration underneath is reachable, and is deliberately a
+    # different thing: it has no parent to have occurrence in.
+    assert child.element.local_name == "one"
+    assert child.element != child
+
+
+def test_a_substitution_group_member_is_optional():
+    """Its sibling may stand in its place, so no content requires it.
+
+    A single position in the content model admits every member of the group,
+    and treating that position as the element made each member look required
+    even though a document naming only the other one validates.
+    """
+    s = build(
+        '<xs:element name="shape" type="xs:string" abstract="true"/>'
+        '<xs:element name="circle" type="xs:string" substitutionGroup="tns:shape"/>'
+        '<xs:element name="square" type="xs:string" substitutionGroup="tns:shape"/>'
+        '<xs:complexType name="T"><xs:sequence>'
+        '<xs:element ref="tns:shape"/>'
+        "</xs:sequence></xs:complexType>"
+        '<xs:element name="e" type="tns:T"/>'
+    )
+    e = s.element(NS, "e")
+    kids = {c.local_name: c for c in e.children}
+    assert set(kids) == {"circle", "square"}, "the abstract head cannot appear"
+    assert all(c.optional for c in kids.values())
+
+    # And the validator agrees, which is the point.
+    assert s.validate(f'<e xmlns="{NS}"><circle>o</circle></e>').is_valid

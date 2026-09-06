@@ -27,6 +27,8 @@ Everything importable from `xsdkit`. Types come from the shipped stubs, so
 
 ::: xsdkit.Element
 
+::: xsdkit.Child
+
 ::: xsdkit.Type
 
 ::: xsdkit.Attribute
@@ -67,6 +69,6 @@ Everything importable from `xsdkit`. Types come from the shipped stubs, so
 
 ::: xsdkit.Tree
 
-::: xsdkit.ElementIterator
+::: xsdkit.ChildIterator
 
 ::: xsdkit.NameIterator

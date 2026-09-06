@@ -1078,7 +1078,7 @@ impl PyElement {
     /// children are its type's, and browsing a schema should not have to say
     /// so at every level. Empty for a simple type.
     #[getter]
-    fn children(&self) -> Vec<PyElement> {
+    fn children(&self) -> Vec<PyChild> {
         self.r#type().children()
     }
 
@@ -1097,34 +1097,16 @@ impl PyElement {
     /// browsing a schema should look like. A Clark-notation or
     /// `(namespace, local)` name resolves exactly, for the case where it is
     /// not.
-    fn __getitem__(&self, name: &Bound<'_, PyAny>) -> PyResult<PyElement> {
-        let wanted: Option<String> = name.extract().ok();
-        let children = self.children();
-        // Exact first: a local name that happens to look like a full one
-        // should not be second-guessed.
-        if let Ok(Some(q)) = parse_name(&self.s, name) {
-            if let Some(c) = children.iter().find(|c| self.s[c.id].name == q) {
-                return Ok(c.clone());
-            }
-        }
-        if let Some(w) = &wanted {
-            if let Some(c) = children.iter().find(|c| &c.local_name() == w) {
-                return Ok(c.clone());
-            }
-        }
-        Err(pyo3::exceptions::PyKeyError::new_err(format!(
-            "{} has no child {}",
-            self.qname(),
-            name.repr()?
-        )))
+    fn __getitem__(&self, name: &Bound<'_, PyAny>) -> PyResult<PyChild> {
+        pick_child(&self.s, self.children(), name, &self.qname())
     }
 
     /// Iterates the children, so `for child in element` reads.
-    fn __iter__(&self) -> PyResult<Py<PyElementIter>> {
+    fn __iter__(&self) -> PyResult<Py<PyChildIter>> {
         Python::attach(|py| {
             Py::new(
                 py,
-                PyElementIter {
+                PyChildIter {
                     items: self.children(),
                     at: 0,
                 },
@@ -1135,20 +1117,6 @@ impl PyElement {
     /// How many children this element may have, by name.
     fn __len__(&self) -> usize {
         self.children().len()
-    }
-
-    /// Whether `child` may appear here more than once.
-    ///
-    /// The same as `element.type.repeats(child)`. Occurrence belongs to the
-    /// pair, not to the child: one declaration may be used by several types
-    /// with different bounds.
-    fn repeats(&self, child: &PyElement) -> bool {
-        self.r#type().repeats(child)
-    }
-
-    /// Whether `child` may be left out.
-    fn optional(&self, child: &PyElement) -> bool {
-        self.r#type().optional(child)
     }
 
     /// Shows the tree in a notebook, where evaluating a value is how you look
@@ -1416,41 +1384,252 @@ impl PyElement {
             );
         }
         for c in &children {
-            let marker = match (t.repeats(c), t.optional(c)) {
-                (true, true) => "*",
-                (true, false) => "+",
-                (false, true) => "?",
-                (false, false) => "",
-            };
-            c.write_tree(out, html, indent + 1, left - 1, seen, marker);
+            c.element
+                .write_tree(out, html, indent + 1, left - 1, seen, occurrence_of(c));
         }
         seen.pop();
         let _ = writeln!(html, "</div></details>");
     }
 }
 
-/// Walks an element's children.
-#[pyclass(name = "ElementIterator", module = "xsdkit")]
-pub struct PyElementIter {
-    items: Vec<PyElement>,
+/// Finds the named child, accepting a local name as readily as a full one.
+///
+/// Exact first: a local name that happens to look like a Clark-notation one
+/// should not be second-guessed.
+/// The regex-style marker for how often a child may appear.
+fn occurrence_of(c: &PyChild) -> &'static str {
+    match (c.repeats, c.optional) {
+        (true, true) => "*",
+        (true, false) => "+",
+        (false, true) => "?",
+        (false, false) => "",
+    }
+}
+
+fn pick_child(
+    s: &Schemas,
+    children: Vec<PyChild>,
+    name: &Bound<'_, PyAny>,
+    owner: &str,
+) -> PyResult<PyChild> {
+    if let Ok(Some(q)) = parse_name(s, name) {
+        if let Some(c) = children.iter().find(|c| s[c.element.id].name == q) {
+            return Ok(c.clone());
+        }
+    }
+    if let Ok(w) = name.extract::<String>() {
+        if let Some(c) = children.iter().find(|c| c.element.local_name() == w) {
+            return Ok(c.clone());
+        }
+    }
+    Err(pyo3::exceptions::PyKeyError::new_err(format!(
+        "{owner} has no child {}",
+        name.repr()?
+    )))
+}
+
+/// An element as a child of one particular type.
+///
+/// Everything `Element` answers, this answers too, plus how often it may
+/// appear *here*. That pairing is the point: `maxOccurs` and `minOccurs` are
+/// written on the use, not on the declaration, so one global element may be
+/// a repeating child of one type and a required single child of another.
+///
+/// Both flags come from the same pass over the content model that produced
+/// the child list, so reading them costs nothing beyond the walk that was
+/// already done.
+#[pyclass(module = "xsdkit", name = "Child", frozen, from_py_object)]
+#[derive(Clone)]
+pub struct PyChild {
+    element: PyElement,
+    repeats: bool,
+    optional: bool,
+}
+
+#[pymethods]
+impl PyChild {
+    /// Whether it may appear more than once — the table-versus-column
+    /// question.
+    #[getter]
+    fn repeats(&self) -> bool {
+        self.repeats
+    }
+
+    /// Whether some valid content leaves it out, making a derived column
+    /// nullable.
+    #[getter]
+    fn optional(&self) -> bool {
+        self.optional
+    }
+
+    /// The declaration on its own, without this parent's occurrence.
+    ///
+    /// Rarely needed — a `Child` answers everything an `Element` does — but
+    /// it is what to compare against `SchemaSet["{ns}name"]`, which has no
+    /// parent to have occurrence in.
+    #[getter]
+    fn element(&self) -> PyElement {
+        self.element.clone()
+    }
+
+    /// `(namespace, local)`; the namespace is `None` when unqualified.
+    #[getter]
+    fn name(&self) -> (Option<String>, String) {
+        self.element.name()
+    }
+
+    /// The name in Clark notation, `{ns}local`.
+    #[getter]
+    fn qname(&self) -> String {
+        self.element.qname()
+    }
+
+    /// The local part of the name, without its namespace.
+    #[getter]
+    fn local_name(&self) -> String {
+        self.element.local_name()
+    }
+
+    /// The namespace URI, or `None` when the name is unqualified.
+    #[getter]
+    fn namespace(&self) -> Option<String> {
+        self.element.namespace()
+    }
+
+    /// The type in force for this element.
+    #[getter]
+    fn r#type(&self) -> PyType_ {
+        self.element.r#type()
+    }
+
+    /// Whether an instance may say `xsi:nil="true"` here.
+    #[getter]
+    fn nillable(&self) -> bool {
+        self.element.nillable()
+    }
+
+    /// Whether this element may not appear itself, only a substitute.
+    #[getter]
+    fn r#abstract(&self) -> bool {
+        self.element.r#abstract()
+    }
+
+    /// Whether the declaration is global rather than scoped to a type.
+    #[getter]
+    fn is_global(&self) -> bool {
+        self.element.is_global()
+    }
+
+    /// Every element that may stand in for this one. Transitive.
+    #[getter]
+    fn substitutes(&self) -> Vec<PyElement> {
+        self.element.substitutes()
+    }
+
+    /// The `default` value, supplied when the element is present but empty.
+    #[getter]
+    fn default(&self) -> Option<String> {
+        self.element.default()
+    }
+
+    /// The `fixed` value, which an instance may repeat but not contradict.
+    #[getter]
+    fn fixed(&self) -> Option<String> {
+        self.element.fixed()
+    }
+
+    /// The `xs:documentation` text, entries joined.
+    #[getter]
+    fn doc(&self) -> Option<String> {
+        self.element.doc()
+    }
+
+    /// The `xs:appinfo` blocks, with their XML kept verbatim.
+    #[getter]
+    fn appinfo(&self) -> Vec<PyAppInfo> {
+        self.element.appinfo()
+    }
+
+    /// The elements that may appear inside this child, in turn.
+    #[getter]
+    fn children(&self) -> Vec<PyChild> {
+        self.element.children()
+    }
+
+    /// The attributes this child may carry, with how it may carry them.
+    #[getter]
+    fn attributes(&self) -> Vec<PyAttributeUse> {
+        self.element.attributes()
+    }
+
+    fn __getitem__(&self, name: &Bound<'_, PyAny>) -> PyResult<PyChild> {
+        self.element.__getitem__(name)
+    }
+
+    fn __iter__(&self) -> PyResult<Py<PyChildIter>> {
+        self.element.__iter__()
+    }
+
+    fn __len__(&self) -> usize {
+        self.element.__len__()
+    }
+
+    /// The shape below this child, `depth` levels deep.
+    #[pyo3(signature = (depth = 3))]
+    fn tree(&self, depth: usize) -> PyTree {
+        self.element.tree(depth)
+    }
+
+    #[allow(non_snake_case)]
+    fn _repr_html_(&self) -> String {
+        self.element._repr_html_()
+    }
+
+    fn __repr__(&self) -> String {
+        format!(
+            "<Child {}{}{}>",
+            self.element.local_name(),
+            if self.repeats { "+" } else { "" },
+            if self.optional { "?" } else { "" },
+        )
+    }
+
+    /// Equal when it is the same declaration used the same way.
+    ///
+    /// A `Child` is deliberately not equal to the bare `Element` it wraps:
+    /// they answer different questions, and one of them knows where it is.
+    fn __eq__(&self, other: &PyChild) -> bool {
+        self.element.__eq__(&other.element)
+            && self.repeats == other.repeats
+            && self.optional == other.optional
+    }
+
+    fn __hash__(&self) -> u64 {
+        self.element.__hash__()
+    }
+}
+
+/// Walks a type's children.
+#[pyclass(name = "ChildIterator", module = "xsdkit")]
+pub struct PyChildIter {
+    items: Vec<PyChild>,
     at: usize,
 }
 
 #[pymethods]
-impl PyElementIter {
+impl PyChildIter {
     fn __iter__(slf: PyRef<'_, Self>) -> PyRef<'_, Self> {
         slf
     }
 
-    fn __next__(mut slf: PyRefMut<'_, Self>) -> Option<PyElement> {
-        let out = slf.items.get(slf.at).cloned();
+    fn __next__(mut slf: PyRefMut<'_, Self>) -> Option<PyChild> {
+        let item = slf.items.get(slf.at).cloned();
         slf.at += 1;
-        out
+        item
     }
 
-    /// How many children are left.
     fn __len__(&self) -> usize {
-        self.items.len().saturating_sub(self.at)
+        self.items.len()
     }
 }
 
@@ -1764,26 +1943,49 @@ impl PyType_ {
 
     /// Every element that may appear directly inside this type, with
     /// substitution groups expanded and inherited content included.
+    ///
+    /// Each one is a `Child`: the declaration, plus whether it may repeat and
+    /// whether it may be left out. Those two belong to the pair rather than
+    /// to the declaration — one global element may be used by several types
+    /// under different bounds — and they come from the same single pass over
+    /// the content model that found the children.
     #[getter]
-    fn children(&self) -> Vec<PyElement> {
+    fn children(&self) -> Vec<PyChild> {
         self.r()
             .children()
-            .map(|c| PyElement {
-                s: self.s.clone(),
-                id: c.id(),
+            .map(|c| PyChild {
+                element: PyElement {
+                    s: self.s.clone(),
+                    id: c.id(),
+                },
+                repeats: c.repeats(),
+                optional: c.optional(),
             })
             .collect()
     }
 
-    /// Whether `child` may appear more than once — the table-versus-column
-    /// question.
-    fn repeats(&self, child: &PyElement) -> bool {
-        self.s.child_repeats(self.id, child.id)
+    /// The child of that name, raising `KeyError` when there is none.
+    fn __getitem__(&self, name: &Bound<'_, PyAny>) -> PyResult<PyChild> {
+        let owner = self.qname().unwrap_or_else(|| "(anonymous)".into());
+        pick_child(&self.s, self.children(), name, &owner)
     }
 
-    /// Whether `child` may be absent, making a derived column nullable.
-    fn optional(&self, child: &PyElement) -> bool {
-        self.s.child_is_optional(self.id, child.id)
+    /// Iterates the children, so `for child in type` reads.
+    fn __iter__(&self) -> PyResult<Py<PyChildIter>> {
+        Python::attach(|py| {
+            Py::new(
+                py,
+                PyChildIter {
+                    items: self.children(),
+                    at: 0,
+                },
+            )
+        })
+    }
+
+    /// How many children this type may have, by name.
+    fn __len__(&self) -> usize {
+        self.children().len()
     }
 
     /// `"empty"`, `"simple"`, `"element-only"` or `"mixed"`; `None` for a
@@ -1980,13 +2182,8 @@ impl PyType_ {
         }
         let mut seen = Vec::new();
         for c in self.children() {
-            let marker = match (self.repeats(&c), self.optional(&c)) {
-                (true, true) => "*",
-                (true, false) => "+",
-                (false, true) => "?",
-                (false, false) => "",
-            };
-            c.write_tree(&mut text, &mut html, 1, depth, &mut seen, marker);
+            c.element
+                .write_tree(&mut text, &mut html, 1, depth, &mut seen, occurrence_of(&c));
         }
         PyTree { text, html }
     }
@@ -1995,46 +2192,6 @@ impl PyType_ {
     #[allow(non_snake_case)]
     fn _repr_html_(&self) -> String {
         self.tree(2)._repr_html_()
-    }
-
-    /// The child element of that name, raising `KeyError` when there is none.
-    ///
-    /// Local names are accepted, as on `Element`.
-    fn __getitem__(&self, name: &Bound<'_, PyAny>) -> PyResult<PyElement> {
-        let children = self.children();
-        if let Ok(Some(q)) = parse_name(&self.s, name) {
-            if let Some(c) = children.iter().find(|c| self.s[c.id].name == q) {
-                return Ok(c.clone());
-            }
-        }
-        if let Ok(w) = name.extract::<String>() {
-            if let Some(c) = children.iter().find(|c| c.local_name() == w) {
-                return Ok(c.clone());
-            }
-        }
-        Err(pyo3::exceptions::PyKeyError::new_err(format!(
-            "{} has no child {}",
-            self.qname().unwrap_or_else(|| "(anonymous)".into()),
-            name.repr()?
-        )))
-    }
-
-    /// Iterates the children, so `for child in type_` reads.
-    fn __iter__(&self) -> PyResult<Py<PyElementIter>> {
-        Python::attach(|py| {
-            Py::new(
-                py,
-                PyElementIter {
-                    items: self.children(),
-                    at: 0,
-                },
-            )
-        })
-    }
-
-    /// How many children this type may have, by name.
-    fn __len__(&self) -> usize {
-        self.children().len()
     }
 
     fn __repr__(&self) -> String {
@@ -2919,7 +3076,8 @@ fn xsdkit_module(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add("SchemaError", schema_error)?;
     m.add_class::<PySchemaSet>()?;
     m.add_class::<PyNameIter>()?;
-    m.add_class::<PyElementIter>()?;
+    m.add_class::<PyChild>()?;
+    m.add_class::<PyChildIter>()?;
     m.add_class::<PyTree>()?;
     m.add_class::<PyPsviEvents>()?;
     m.add_class::<PyElement>()?;

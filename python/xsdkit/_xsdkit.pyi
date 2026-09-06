@@ -195,16 +195,16 @@ class Element:
 
     def __len__(self) -> int:
         """How many children this element may have, by name."""
-    def __iter__(self) -> Iterator[Element]:
+    def __iter__(self) -> Iterator[Child]:
         """The children, so ``for child in element`` reads."""
-    def __getitem__(self, name: Name, /) -> Element:
+    def __getitem__(self, name: Name, /) -> Child:
         """The child of that name, raising ``KeyError`` when there is none.
 
         A local name is enough, since a child is almost always in its parent's
         namespace.
         """
     @property
-    def children(self) -> list[Element]:
+    def children(self) -> list[Child]:
         """Elements that may appear directly inside this one.
 
         The same as ``element.type.children``, without the hop.
@@ -212,10 +212,6 @@ class Element:
     @property
     def attributes(self) -> list[AttributeUse]:
         """The attributes this element may carry, with how it may carry them."""
-    def repeats(self, child: Element, /) -> bool:
-        """Whether ``child`` may appear here more than once."""
-    def optional(self, child: Element, /) -> bool:
-        """Whether ``child`` may be left out."""
     def _repr_html_(self) -> str:
         """Shows the tree in a notebook, shallower than ``tree()``."""
     def tree(self, depth: int = ...) -> Tree:
@@ -263,6 +259,65 @@ class Element:
     @property
     def appinfo(self) -> list[AppInfo]: ...
 
+class Child:
+    """An element as a child of one particular type.
+
+    Everything :class:`Element` answers, this answers too, plus how often it
+    may appear *here*. ``minOccurs`` and ``maxOccurs`` are written on the use
+    rather than on the declaration, so one global element may be a repeating
+    child of one type and a required single child of another::
+
+        for child in report:
+            print(child.local_name, child.repeats, child.optional)
+
+        report["item"]["note"].optional      # True
+    """
+
+    @property
+    def repeats(self) -> bool:
+        """Whether it may appear here more than once."""
+    @property
+    def optional(self) -> bool:
+        """Whether some valid content leaves it out."""
+    @property
+    def element(self) -> Element:
+        """The declaration on its own, without this parent's occurrence."""
+    @property
+    def name(self) -> tuple[str | None, str]: ...
+    @property
+    def qname(self) -> str: ...
+    @property
+    def local_name(self) -> str: ...
+    @property
+    def namespace(self) -> str | None: ...
+    @property
+    def type(self) -> Type: ...
+    @property
+    def nillable(self) -> bool: ...
+    @property
+    def abstract(self) -> bool: ...
+    @property
+    def is_global(self) -> bool: ...
+    @property
+    def substitutes(self) -> list[Element]: ...
+    @property
+    def default(self) -> str | None: ...
+    @property
+    def fixed(self) -> str | None: ...
+    @property
+    def doc(self) -> str | None: ...
+    @property
+    def appinfo(self) -> list[AppInfo]: ...
+    @property
+    def children(self) -> list[Child]: ...
+    @property
+    def attributes(self) -> list[AttributeUse]: ...
+    def __len__(self) -> int: ...
+    def __iter__(self) -> Iterator[Child]: ...
+    def __getitem__(self, name: Name, /) -> Child: ...
+    def tree(self, depth: int = ...) -> Tree: ...
+    def _repr_html_(self) -> str: ...
+
 class Type:
     """A type definition, simple or complex."""
 
@@ -271,8 +326,8 @@ class Type:
     def _repr_html_(self) -> str: ...
 
     def __len__(self) -> int: ...
-    def __iter__(self) -> Iterator[Element]: ...
-    def __getitem__(self, name: Name, /) -> Element:
+    def __iter__(self) -> Iterator[Child]: ...
+    def __getitem__(self, name: Name, /) -> Child:
         """The child element of that name, raising ``KeyError`` when absent."""
     @property
     def name(self) -> tuple[str | None, str] | None: ...
@@ -294,11 +349,9 @@ class Type:
     @property
     def attributes(self) -> list[AttributeUse]: ...
     @property
-    def children(self) -> list[Element]:
+    def children(self) -> list[Child]:
         """Elements that may appear directly inside, substitution groups
         expanded and inherited content included."""
-    def repeats(self, child: Element, /) -> bool: ...
-    def optional(self, child: Element, /) -> bool: ...
     @property
     def content(self) -> ContentKind | None: ...
     @property
@@ -415,9 +468,9 @@ class Tree:
     def splitlines(self) -> list[str]: ...
     def count(self, needle: str, /) -> int: ...
 
-class ElementIterator:
-    def __iter__(self) -> Iterator[Element]: ...
-    def __next__(self) -> Element: ...
+class ChildIterator:
+    def __iter__(self) -> Iterator[Child]: ...
+    def __next__(self) -> Child: ...
     def __len__(self) -> int: ...
 
 class NameIterator:

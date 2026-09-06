@@ -99,18 +99,24 @@ yourself from documents is where XSD tooling goes to die.
 ## Occurrence belongs to the pair
 
 How often a child may appear is a fact about the *parent and child together*,
-not about the child, because the same declaration can be referenced with
-different occurrence constraints in different places.
+not about the declaration, because the same element can be referenced with
+different occurrence constraints in different places. So subscripting or
+iterating a parent gives a `Child`: the declaration, plus how it may appear
+*here*. A `Child` answers everything an `Element` does, and `child.element`
+gets the bare declaration back.
 
 === "Python"
 
     ```python
     item = report["item"]
 
-    report.repeats(item)             # True  — maxOccurs="unbounded"
-    report.optional(item)            # False — minOccurs defaults to 1
+    item.repeats                     # True  — maxOccurs="unbounded"
+    item.optional                    # False — minOccurs defaults to 1
 
-    item.optional(item["note"])      # True  — minOccurs="0"
+    item["note"].optional            # True  — minOccurs="0"
+
+    for child in report:
+        print(child.local_name, child.repeats, child.optional)
     ```
 
 === "Rust"
