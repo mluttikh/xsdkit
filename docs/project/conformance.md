@@ -46,23 +46,22 @@ the list is short enough to be worked through.
 
 | | |
 |---|---|
-| valid documents accepted | **97.8%** (11,644 / 11,907) |
-| invalid documents rejected | **94.6%** (9,145 / 9,668) |
-| overall correct | **96.4%** (20,789 / 21,575) |
+| valid documents accepted | **98.1%** (11,683 / 11,907) |
+| invalid documents rejected | **94.6%** (9,146 / 9,668) |
+| overall correct | **96.5%** (20,829 / 21,575) |
 
 Here the two rows are much closer, because validating a document against a
 model you already built is the part that is finished.
 
-The 263 remaining false alarms are not 263 separate bugs. Grouped by cause:
+The 224 remaining false alarms are not 224 separate bugs. Grouped by the
+diagnostic we wrongly emit:
 
-| Cause | Documents |
-|---|---|
-| `xlink:href` undeclared, because the suite's own catalogue schema imports `xlink.xsd` over the network and we refuse to fetch it | 112 |
-| `xsi:type` prefix resolution | 41 |
-| `xs:all` content matching | 35 |
-| `xs:enumeration` over QNames, which needs the *schema*'s namespace bindings rather than the document's | 25 |
-| Character data in element-only content | 11 |
-| Scattered | ~39 |
+| Diagnostic | Documents | Cause |
+|---|---|---|
+| `XSD2005` attribute not allowed | 112 | `xlink:href`, because the suite's own catalogue schema imports `xlink.xsd` over the network and we refuse to fetch it |
+| `XSD2004` invalid value | 55 | `xs:enumeration` over QNames, which needs the *schema*'s namespace bindings rather than the document's |
+| `XSD2002` unexpected element | 35 | Content-model mismatches, not yet traced to a single rule |
+| five other codes | 22 | A long tail — at most six documents each |
 
 The first is not a defect at all: `schemaLocation` is a hint, network fetching
 is off by default (see [Security](security.md)), and a processor is expected

@@ -173,7 +173,8 @@ cargo run --example inspect -- schemas/report.xsd --lax
   `keyref` → `key`.
 - **Instance validation** in one streaming pass over `quick-xml`, with a
   typed PSVI: values arrive as `Value::Integer(42)`, not `"42"`. Handles
-  `xsi:type`, `xsi:nil`, substitution groups and wildcards.
+  `xsi:type` — prefix, derivation, `block` and abstractness — `xsi:nil`,
+  substitution groups and wildcards.
 - **Content models** compiled to Glushkov position automata, with
   **Unique Particle Attribution** checking falling out of the same structure.
   Extension appends to the base's content; restriction replaces it.
@@ -244,13 +245,13 @@ constraints*, so a schema it accepts is not thereby a valid schema. If you
 need a conformance checker, use Xerces or Saxon; if you need to read a schema
 that already works, this is built for that.
 
-Document validation is the other half of the suite — 21,565 scored cases,
-95.3% correct:
+Document validation is the other half of the suite — 21,575 scored cases,
+96.5% correct:
 
 | | |
 |---|---|
-| valid documents accepted | **97.8%** (11,644 / 11,907) |
-| invalid documents rejected | **94.6%** (9,145 / 9,668) |
+| valid documents accepted | **98.1%** (11,683 / 11,907) |
+| invalid documents rejected | **94.6%** (9,146 / 9,668) |
 
 ```bash
 git clone --depth 1 https://github.com/w3c/xsdtests /tmp/xsdtests

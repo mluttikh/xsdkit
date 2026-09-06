@@ -697,7 +697,7 @@ impl<'r> Loader<'r> {
         {
             let span = Span::new(&ctx.uri, line_of(&ctx, n));
             self.require_xsd11("defaultOpenContent", &span);
-            ctx.default_open_applies_to_empty = n.attribute("appliesToEmpty") == Some("true");
+            ctx.default_open_applies_to_empty = flag(n, "appliesToEmpty");
             ctx.default_open_content = self.read_open_content(n, &ctx);
         }
         ctx
@@ -1081,8 +1081,8 @@ impl<'r> Loader<'r> {
                 name,
                 type_id: TypeId::PLACEHOLDER,
                 scope,
-                nillable: node.attribute("nillable") == Some("true"),
-                is_abstract: node.attribute("abstract") == Some("true"),
+                nillable: flag(node, "nillable"),
+                is_abstract: flag(node, "abstract"),
                 substitution_group: Vec::new(),
                 value_constraint: value_constraint(node),
                 block: node
@@ -1629,7 +1629,7 @@ impl<'r> Loader<'r> {
         let name = global
             .then(|| self.qualified_name(node.attribute("name").unwrap_or_default(), true, ctx));
         let annotation = self.read_annotation(node, ctx);
-        let mixed_attr = node.attribute("mixed") == Some("true");
+        let mixed_attr = flag(node, "mixed");
 
         let id = TypeId(
             self.types.push(TypeDefinition::Complex(ComplexType {
@@ -1641,7 +1641,7 @@ impl<'r> Loader<'r> {
                 attribute_group_refs: Vec::new(),
                 attribute_wildcard: None,
                 open_content: None,
-                is_abstract: node.attribute("abstract") == Some("true"),
+                is_abstract: flag(node, "abstract"),
                 block: node
                     .attribute("block")
                     .map(DerivationSet::parse)
@@ -1675,10 +1675,7 @@ impl<'r> Loader<'r> {
         let simple_content = content_wrapper
             .map(|w| w.tag_name().name() == "simpleContent")
             .unwrap_or(false);
-        let mixed = mixed_attr
-            || content_wrapper
-                .map(|w| w.attribute("mixed") == Some("true"))
-                .unwrap_or(false);
+        let mixed = mixed_attr || content_wrapper.map(|w| flag(w, "mixed")).unwrap_or(false);
 
         // The node whose children hold particles and attribute uses: the
         // extension/restriction when derived, else the complexType itself.
@@ -2518,6 +2515,16 @@ impl LineIndex {
 
 fn line_of(ctx: &DocCtx, node: roxmltree::Node) -> u32 {
     ctx.lines.line(node.range().start)
+}
+
+/// An `xs:boolean` attribute, read the way the datatype says.
+///
+/// Its lexical space is `true`, `false`, `1` and `0`, and the value is
+/// whitespace-collapsed before it is looked at — so `mixed="1"` means exactly
+/// what `mixed="true"` means. Comparing against `"true"` alone silently drops
+/// the other spelling, which the W3C suite uses.
+fn flag(node: roxmltree::Node, name: &str) -> bool {
+    matches!(node.attribute(name).map(str::trim), Some("true" | "1"))
 }
 
 fn value_constraint(node: roxmltree::Node) -> Option<ValueConstraint> {

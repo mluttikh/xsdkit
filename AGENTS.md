@@ -158,6 +158,24 @@ cannot express this.
   one argument.
 - **The `xml:` prefix is bound implicitly**, and `xml:lang`/`space`/`base`/`id`
   are predeclared. A schema must not need to fetch `xml.xsd`.
+- **An `xs:boolean` attribute has four spellings.** `mixed`, `nillable`,
+  `abstract`, `appliesToEmpty` and `xsi:nil` all take `true`, `false`, `1` and
+  `0`, and the value is whitespace-collapsed first. Read them with `flag()` in
+  `load.rs`, never `== Some("true")` — the W3C suite writes `mixed="1"`, and
+  comparing against one spelling turned a mixed content model into an
+  element-only one.
+- **Mixedness is inherited through a vacuous extension.** An
+  `<xs:extension>` whose own content is empty takes the base's content type
+  whole, so a type that adds only attributes to a mixed base is mixed without
+  saying so. `Schemas::content_is_mixed` walks for it; restriction states its
+  content in full, so the walk stops there — the same rule the effective
+  particles follow.
+- **`xsi:type` is subject to `block`, and the block reaches the whole chain.**
+  The element declaration's `block` and the declared type's, unioned, forbid
+  the named derivation method at *every* step from the chosen type up to the
+  declared one — `block="extension"` stops a restriction of an extension of
+  that type, not just a direct extension. An abstract type cannot be the type
+  in force at all, whether declared or chosen.
 - **Redeclaring a built-in is not a duplicate-global error.** The
   schema-for-schemas declares all 50; ours win so `Schemas::builtin` stays a
   stable handle.
@@ -228,8 +246,8 @@ is fifty cases one rule buys.
 
 The instance half — 21,671 documents — is `#[ignore]`d because it takes
 minutes where the schema half takes seconds (4.5 minutes in `--release`; run
-it that way). Run it with `-- --ignored`. It scores 21,565 of them, 95.3%
-correct: **95.8%** of valid documents accepted, **94.6%** of invalid ones
+it that way). Run it with `-- --ignored`. It scores 21,575 of them, 96.5%
+correct: **98.1%** of valid documents accepted, **94.6%** of invalid ones
 rejected.
 
 That first figure was 88.1% until a one-line bug turned up: an *enumeration on

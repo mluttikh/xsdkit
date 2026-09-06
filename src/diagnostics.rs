@@ -160,6 +160,10 @@ pub enum DiagCode {
     InvalidXsiType,
     /// An element marked `xsi:nil="true"` is not empty.
     NilElementNotEmpty,
+    /// The type in force for an element is abstract, so no element may be
+    /// validated against it — an `xsi:type` naming a concrete derivation is
+    /// what an abstract type is for.
+    AbstractType,
 }
 
 impl DiagCode {
@@ -204,6 +208,7 @@ impl DiagCode {
             DiagCode::UnexpectedText => "XSD2007",
             DiagCode::InvalidXsiType => "XSD2008",
             DiagCode::NilElementNotEmpty => "XSD2009",
+            DiagCode::AbstractType => "XSD2010",
         }
     }
 }
@@ -377,6 +382,7 @@ mod tests {
             DiagCode::UnexpectedText,
             DiagCode::InvalidXsiType,
             DiagCode::NilElementNotEmpty,
+            DiagCode::AbstractType,
         ];
         let mut seen = std::collections::HashSet::new();
         for c in all {

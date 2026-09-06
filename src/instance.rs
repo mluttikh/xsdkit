@@ -26,7 +26,7 @@ use crate::diagnostics::{DiagCode, Diagnostic, Diagnostics, Span};
 use crate::model::*;
 use crate::names::{QName, XSI};
 use crate::validate::Validator;
-use crate::values::Value;
+use crate::values::{Namespaces, Value};
 use quick_xml::NsReader;
 use quick_xml::events::Event;
 use quick_xml::name::ResolveResult;
@@ -189,7 +189,7 @@ struct Run<'a, 'b, S: FnMut(PsviEvent)> {
 /// A borrowed view of the open elements' namespace declarations.
 struct Scopes<'s>(&'s [Vec<(Option<String>, String)>]);
 
-impl crate::values::Namespaces for Scopes<'_> {
+impl Namespaces for Scopes<'_> {
     fn resolve(&self, prefix: Option<&str>) -> Option<&str> {
         // The `xml` prefix is bound everywhere and cannot be redeclared to
         // anything else, so it never reaches the stack.
@@ -223,6 +223,15 @@ impl<'a, S: FnMut(PsviEvent)> Run<'a, '_, S> {
     fn error(&mut self, code: DiagCode, line: u32, msg: impl Into<String>) {
         let span = Span::new(&self.uri, line);
         self.diags.push(Diagnostic::error(code, msg).at(span));
+    }
+
+    /// How to refer to a type in a message. An anonymous type has no name
+    /// to give, so it is described instead of quoted.
+    fn show_type(&self, id: TypeId) -> String {
+        match self.v.schemas[id].name() {
+            Some(q) => format!("`{}`", self.show(q)),
+            None => "an anonymous type".to_string(),
+        }
     }
 
     fn show(&self, q: QName) -> String {
@@ -383,10 +392,31 @@ impl<'a, S: FnMut(PsviEvent)> Run<'a, '_, S> {
             .map(|d| self.v.schemas[d].type_id)
             .unwrap_or_else(|| self.v.schemas.builtin(crate::datatypes::Builtin::AnyType));
 
-        let (type_id, type_from_instance) = self.resolve_xsi_type(&attrs, declared_type, line);
-        let nil = attrs
-            .iter()
-            .any(|a| a.namespace.as_deref() == Some(XSI) && a.local == "nil" && a.value == "true");
+        let (type_id, type_from_instance) =
+            self.resolve_xsi_type(&attrs, declaration, declared_type, line);
+
+        // An abstract type is a placeholder for its derivations; nothing is
+        // ever validated against it directly, whether it was declared or
+        // chosen by `xsi:type`.
+        if !skipped
+            && self.v.schemas[type_id]
+                .as_complex()
+                .is_some_and(|c| c.is_abstract)
+        {
+            let name = self.show_type(type_id);
+            self.error(
+                DiagCode::AbstractType,
+                line,
+                format!("`{shown}` is validated against {name}, which is abstract"),
+            );
+        }
+
+        // `xsi:nil` is an `xs:boolean`, so `1` says the same as `true`.
+        let nil = attrs.iter().any(|a| {
+            a.namespace.as_deref() == Some(XSI)
+                && a.local == "nil"
+                && matches!(a.value.trim(), "true" | "1")
+        });
 
         let attributes = if skipped {
             Vec::new()
@@ -486,6 +516,7 @@ impl<'a, S: FnMut(PsviEvent)> Run<'a, '_, S> {
     fn resolve_xsi_type(
         &mut self,
         attrs: &[RawAttr],
+        declaration: Option<ElementId>,
         declared: TypeId,
         line: u32,
     ) -> (TypeId, bool) {
@@ -496,12 +527,18 @@ impl<'a, S: FnMut(PsviEvent)> Run<'a, '_, S> {
             return (declared, false);
         };
 
-        // The value is a QName, so its prefix binds in the document.
+        // The value is a QName, so its prefix binds in the document — on any
+        // open element, not just this one.
         let (prefix, local) = match attr.value.split_once(':') {
             Some((p, l)) => (Some(p), l),
             None => (None, attr.value.as_str()),
         };
-        let uri = self.prefix_lookup(attrs, prefix);
+        let uri = Scopes(&self.namespaces).resolve(prefix).map(str::to_owned);
+        if let Some(p) = prefix.filter(|_| uri.is_none()) {
+            let msg = format!("`xsi:type` uses the prefix `{p}`, which is not bound here");
+            self.error(DiagCode::InvalidXsiType, line, msg);
+            return (declared, false);
+        }
         let Some(q) = self.v.schemas.qname(uri.as_deref(), local) else {
             self.error(
                 DiagCode::InvalidXsiType,
@@ -527,26 +564,33 @@ impl<'a, S: FnMut(PsviEvent)> Run<'a, '_, S> {
             );
             return (declared, false);
         }
-        (chosen, true)
-    }
 
-    /// Resolves a prefix declared on this element, falling back to the
-    /// schema's own namespaces for the common `xs:` case.
-    fn prefix_lookup(&self, attrs: &[RawAttr], prefix: Option<&str>) -> Option<String> {
-        let want = match prefix {
-            Some(p) => format!("xmlns:{p}"),
-            None => "xmlns".to_string(),
-        };
-        attrs
-            .iter()
-            .find(|a| {
-                let key = match &a.namespace {
-                    Some(_) => format!("xmlns:{}", a.local),
-                    None => a.local.clone(),
-                };
-                key == want || (a.local == want)
-            })
-            .map(|a| a.value.clone())
+        // The substitution has to be one the schema permits: `block` on the
+        // element declaration and on the declared type both forbid reaching a
+        // type by the methods they name.
+        let blocked = declaration
+            .map(|d| self.v.schemas[d].block)
+            .unwrap_or_default()
+            .union(
+                self.v.schemas[declared]
+                    .as_complex()
+                    .map(|c| c.block)
+                    .unwrap_or_default(),
+            );
+        if !self
+            .v
+            .schemas
+            .derives_from_unblocked(chosen, declared, blocked)
+        {
+            let want = self.show(q);
+            self.error(
+                DiagCode::InvalidXsiType,
+                line,
+                format!("`xsi:type` names `{want}`, which is blocked from substituting here"),
+            );
+            return (declared, false);
+        }
+        (chosen, true)
     }
 
     // -- attributes --------------------------------------------------------
@@ -793,9 +837,7 @@ impl<'a, S: FnMut(PsviEvent)> Run<'a, '_, S> {
                 line,
             });
         } else {
-            let mixed = self.v.schemas[ty]
-                .as_complex()
-                .is_some_and(|c| c.content.is_mixed());
+            let mixed = self.v.schemas.content_is_mixed(ty);
             if !mixed && !frame.text.trim().is_empty() {
                 self.error(
                     DiagCode::UnexpectedText,

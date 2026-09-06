@@ -1265,6 +1265,42 @@ impl Schemas {
         Some(&self.content(id)?.model)
     }
 
+    /// Whether a type's content admits character data.
+    ///
+    /// Not the same as the type's own `mixed` attribute. An extension whose
+    /// own content is empty takes the base's content type whole, so
+    /// `<xs:extension base="SomethingMixed"><xs:attribute .../></xs:extension>`
+    /// is mixed without ever saying so. Restriction states its content in
+    /// full, which is where the walk stops — the same rule the effective
+    /// particles follow.
+    pub fn content_is_mixed(&self, id: TypeId) -> bool {
+        let mut cur = id;
+        let mut guard = 0usize;
+        let limit = self.component_counts().types;
+        loop {
+            let Some(c) = self[cur].as_complex() else {
+                return false;
+            };
+            match c.content {
+                ContentType::Mixed(_) => return true,
+                // Empty content of its own is the one case that defers to the
+                // base; a particle or simple content settles the question
+                // here.
+                ContentType::Empty => {}
+                _ => return false,
+            }
+            if c.derivation != DerivationMethod::Extension {
+                return false;
+            }
+            let base = c.base;
+            guard += 1;
+            if base == cur || base.is_placeholder() || guard > limit {
+                return false;
+            }
+            cur = base;
+        }
+    }
+
     /// Starts matching a sequence of children against a type's content.
     pub fn match_content(&self, id: TypeId) -> Option<ContentMatcher<'_>> {
         self.content(id).map(|c| ContentMatcher::new(self, c))

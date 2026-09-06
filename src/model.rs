@@ -186,6 +186,18 @@ impl DerivationSet {
         self == Self::default()
     }
 
+    /// Both sets at once. `xsi:type` is blocked by the element declaration's
+    /// own `block` *and* by the declared type's, taken together.
+    pub fn union(self, other: Self) -> Self {
+        Self {
+            extension: self.extension || other.extension,
+            restriction: self.restriction || other.restriction,
+            substitution: self.substitution || other.substitution,
+            list: self.list || other.list,
+            union: self.union || other.union,
+        }
+    }
+
     /// The keywords a `block` or `final` attribute may contain, across every
     /// context one of them appears in.
     ///
@@ -957,6 +969,51 @@ impl Schemas {
     /// Whether `derived` is `base`, or is derived from it.
     pub fn derives_from(&self, derived: TypeId, base: TypeId) -> bool {
         self.base_chain(derived).contains(&base)
+    }
+
+    /// Whether `derived` reaches `base` without using a derivation method
+    /// that `blocked` disallows.
+    ///
+    /// The set applies at *every* step of the chain, not only the last, which
+    /// is what makes `block="extension"` on a base type stop an `xsi:type`
+    /// naming a restriction of an extension of it. A simple type's step
+    /// counts as a restriction: `block` never carries `list` or `union`, so
+    /// the distinction cannot be observed here.
+    pub fn derives_from_unblocked(
+        &self,
+        derived: TypeId,
+        base: TypeId,
+        blocked: DerivationSet,
+    ) -> bool {
+        let mut id = derived;
+        let mut guard = 0usize;
+        loop {
+            if id == base {
+                return true;
+            }
+            let Some(def) = self.get_type(id) else {
+                return false;
+            };
+            let step_blocked = match def {
+                TypeDefinition::Complex(c) => match c.derivation {
+                    DerivationMethod::Extension => blocked.extension,
+                    DerivationMethod::Restriction => blocked.restriction,
+                },
+                TypeDefinition::Simple(_) => blocked.restriction,
+            };
+            if step_blocked {
+                return false;
+            }
+            let next = def.base();
+            if next == id || next.is_placeholder() {
+                return false;
+            }
+            id = next;
+            guard += 1;
+            if guard > self.types.len() {
+                return false;
+            }
+        }
     }
 
     /// Every attribute use on a complex type, with inherited attribute groups

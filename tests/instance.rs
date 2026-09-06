@@ -152,6 +152,103 @@ fn whitespace_between_elements_is_not_content() {
     );
 }
 
+/// A schema with a mixed type, a vacuous extension of it, an extension that
+/// adds a particle, and a restriction — the four ways mixedness is decided.
+fn mixed_derivation_schema() -> Schemas {
+    schema(
+        r#"<xs:complexType name="Mixed" mixed="true">
+             <xs:sequence>
+               <xs:element name="a" type="xs:string" minOccurs="0"/>
+             </xs:sequence>
+           </xs:complexType>
+           <xs:complexType name="JustAttributes">
+             <xs:complexContent><xs:extension base="tns:Mixed">
+               <xs:attribute name="x" type="xs:string"/>
+             </xs:extension></xs:complexContent>
+           </xs:complexType>
+           <xs:complexType name="Tightened">
+             <xs:complexContent><xs:restriction base="tns:Mixed">
+               <xs:sequence>
+                 <xs:element name="a" type="xs:string" minOccurs="0"/>
+               </xs:sequence>
+             </xs:restriction></xs:complexContent>
+           </xs:complexType>
+           <xs:complexType name="Plain">
+             <xs:sequence>
+               <xs:element name="a" type="xs:string" minOccurs="0"/>
+             </xs:sequence>
+           </xs:complexType>
+           <xs:complexType name="StillPlain">
+             <xs:complexContent><xs:extension base="tns:Plain">
+               <xs:attribute name="x" type="xs:string"/>
+             </xs:extension></xs:complexContent>
+           </xs:complexType>
+           <xs:element name="vacuous" type="tns:JustAttributes"/>
+           <xs:element name="tightened" type="tns:Tightened"/>
+           <xs:element name="plain" type="tns:StillPlain"/>"#,
+    )
+}
+
+/// An extension that adds only attributes takes the base's content type
+/// whole, mixedness included — it never restates `mixed="true"`, and does not
+/// have to.
+#[test]
+fn mixed_content_survives_an_extension_that_adds_no_particle() {
+    let s = mixed_derivation_schema();
+    valid(
+        &s,
+        r#"<vacuous xmlns="urn:example">text<a>y</a>more</vacuous>"#,
+    );
+}
+
+/// Restriction states the content model in full, so mixedness is not
+/// inherited across it.
+#[test]
+fn mixed_content_does_not_survive_a_restriction_that_omits_it() {
+    let s = mixed_derivation_schema();
+    invalid(
+        &s,
+        r#"<tightened xmlns="urn:example">text</tightened>"#,
+        DiagCode::UnexpectedText,
+    );
+}
+
+/// And the walk does not turn element-only content mixed on the way past.
+#[test]
+fn an_extension_of_an_element_only_type_stays_element_only() {
+    let s = mixed_derivation_schema();
+    invalid(
+        &s,
+        r#"<plain xmlns="urn:example">text</plain>"#,
+        DiagCode::UnexpectedText,
+    );
+}
+
+/// `xs:boolean` has four lexical forms, and a schema may use any of them for
+/// `mixed`, `nillable` or `abstract` — as may an instance for `xsi:nil`.
+#[test]
+fn boolean_schema_attributes_accept_the_numeric_spelling() {
+    let s = schema(
+        r#"<xs:element name="note" nillable="1">
+             <xs:complexType mixed="1">
+               <xs:sequence>
+                 <xs:element name="a" type="xs:string" minOccurs="0"/>
+               </xs:sequence>
+             </xs:complexType>
+           </xs:element>"#,
+    );
+    valid(&s, r#"<note xmlns="urn:example">text<a>y</a>more</note>"#);
+    valid(
+        &s,
+        &format!(r#"<note xmlns="urn:example" {XSI} xsi:nil="1"/>"#),
+    );
+    invalid(
+        &s,
+        &format!(r#"<note xmlns="urn:example" {XSI} xsi:nil="1">text</note>"#),
+        DiagCode::NilElementNotEmpty,
+    );
+}
+
 // ---------------------------------------------------------------------------
 // Values
 // ---------------------------------------------------------------------------
@@ -306,6 +403,234 @@ fn xsi_type_must_name_a_derived_type() {
         r#"<thing xmlns="urn:example" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
                   xmlns:tns="urn:example" xsi:type="tns:Nonexistent"/>"#,
         DiagCode::InvalidXsiType,
+    );
+}
+
+/// The same types, but with `thing` one level down, so a prefix can be
+/// declared above the element that uses it.
+fn nested_derived_schema() -> Schemas {
+    schema(
+        r#"<xs:complexType name="Base">
+             <xs:sequence><xs:element name="a" type="xs:string"/></xs:sequence>
+           </xs:complexType>
+           <xs:complexType name="Derived">
+             <xs:complexContent><xs:extension base="tns:Base">
+               <xs:sequence><xs:element name="b" type="xs:string"/></xs:sequence>
+             </xs:extension></xs:complexContent>
+           </xs:complexType>
+           <xs:element name="wrapper">
+             <xs:complexType>
+               <xs:sequence><xs:element name="thing" type="tns:Base"/></xs:sequence>
+             </xs:complexType>
+           </xs:element>"#,
+    )
+}
+
+#[test]
+fn an_xsi_type_prefix_declared_on_an_ancestor_resolves() {
+    let s = nested_derived_schema();
+    valid(
+        &s,
+        r#"<wrapper xmlns="urn:example"
+                    xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+                    xmlns:tns="urn:example">
+             <thing xsi:type="tns:Derived"><a>x</a><b>y</b></thing>
+           </wrapper>"#,
+    );
+}
+
+#[test]
+fn an_unprefixed_xsi_type_takes_the_default_namespace_in_scope() {
+    // A QName in *value* position uses the default namespace, unlike an
+    // attribute *name*, which never does.
+    let s = nested_derived_schema();
+    valid(
+        &s,
+        r#"<wrapper xmlns="urn:example"
+                    xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance">
+             <thing xsi:type="Derived"><a>x</a><b>y</b></thing>
+           </wrapper>"#,
+    );
+}
+
+#[test]
+fn an_inner_rebinding_of_an_xsi_type_prefix_wins() {
+    let s = nested_derived_schema();
+    valid(
+        &s,
+        r#"<wrapper xmlns="urn:example"
+                    xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+                    xmlns:p="urn:elsewhere">
+             <thing xmlns:p="urn:example" xsi:type="p:Derived">
+               <a>x</a><b>y</b>
+             </thing>
+           </wrapper>"#,
+    );
+    // Without the inner declaration the same literal names nothing.
+    invalid(
+        &s,
+        r#"<wrapper xmlns="urn:example"
+                    xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+                    xmlns:p="urn:elsewhere">
+             <thing xsi:type="p:Derived"><a>x</a><b>y</b></thing>
+           </wrapper>"#,
+        DiagCode::InvalidXsiType,
+    );
+}
+
+#[test]
+fn an_unbound_xsi_type_prefix_is_reported_as_such() {
+    let s = nested_derived_schema();
+    let d = check(
+        &s,
+        r#"<wrapper xmlns="urn:example"
+                    xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance">
+             <thing xsi:type="nope:Derived"><a>x</a></thing>
+           </wrapper>"#,
+    );
+    assert!(
+        d.errors()
+            .any(|e| e.code == DiagCode::InvalidXsiType && e.message.contains("not bound")),
+        "expected an unbound-prefix report, got:\n{d}"
+    );
+}
+
+/// `block` names the derivation methods an `xsi:type` may not use to reach
+/// the declared type — on the type itself, and on the element declaration.
+fn blocking_schema() -> Schemas {
+    schema(
+        r#"<xs:complexType name="Sealed" block="extension">
+             <xs:sequence><xs:element name="a" type="xs:string"/></xs:sequence>
+           </xs:complexType>
+           <xs:complexType name="ByExtension">
+             <xs:complexContent><xs:extension base="tns:Sealed">
+               <xs:sequence><xs:element name="b" type="xs:string"/></xs:sequence>
+             </xs:extension></xs:complexContent>
+           </xs:complexType>
+           <xs:complexType name="ByRestriction">
+             <xs:complexContent><xs:restriction base="tns:Sealed">
+               <xs:sequence><xs:element name="a" type="xs:string"/></xs:sequence>
+             </xs:restriction></xs:complexContent>
+           </xs:complexType>
+           <xs:complexType name="RestrictedExtension">
+             <xs:complexContent><xs:restriction base="tns:ByExtension">
+               <xs:sequence>
+                 <xs:element name="a" type="xs:string"/>
+                 <xs:element name="b" type="xs:string"/>
+               </xs:sequence>
+             </xs:restriction></xs:complexContent>
+           </xs:complexType>
+           <xs:complexType name="Open">
+             <xs:sequence><xs:element name="a" type="xs:string"/></xs:sequence>
+           </xs:complexType>
+           <xs:complexType name="OpenRestricted">
+             <xs:complexContent><xs:restriction base="tns:Open">
+               <xs:sequence><xs:element name="a" type="xs:string"/></xs:sequence>
+             </xs:restriction></xs:complexContent>
+           </xs:complexType>
+           <xs:element name="sealed" type="tns:Sealed"/>
+           <xs:element name="guarded" type="tns:Open" block="restriction"/>
+           <xs:element name="unguarded" type="tns:Open"/>"#,
+    )
+}
+
+const XSI: &str = r#"xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance""#;
+
+#[test]
+fn a_blocked_derivation_method_bars_the_xsi_type_that_uses_it() {
+    let s = blocking_schema();
+    // Restriction is not blocked, so this substitution stands.
+    valid(
+        &s,
+        &format!(
+            r#"<sealed xmlns="urn:example" {XSI} xmlns:tns="urn:example"
+                       xsi:type="tns:ByRestriction"><a>x</a></sealed>"#
+        ),
+    );
+    // Extension is.
+    invalid(
+        &s,
+        &format!(
+            r#"<sealed xmlns="urn:example" {XSI} xmlns:tns="urn:example"
+                       xsi:type="tns:ByExtension"><a>x</a><b>y</b></sealed>"#
+        ),
+        DiagCode::InvalidXsiType,
+    );
+}
+
+/// The block applies at every step of the chain, not only the last one — a
+/// restriction of a blocked extension is still out.
+#[test]
+fn a_block_reaches_through_the_whole_derivation_chain() {
+    let s = blocking_schema();
+    invalid(
+        &s,
+        &format!(
+            r#"<sealed xmlns="urn:example" {XSI} xmlns:tns="urn:example"
+                       xsi:type="tns:RestrictedExtension"><a>x</a><b>y</b></sealed>"#
+        ),
+        DiagCode::InvalidXsiType,
+    );
+}
+
+/// The element declaration's own `block` counts too, even when its type
+/// blocks nothing.
+#[test]
+fn an_element_declarations_block_bars_an_xsi_type() {
+    let s = blocking_schema();
+    invalid(
+        &s,
+        &format!(
+            r#"<guarded xmlns="urn:example" {XSI} xmlns:tns="urn:example"
+                        xsi:type="tns:OpenRestricted"><a>x</a></guarded>"#
+        ),
+        DiagCode::InvalidXsiType,
+    );
+    valid(
+        &s,
+        &format!(
+            r#"<unguarded xmlns="urn:example" {XSI} xmlns:tns="urn:example"
+                          xsi:type="tns:OpenRestricted"><a>x</a></unguarded>"#
+        ),
+    );
+}
+
+fn abstract_schema() -> Schemas {
+    schema(
+        r#"<xs:complexType name="Shape" abstract="true">
+             <xs:sequence><xs:element name="a" type="xs:string"/></xs:sequence>
+           </xs:complexType>
+           <xs:complexType name="Circle">
+             <xs:complexContent><xs:extension base="tns:Shape"/></xs:complexContent>
+           </xs:complexType>
+           <xs:element name="shape" type="tns:Shape"/>"#,
+    )
+}
+
+/// An abstract type stands in for its derivations; naming one is what
+/// `xsi:type` is for, and leaving it out is an error rather than a default.
+#[test]
+fn an_abstract_type_needs_an_xsi_type_to_stand_in_for_it() {
+    let s = abstract_schema();
+    invalid(
+        &s,
+        r#"<shape xmlns="urn:example"><a>x</a></shape>"#,
+        DiagCode::AbstractType,
+    );
+    invalid(
+        &s,
+        &format!(
+            r#"<shape xmlns="urn:example" {XSI} xmlns:tns="urn:example"
+                      xsi:type="tns:Shape"><a>x</a></shape>"#
+        ),
+        DiagCode::AbstractType,
+    );
+    valid(
+        &s,
+        &format!(
+            r#"<shape xmlns="urn:example" {XSI} xmlns:tns="urn:example"
+                      xsi:type="tns:Circle"><a>x</a></shape>"#
+        ),
     );
 }
 
