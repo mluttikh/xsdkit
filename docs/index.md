@@ -114,7 +114,7 @@ Schema Test Suite on every change.
 | | |
 |---|---|
 | valid schemas accepted | **99.7%** (5,231 / 5,247) |
-| invalid schemas rejected | **66.0%** (317 / 480) |
+| invalid schemas rejected | **66.7%** (320 / 480) |
 | documents judged correctly | **97.5%** (21,046 / 21,575) |
 
 The gap in the second row is the honest description of what this is.

@@ -264,3 +264,56 @@ fn not_qname_entries_must_be_names_the_wildcard_admits() {
             </xs:complexType>"###,
     );
 }
+
+/// Every `id` in the schema for schemas is an `xs:ID`, so both rules that
+/// come with the datatype apply: it is an NCName, and it is unique in its
+/// document. Nothing else in this crate reads them, which is why nothing
+/// else would notice.
+#[test]
+fn an_id_is_an_ncname_and_unique_in_its_document() {
+    assert_eq!(
+        count(
+            r#"<xs:element name="e" type="xs:string" id="not a name"/>"#,
+            DiagCode::InvalidAttributeValue
+        ),
+        1
+    );
+    // A colon makes it a QName, not an NCName.
+    assert_eq!(
+        count(
+            r#"<xs:element name="e" type="xs:string" id="a:b"/>"#,
+            DiagCode::InvalidAttributeValue
+        ),
+        1
+    );
+    assert_eq!(
+        count(
+            r#"<xs:element name="e" type="xs:string" id="dup"/>
+               <xs:element name="f" type="xs:string" id="dup"/>"#,
+            DiagCode::DuplicateGlobal
+        ),
+        1
+    );
+    clean(
+        r#"<xs:element name="e" type="xs:string" id="one"/>
+           <xs:element name="f" type="xs:string" id="two"/>"#,
+    );
+}
+
+/// `mode="none"` says the content is not open, so there is nothing for a
+/// wildcard to open it with.
+#[test]
+fn open_content_with_mode_none_may_not_carry_a_wildcard() {
+    assert_eq!(
+        count(
+            r#"<xs:complexType name="T">
+                 <xs:openContent mode="none">
+                   <xs:any processContents="lax"/>
+                 </xs:openContent>
+                 <xs:sequence/>
+               </xs:complexType>"#,
+            DiagCode::InvalidAttributeValue
+        ),
+        1
+    );
+}

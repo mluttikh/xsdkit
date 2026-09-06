@@ -2312,9 +2312,38 @@ impl<'r> Loader<'r> {
 fn check_representation(root: roxmltree::Node, ctx: &DocCtx, diags: &mut Diagnostics) {
     check_annotation_placement(root, ctx, diags);
 
+    // Every `id` in the schema for schemas is an `xs:ID`, so the two rules
+    // that come with that datatype apply throughout: it is an NCName, and it
+    // is unique in its document. Nothing else in this crate reads them, which
+    // is exactly why nothing else would notice.
+    let mut ids: Vec<&str> = Vec::new();
+
     for node in root.descendants().filter(|n| reads(n, ctx.version)) {
         let name = node.tag_name().name();
         let span = || Span::new(&ctx.uri, line_of(ctx, node));
+
+        if let Some(id) = node.attribute("id") {
+            if !crate::values::is_ncname(id) {
+                diags.push(
+                    Diagnostic::error(
+                        DiagCode::InvalidAttributeValue,
+                        format!("`id` is `{id}`, which is not an NCName"),
+                    )
+                    .at(span()),
+                );
+            } else if ids.contains(&id) {
+                diags.push(
+                    Diagnostic::error(
+                        DiagCode::DuplicateGlobal,
+                        format!("`id` `{id}` is used more than once in this document"),
+                    )
+                    .at(span())
+                    .with_help("an `xs:ID` is unique within the document that carries it"),
+                );
+            } else {
+                ids.push(id);
+            }
+        }
 
         // `block` and `final` name derivation methods. Which subset is legal
         // depends on where the attribute sits, but a token outside the whole
@@ -2418,9 +2447,9 @@ fn check_representation(root: roxmltree::Node, ctx: &DocCtx, diags: &mut Diagnos
             }
         }
 
-        // Open content that is not `none` has to say what it opens *to*.
-        // Without an `xs:any` there is no wildcard to interleave or append,
-        // so the mode describes nothing.
+        // Open content has to agree with itself: a mode other than `none`
+        // says what it opens *to*, and `none` says it opens to nothing. An
+        // `xs:any` is required by the first and contradicted by the second.
         if matches!(name, "openContent" | "defaultOpenContent") {
             let mode = node.attribute("mode").unwrap_or("interleave").trim();
             let has_any = node
@@ -2435,6 +2464,18 @@ fn check_representation(root: roxmltree::Node, ctx: &DocCtx, diags: &mut Diagnos
                     )
                     .at(span())
                     .with_help("only `mode=\"none\"` may leave the wildcard out"),
+                );
+            }
+            if mode == "none" && has_any {
+                diags.push(
+                    Diagnostic::error(
+                        DiagCode::InvalidAttributeValue,
+                        format!("`xs:{name}` with `mode=\"none\"` may not carry an `xs:any`"),
+                    )
+                    .at(span())
+                    .with_help(
+                        "`none` says the content is not open, so there is nothing to open it with",
+                    ),
                 );
             }
         }

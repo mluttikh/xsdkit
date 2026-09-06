@@ -275,7 +275,7 @@ crate:
 | | |
 |---|---|
 | valid schemas accepted | **99.7%** — it reads real schemas |
-| invalid schemas rejected | **66.0%** — partial: see `src/restriction.rs` |
+| invalid schemas rejected | **66.7%** — partial: see `src/restriction.rs` |
 
 That asymmetry is by construction, not neglect: the Schema Component
 Constraints and the Derivation Valid rules are largely unimplemented (see §7).
