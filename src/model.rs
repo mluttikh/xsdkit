@@ -1037,6 +1037,44 @@ impl Schemas {
         out
     }
 
+    /// The substitution-group members that may actually stand in for `head`.
+    ///
+    /// [`Self::substitution_closure`] answers which elements *are* in the
+    /// group; this answers which the head permits to replace it. `block` on
+    /// the head bars substitution outright, or bars the derivation method a
+    /// member's type used to reach the head's — so a member is admitted only
+    /// if its type reaches the head's without a barred step.
+    pub fn substitutable_for(&self, head: ElementId) -> Vec<ElementId> {
+        let head_decl = &self[head];
+        // The element's `{disallowed substitutions}` *and* the head type's
+        // `{prohibited substitutions}`: a type may bar being restricted or
+        // extended into a substitute without the element saying anything.
+        let blocked = head_decl.block.union(
+            self[head_decl.type_id]
+                .as_complex()
+                .map(|c| c.block)
+                .unwrap_or_default(),
+        );
+        if blocked.is_empty() {
+            return self.substitution_closure(head);
+        }
+        let head_type = head_decl.type_id;
+        // Only when a derivation method is actually barred is the chain worth
+        // walking. Whether a member's type is related to the head's at all is
+        // a *schema* validity question, answered elsewhere — asking it here
+        // would throw out members of a group the schema already accepted.
+        let by_derivation = blocked.extension || blocked.restriction;
+        self.substitution_closure(head)
+            .into_iter()
+            .filter(|&m| {
+                m == head
+                    || (!blocked.substitution
+                        && (!by_derivation
+                            || self.derives_from_unblocked(self[m].type_id, head_type, blocked)))
+            })
+            .collect()
+    }
+
     /// Walks a type's base chain from the type itself up to `xs:anyType`.
     pub fn base_chain(&self, mut id: TypeId) -> Vec<TypeId> {
         let mut out = vec![id];

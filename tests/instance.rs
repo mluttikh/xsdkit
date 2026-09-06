@@ -1410,6 +1410,92 @@ fn a_substituting_element_is_matched_with_its_own_type() {
     );
 }
 
+/// `block` on the head bars a member from standing in for it. The head
+/// itself is unaffected — it is not substituting for anything.
+#[test]
+fn a_head_that_blocks_substitution_admits_only_itself() {
+    let s = schema(
+        r#"<xs:element name="root">
+             <xs:complexType><xs:sequence>
+               <xs:element ref="tns:Head" maxOccurs="unbounded"/>
+               <xs:element ref="tns:Open" minOccurs="0" maxOccurs="unbounded"/>
+             </xs:sequence></xs:complexType>
+           </xs:element>
+           <xs:complexType name="T"><xs:sequence/></xs:complexType>
+           <xs:element name="Head" type="tns:T" block="substitution"/>
+           <xs:element name="Member" type="tns:T" substitutionGroup="tns:Head"/>
+           <xs:element name="Open" type="tns:T"/>
+           <xs:element name="OpenMember" type="tns:T" substitutionGroup="tns:Open"/>"#,
+    );
+    valid(&s, r#"<root xmlns="urn:example"><Head/></root>"#);
+    invalid(
+        &s,
+        r#"<root xmlns="urn:example"><Head/><Member/></root>"#,
+        DiagCode::UnexpectedElement,
+    );
+    // A head that blocks nothing still takes its members.
+    valid(
+        &s,
+        r#"<root xmlns="urn:example"><Head/><OpenMember/></root>"#,
+    );
+}
+
+/// The bar may come from the head's *type* rather than from the element: a
+/// type can refuse to be restricted into a substitute without the element
+/// declaration saying anything at all.
+#[test]
+fn a_head_types_prohibited_substitutions_bar_a_member_too() {
+    let s = schema(
+        r#"<xs:element name="root">
+             <xs:complexType><xs:sequence>
+               <xs:element ref="tns:Head" maxOccurs="unbounded"/>
+             </xs:sequence></xs:complexType>
+           </xs:element>
+           <xs:element name="Head" type="tns:Sealed"/>
+           <xs:complexType name="Sealed" block="restriction"><xs:sequence/></xs:complexType>
+           <xs:complexType name="ByRestriction">
+             <xs:complexContent><xs:restriction base="tns:Sealed">
+               <xs:sequence/>
+             </xs:restriction></xs:complexContent>
+           </xs:complexType>
+           <xs:element name="Member" type="tns:ByRestriction" substitutionGroup="tns:Head"/>"#,
+    );
+    invalid(
+        &s,
+        r#"<root xmlns="urn:example"><Member/></root>"#,
+        DiagCode::UnexpectedElement,
+    );
+}
+
+/// A member whose type is unrelated to the head's still substitutes when
+/// nothing is blocked. Whether the two types are related is a *schema*
+/// question, and asking it here would throw out members the schema accepted.
+#[test]
+fn an_unblocked_head_does_not_second_guess_its_members_types() {
+    let s = schema(
+        r#"<xs:element name="head" type="xs:string"/>
+           <xs:element name="member" type="xs:int" substitutionGroup="tns:head"/>
+           <xs:element name="doc">
+             <xs:complexType><xs:sequence>
+               <xs:element ref="tns:head" maxOccurs="unbounded"/>
+             </xs:sequence></xs:complexType>
+           </xs:element>"#,
+    );
+    valid(&s, r#"<doc xmlns="urn:example"><member>1</member></doc>"#);
+}
+
+/// An abstract element exists to be substituted for. A content model never
+/// offers one, but the document root asks the schema directly.
+#[test]
+fn an_abstract_element_may_not_appear_in_a_document() {
+    let s = schema(r#"<xs:element name="lonely" abstract="true"/>"#);
+    invalid(
+        &s,
+        r#"<lonely xmlns="urn:example"/>"#,
+        DiagCode::AbstractElement,
+    );
+}
+
 // ---------------------------------------------------------------------------
 // The PSVI
 // ---------------------------------------------------------------------------

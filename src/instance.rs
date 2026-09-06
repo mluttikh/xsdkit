@@ -563,6 +563,18 @@ impl<'a, S: FnMut(PsviEvent)> Run<'a, '_, S> {
             skipped = true;
         }
 
+        // An abstract element declaration exists to be substituted for, not
+        // to be used. A content model never offers one — the substitution
+        // closure leaves an abstract head out — but the document root asks
+        // the schema directly, so that path needs the check of its own.
+        if !skipped && declaration.is_some_and(|d| self.v.schemas[d].is_abstract) {
+            self.error(
+                DiagCode::AbstractElement,
+                line,
+                format!("`{shown}` is declared abstract, so it cannot appear in a document"),
+            );
+        }
+
         let declared_type = declaration
             .map(|d| self.v.schemas[d].type_id)
             .unwrap_or_else(|| self.v.schemas.builtin(crate::datatypes::Builtin::AnyType));

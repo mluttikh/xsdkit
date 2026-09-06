@@ -170,6 +170,9 @@ pub enum DiagCode {
     DuplicateId,
     /// An `xs:IDREF` names an `xs:ID` the document does not contain.
     UnresolvedIdRef,
+    /// An element declared `abstract` appears in a document. Abstract element
+    /// declarations exist to be substituted for, not to be used.
+    AbstractElement,
 }
 
 impl DiagCode {
@@ -218,6 +221,7 @@ impl DiagCode {
             DiagCode::AbstractType => "XSD2010",
             DiagCode::DuplicateId => "XSD2011",
             DiagCode::UnresolvedIdRef => "XSD2012",
+            DiagCode::AbstractElement => "XSD2013",
         }
     }
 }
@@ -396,6 +400,7 @@ mod tests {
             DiagCode::AbstractType,
             DiagCode::DuplicateId,
             DiagCode::UnresolvedIdRef,
+            DiagCode::AbstractElement,
         ];
         let mut seen = std::collections::HashSet::new();
         for c in all {

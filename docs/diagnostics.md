@@ -159,6 +159,7 @@ in.
 | `XSD2010` | The type in force is abstract, so nothing validates against it |
 | `XSD2011` | The same `xs:ID` value appears twice |
 | `XSD2012` | An `xs:IDREF` names no `xs:ID` in the document |
+| `XSD2013` | An `abstract` element appears in a document |
 
 ## Rendering
 

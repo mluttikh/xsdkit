@@ -175,7 +175,9 @@ when a default means something different from an explicit value.
 - `xs:QName` and `xs:NOTATION` values, resolved against the namespaces in
   scope — the document's for a value, the schema's for an `xs:enumeration`
   literal, which are not the same bindings and need not agree on a prefix.
-- Substitution groups, closed transitively.
+- Substitution groups, closed transitively, and `block` on the head — from
+  the element declaration or from its type — barring a member from standing
+  in for it. An `abstract` element cannot appear at all.
 - Wildcards, with `strict`, `lax` and `skip` processing — on elements and
   on attributes. What a `lax` or `strict` wildcard admits is validated
   against its global declaration and reaches the PSVI typed.

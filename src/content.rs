@@ -288,7 +288,7 @@ impl<'a> Builder<'a> {
 
     fn add_position(&mut self, particle: ParticleId, label: Label) -> PositionId {
         let admits = match &label {
-            Label::Element(e) => self.schemas.substitution_closure(*e),
+            Label::Element(e) => self.schemas.substitutable_for(*e),
             Label::Wildcard => Vec::new(),
         };
         let id = self.positions.len() as PositionId;
@@ -624,7 +624,7 @@ fn build_all_group(schemas: &Schemas, particles: &[ParticleId]) -> AllGroup {
             _ => continue,
         };
         let admits = match &label {
-            Label::Element(e) => schemas.substitution_closure(*e),
+            Label::Element(e) => schemas.substitutable_for(*e),
             Label::Wildcard => Vec::new(),
         };
         members.push(AllMember {

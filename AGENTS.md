@@ -192,6 +192,15 @@ cannot express this.
   may only widen; restriction states its wildcard in full and keeps only what
   it declared. Both live in `compile.rs`; the operations are
   `NamespaceConstraint::intersect` / `union`.
+- **Substitution blocking belongs in the admits sets, not the matcher.**
+  Whether a member may stand in for a head is static, so `substitutable_for`
+  filters the closure once at build time and `ContentMatcher` stays unaware.
+  The blocking constraint is the head element's `block` *unioned with its
+  type's* — a type can refuse to be restricted into a substitute while the
+  element says nothing. And the derivation chain is only walked when a method
+  is actually barred: a member's type need not derive from the head's at all,
+  which is a schema-validity question answered elsewhere, and requiring it
+  here threw out a legal substitution the tests already pinned.
 - **An `xs:ID` binds to an *element*, not to a value.** Two different elements
   may not claim one; a single element repeating it across two attributes is a
   binding with one member and is legal, which XSD 1.1 spells out and the
@@ -323,7 +332,7 @@ is fifty cases one rule buys.
 The instance half — 21,671 documents — is `#[ignore]`d because it takes
 minutes where the schema half takes seconds (4.5 minutes in `--release`; run
 it that way). Run it with `-- --ignored`. It scores 21,575 of them, 98.6%
-correct: **99.5%** of valid documents accepted, **97.4%** of invalid ones
+correct: **99.5%** of valid documents accepted, **97.5%** of invalid ones
 rejected.
 
 That first figure was 88.1% until a one-line bug turned up: an *enumeration on
