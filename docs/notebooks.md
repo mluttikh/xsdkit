@@ -24,6 +24,11 @@ schemas                     # renders as a table, not as <SchemaSet object at 0x
 ## `tree()` returns something you can look at
 
 ```python
+import xsdkit
+
+schemas = xsdkit.SchemaSet.from_file("report.xsd")
+report = schemas["{urn:example}report"]
+
 report.tree()
 ```
 

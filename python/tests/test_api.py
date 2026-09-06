@@ -704,3 +704,23 @@ def test_block_excludes_a_substitute_that_is_still_in_the_group():
     assert not s.validate(
         f'<holder xmlns="{NS}"><circle>o</circle></holder>'
     ).is_valid
+
+
+def test_a_schema_set_is_a_mapping_in_full():
+    """`dict(schemas)` was documented long before it worked.
+
+    `__len__`, `__contains__`, `__getitem__` and `__iter__` make something
+    that *looks* like a mapping; `dict()` needs `keys` as well, and without it
+    raised a `ValueError` about sequence lengths that told nobody anything.
+    """
+    s = build(
+        '<xs:element name="a" type="xs:string"/>'
+        '<xs:complexType name="T"><xs:sequence/></xs:complexType>'
+    )
+    assert s.keys() == list(s)
+    assert [k for k, _ in s.items()] == s.keys()
+    assert [type(v).__name__ for v in s.values()] == ["Element", "Type"]
+
+    d = dict(s)
+    assert len(d) == len(s)
+    assert d[f"{{{NS}}}a"] == s[f"{{{NS}}}a"]

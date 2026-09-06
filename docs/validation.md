@@ -15,7 +15,8 @@ Both do the same work. The second just hands you the values on the way past.
 import xsdkit
 
 schemas = xsdkit.SchemaSet.from_file("report.xsd")
-report = schemas.validate(open("report.xml").read())
+xml = open("report.xml").read()
+report = schemas.validate(xml)
 
 report.is_valid          # True
 bool(report)             # the same thing, for `if report:`
@@ -26,6 +27,12 @@ for one — the only things that raise are a document that is not XML at all, or
 a schema that would not build.
 
 ```python
+broken_xml = """<report xmlns="urn:example" id="r1">
+  <title>November orders</title>
+  <issued>2024-13-45</issued>
+  <item sku="nope"><price currency="CHF">1.00</price></item>
+</report>"""
+
 report = schemas.validate(broken_xml)
 report.is_valid          # False
 
@@ -53,39 +60,62 @@ Pass `uri="orders/report.xml"` to have the spans name the file instead of
 === "Rust"
 
     ```rust
-    # use xsdkit::Schemas;
-    # fn demo(schemas: &Schemas, xml: &str) {
-    let report = schemas.document_validator().validate(xml);
-    if !report.is_valid() {
-        for d in report.diagnostics.iter() {
-            println!("{d}");
+    use xsdkit::Schemas;
+
+    fn check(schemas: &Schemas, xml: &str) {
+        let report = schemas.document_validator().validate(xml);
+        if !report.is_valid() {
+            for d in report.diagnostics.iter() {
+                println!("{d}");
+            }
         }
     }
-    # }
     ```
 
 ## Reading it into typed values
 
 The validator already knows the type of every element and attribute it walks —
-that is what it is checking against. `iter_typed` gives you that work instead
-of discarding it, as a **PSVI**: a post-schema-validation infoset.
+that is what it is checking against. Asking for the values gives you that work
+instead of discarding it, as a **PSVI**: a post-schema-validation infoset.
 
-```python
-here = None
-for ev in schemas.iter_typed(open("report.xml").read()):
-    if ev.kind == "start":
-        here = ev.local_name
-    elif ev.kind == "text":
-        print(f"{here:8} {type(ev.value).__name__:9} {ev.value!r}")
-```
+=== "Python"
 
-```text
-title    str       'November orders'
-issued   date      datetime.date(2024, 12, 1)
-price    Decimal   Decimal('19.95')
-note     str       'backordered'
-price    Decimal   Decimal('4.5')
-```
+    ```python
+    here = None
+    for ev in schemas.iter_typed(open("report.xml").read()):
+        if ev.kind == "start":
+            here = ev.local_name
+        elif ev.kind == "text":
+            print(f"{here:8} {type(ev.value).__name__:9} {ev.value!r}")
+    ```
+
+    ```text
+    title    str       'November orders'
+    issued   date      datetime.date(2024, 12, 1)
+    price    Decimal   Decimal('19.95')
+    note     str       'backordered'
+    price    Decimal   Decimal('4.5')
+    ```
+
+=== "Rust"
+
+    `validate_with` runs the same single pass and hands each event to a
+    callback. A callback rather than an iterator because the events are
+    produced inside the parse, and suspending that would mean either a thread
+    or a self-referential struct.
+
+    ```rust
+    use xsdkit::{Schemas, instance::PsviEvent};
+
+    fn values(schemas: &Schemas, xml: &str) {
+        let report = schemas.document_validator().validate_with(xml, |ev| {
+            if let PsviEvent::Text { value: Some(v), lexical, .. } = ev {
+                println!("{v:?} from {lexical:?}");
+            }
+        });
+        assert!(report.is_valid());
+    }
+    ```
 
 `Decimal("19.95")`, not `"19.95"`. `date(2024, 12, 1)`, not `"2024-12-01"`.
 Reparsing those strings yourself is not just repeated work — it is where the

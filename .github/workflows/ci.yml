@@ -69,6 +69,11 @@ jobs:
         env:
           RUSTDOCFLAGS: -D warnings
         run: cargo doc --no-deps --features serde
+      # `cargo test --doc` only sees the examples inside `src/`. The ones on
+      # the website and in the README had drifted for a whole afternoon after
+      # a rename before anything noticed.
+      - name: Check the Rust snippets in the Markdown docs
+        run: python3 scripts/check-doc-snippets.py
 
   python:
     name: Python (${{ matrix.os }})
@@ -93,6 +98,11 @@ jobs:
       # through its own `DisplayFormatter` rather than trusting `_repr_html_`.
       - name: Run the Python tests
         run: pip install pytest ipython && pytest python/tests -q
+      # The Python examples on the website all run against
+      # `docs/examples/report.xsd`, so they can be run rather than merely
+      # parsed. Several of them did not, for want of an `import`.
+      - name: Run the Python snippets in the Markdown docs
+        run: python3 scripts/check-doc-snippets-python.py
 
   msrv:
     name: MSRV

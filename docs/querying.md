@@ -3,60 +3,149 @@
 Everything on this page runs against
 [`report.xsd`](examples/report.xsd).
 
-```python
-import xsdkit
+=== "Python"
 
-schemas = xsdkit.SchemaSet.from_file("report.xsd")
-report = schemas["{urn:example}report"]
-```
+    ```python
+    import xsdkit
+
+    schemas = xsdkit.SchemaSet.from_file("report.xsd")
+    report = schemas["{urn:example}report"]
+    ```
+
+=== "Rust"
+
+    ```rust
+    use xsdkit::{Diagnostics, SchemaSetBuilder};
+
+    fn main() -> Result<(), Diagnostics> {
+        let schemas = SchemaSetBuilder::new()
+            .file("report.xsd")
+            .compile()
+            .into_result()?;
+        let report = schemas.element(Some("urn:example"), "report").unwrap();
+        Ok(())
+    }
+    ```
 
 ## Finding what a schema declares
 
-A `SchemaSet` is a mapping over the globals your documents declare.
+=== "Python"
 
-```python
-len(schemas)                        # 6
-"{urn:example}report" in schemas    # True
-list(schemas)
-# ['{urn:example}report', '{urn:example}Currency', '{urn:example}Item',
-#  '{urn:example}Money', '{urn:example}Report', '{urn:example}Sku']
+    A `SchemaSet` is a mapping over the globals your documents declare.
 
-dict(schemas)                       # works, because it is a real mapping
-```
+    ```python
+    len(schemas)                        # 6
+    "{urn:example}report" in schemas    # True
+    list(schemas)
+    # ['{urn:example}report', '{urn:example}Currency', '{urn:example}Item',
+    #  '{urn:example}Money', '{urn:example}Report', '{urn:example}Sku']
 
-Elements come before types in iteration. For a list of one kind:
+    # A real mapping, not merely something shaped like one:
+    schemas.keys()                      # the same names, as a list
+    schemas.items()                     # (name, component) pairs
+    dict(schemas)                       # so this works
+    ```
 
-```python
-schemas.elements     # [<Element {urn:example}report>]
-schemas.types        # the six declared types, built-ins excluded
-schemas.documents    # what was read, with target namespaces
-```
+    Elements come before types in iteration. For a list of one kind:
 
-The lookup methods return `None` when there is nothing, for when absence is an
-ordinary answer; subscripting raises `KeyError`, for when it is a mistake.
+    ```python
+    schemas.elements     # [<Element {urn:example}report>]
+    schemas.types        # the six declared types, built-ins excluded
+    schemas.documents    # what was read, with target namespaces
+    ```
 
-```python
-schemas.element("urn:example", "report")   # <Element …> or None
-schemas["{urn:example}nope"]               # KeyError
-```
+    The lookup methods return `None` when there is nothing, for when absence is
+    an ordinary answer; subscripting raises `KeyError`, for when it is a
+    mistake.
+
+    ```python
+    schemas.element("urn:example", "report")   # <Element …> or None
+    schemas["{urn:example}nope"]               # KeyError
+    ```
+
+=== "Rust"
+
+    Name lookups return a reference — a borrow of the schema plus an id, so
+    following one allocates nothing — or `None` when the schema declares no
+    such name.
+
+    ```rust
+    use xsdkit::Schemas;
+
+    fn look_around(schemas: &Schemas) {
+        let report = schemas.element(Some("urn:example"), "report");   // Option<ElementRef>
+        let money = schemas.type_(Some("urn:example"), "Money");       // Option<TypeRef>
+
+        for e in schemas.global_elements() {
+            println!("{}", e.display_name());
+        }
+        for t in schemas.global_types() {
+            // Unlike Python's `schemas.types`, this includes the 50 built-ins:
+            // they are real components here, not a special case.
+            println!("{}", t.display_name());
+        }
+    }
+    ```
+
+    When the id is what you mean to keep — as a map key, or to compare — the
+    `_id` forms hand it over directly, and `Schemas::get` goes back the other
+    way.
+
+    ```rust
+    use xsdkit::Schemas;
+
+    fn ids(schemas: &Schemas) -> Option<()> {
+        let id = schemas.element_id(Some("urn:example"), "report")?;
+        let report = schemas.get(id);
+        assert_eq!(report.id(), id);
+        Some(())
+    }
+    ```
 
 ## Walking the tree
 
-An element behaves as its children — sized, iterable and subscriptable by name
-— so you navigate a schema without a `.type` hop at every level.
+An element behaves as its children, so you navigate a schema without a
+`.type` hop at every level.
 
-```python
-[child.local_name for child in report]
-# ['title', 'issued', 'item']
+=== "Python"
 
-report["item"]["price"].type.qname
-# '{urn:example}Money'
+    Sized, iterable and subscriptable by name.
 
-len(report)          # 3
-```
+    ```python
+    [child.local_name for child in report]
+    # ['title', 'issued', 'item']
 
-A bare local name is enough, because a child is almost always in its parent's
-namespace. Clark notation and `(namespace, local)` pairs work too.
+    report["item"]["price"].type.qname
+    # '{urn:example}Money'
+
+    len(report)          # 3
+    ```
+
+    A bare local name is enough, because a child is almost always in its
+    parent's namespace. Clark notation and `(namespace, local)` pairs work too.
+
+=== "Rust"
+
+    ```rust
+    use xsdkit::Schemas;
+
+    fn walk(schemas: &Schemas) -> Option<()> {
+        let report = schemas.element(Some("urn:example"), "report")?;
+
+        let names: Vec<&str> = report.children().map(|c| c.local_name()).collect();
+        // ["title", "issued", "item"]
+
+        let price = report.child("item")?.child("price")?;
+        println!("{}", price.type_of().display_name());
+        // {urn:example}Money
+        Some(())
+    }
+    ```
+
+    `child` takes a local name for the same reason Python's subscript does.
+    Turning a name into text never goes through the interner: `local_name`,
+    `namespace` and `display_name` are on every reference, and
+    `Schemas::local_of` and `namespace_of` do the same for a bare `QName`.
 
 !!! tip "Read it once, whole"
 
@@ -122,31 +211,56 @@ gets the bare declaration back.
 === "Rust"
 
     ```rust
-    # use xsdkit::Schemas;
-    # fn demo(schemas: &Schemas, ty: xsdkit::TypeId) {
-    for child in schemas.get(ty).children() {
-        println!("{} {} {}", child.display_name(), child.repeats(), child.optional());
+    use xsdkit::TypeRef;
+
+    fn describe(ty: TypeRef<'_>) {
+        for child in ty.children() {
+            println!("{} {} {}", child.display_name(), child.repeats(), child.optional());
+        }
     }
-    # }
     ```
 
 This is exactly the pair of questions a table-versus-column decision needs when
 you are mapping a schema onto a relational or columnar shape.
 
-Ask for all of them at once. Both facts come from walking the content model,
-and `children()` walks it once for the whole type; `child_repeats` and
-`child_is_optional` remain for a single question about a single child, but
-called in a loop they re-walk the model per child — around 40× slower on a
-type with hundreds of children.
+!!! tip "Ask for all of them at once"
+
+    Both facts come from walking the content model, and asking for the
+    children walks it once for the whole type. In Rust the per-child
+    predicates `Schemas::child_repeats` and `Schemas::child_is_optional` are
+    still there for a single question about a single child — but called in a
+    loop they re-walk the model per child, which on a type with hundreds of
+    them (ordinary in GML, UBL and WITSML) measures about 40× slower.
 
 ## Attributes
 
-```python
-[(a.local_name, a.required, a.type.qname, a.default)
- for a in report["item"].attributes]
-# [('sku',      True,  '{urn:example}Sku', None),
-#  ('quantity', False, '{http://www.w3.org/2001/XMLSchema}positiveInteger', '1')]
-```
+=== "Python"
+
+    ```python
+    [(a.local_name, a.required, a.type.qname, a.default)
+     for a in report["item"].attributes]
+    # [('sku',      True,  '{urn:example}Sku', None),
+    #  ('quantity', False, '{http://www.w3.org/2001/XMLSchema}positiveInteger', '1')]
+    ```
+
+=== "Rust"
+
+    ```rust
+    use xsdkit::Schemas;
+
+    fn attributes(schemas: &Schemas) -> Option<()> {
+        for a in schemas.element(Some("urn:example"), "report")?.child("item")?.attributes() {
+            println!(
+                "{} required={} type={} default={:?}",
+                a.local_name(),
+                a.is_required(),
+                a.type_of().display_name(),
+                a.default(),
+            );
+        }
+        Some(())
+    }
+    ```
 
 You get **attribute uses**, not bare declarations: the use carries `required`,
 `default` and `fixed`, because those belong to the place the attribute is used
@@ -155,19 +269,41 @@ transitively, and so are the attributes inherited from base types.
 
 ## Types
 
-```python
-money = schemas["{urn:example}Money"]
+=== "Python"
 
-money.is_complex        # True
-money.content           # 'simple'  — a simple value with attributes on it
-money.base.qname        # '{http://www.w3.org/2001/XMLSchema}decimal'
-money.derivation        # 'extension'
-money.derives_from(schemas.type("http://www.w3.org/2001/XMLSchema", "decimal"))
-# True
+    ```python
+    money = schemas["{urn:example}Money"]
 
-[t.qname for t in money.base_chain]
-# ['{urn:example}Money', '…}decimal', '…}anyAtomicType', '…}anySimpleType', '…}anyType']
-```
+    money.is_complex        # True
+    money.content           # 'simple'  — a simple value with attributes on it
+    money.base.qname        # '{http://www.w3.org/2001/XMLSchema}decimal'
+    money.derivation        # 'extension'
+    money.derives_from(schemas.type("http://www.w3.org/2001/XMLSchema", "decimal"))
+    # True
+
+    [t.qname for t in money.base_chain]
+    # ['{urn:example}Money', '…}decimal', '…}anyAtomicType', '…}anySimpleType', '…}anyType']
+    ```
+
+=== "Rust"
+
+    ```rust
+    use xsdkit::Schemas;
+
+    fn types(schemas: &Schemas) -> Option<()> {
+        let money = schemas.type_(Some("urn:example"), "Money")?;
+        assert!(money.is_complex());
+
+        // Walking up stops on its own: `xs:anyType` is its own base, so `base`
+        // reports `None` there rather than looping.
+        let mut t = money;
+        while let Some(base) = t.base() {
+            println!("{}", base.display_name());
+            t = base;
+        }
+        Some(())
+    }
+    ```
 
 `content` is one of `empty`, `simple`, `element-only`, `mixed`. For simple
 types, `variety` is `atomic`, `list` or `union`, with `item_type` and
@@ -234,13 +370,13 @@ Answered by running the compiled content automaton, not by pattern-matching
 particles. Rust says the same thing the same way:
 
 ```rust
-# use xsdkit::Schemas;
-# fn demo(schemas: &Schemas) -> Option<()> {
-let report = schemas.element(Some("urn:example"), "report")?;
-let title = schemas.qname(Some("urn:example"), "title")?;
-let ok = report.accepts([title]);
-# Some(())
-# }
+use xsdkit::Schemas;
+
+fn title_alone_is_enough(schemas: &Schemas) -> Option<bool> {
+    let report = schemas.element(Some("urn:example"), "report")?;
+    let title = schemas.qname(Some("urn:example"), "title")?;
+    Some(report.accepts([title]))
+}
 ```
 
 The matcher underneath is available too, for stepping through a document and
@@ -248,12 +384,13 @@ asking `accepts_end()` when you reach the end rather than judging a whole
 sequence at once:
 
 ```rust
-# use xsdkit::Schemas;
-# fn demo(schemas: &Schemas, ty: xsdkit::TypeId) -> Option<()> {
-let mut m = schemas.match_content(ty)?;
-let ok = m.step(schemas.qname(Some("urn:example"), "title")?) && m.accepts_end();
-# Some(())
-# }
+use xsdkit::{Schemas, TypeId};
+
+fn step_through(schemas: &Schemas, ty: TypeId) -> Option<bool> {
+    let mut m = schemas.match_content(ty)?;
+    let title = schemas.qname(Some("urn:example"), "title")?;
+    Some(m.step(title) && m.accepts_end())
+}
 ```
 
 Content models compile to **Glushkov position automata**. Unique Particle
@@ -263,14 +400,44 @@ paths.
 
 ## Substitution groups
 
-```python
-head.substitutes
-# every element that may appear where `head` may, transitively,
-# including `head` itself unless it is abstract
-```
+=== "Python"
 
-Already closed for you, and already reflected in `children`, so an element with
-twelve substitutes shows all twelve as possible children of its parent.
+    ```python
+    head = schemas["{urn:example}report"]
+    head.substitutes
+    # every element that may appear where `head` may, transitively,
+    # including `head` itself unless it is abstract
+    ```
+
+=== "Rust"
+
+    ```rust
+    use xsdkit::Schemas;
+
+    fn members(schemas: &Schemas) -> Option<()> {
+        let head = schemas.element(Some("urn:example"), "shape")?;
+        for e in head.substitutes() {
+            println!("{}", e.local_name());
+        }
+        Some(())
+    }
+    ```
+
+Already closed for you, and already reflected in the children, so an element
+with twelve substitutes shows all twelve as possible children of its parent.
+
+!!! warning "Membership is not permission"
+
+    `block` on a head bars substitution, or bars the derivation method a
+    member's type used to reach the head's. `substitutes` applies it — so it
+    answers *what a document may actually name here*, and agrees with both the
+    content model and the validator.
+
+    The other question, *who is in the group*, is
+    `Schemas::substitution_group` in Rust. It ignores `block`, so it can
+    report members that no document may use. Reach for it only when you mean
+    the group itself; the two used to be one word apart and picking wrong was
+    a silent wrong answer.
 
 ## Next
 

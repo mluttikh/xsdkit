@@ -8,9 +8,15 @@ encoding you would rather not guess at.
 === "Python"
 
     ```python
+    import pathlib
     import xsdkit
 
+    xsd_text = pathlib.Path("report.xsd").read_text()
+    raw = pathlib.Path("report.xsd").read_bytes()
+
     xsdkit.SchemaSet.from_file("report.xsd")
+    # The `uri` is what the document is *treated* as having, which is what a
+    # relative `schemaLocation` inside it resolves against.
     xsdkit.SchemaSet.from_string(xsd_text, uri="report.xsd")
     xsdkit.SchemaSet.from_bytes(raw, uri="report.xsd")
     ```
@@ -18,21 +24,25 @@ encoding you would rather not guess at.
 === "Rust"
 
     ```rust
-    use xsdkit::SchemaSetBuilder;
+    use xsdkit::{Diagnostics, SchemaSetBuilder};
 
-    let schemas = SchemaSetBuilder::new()
-        .file("report.xsd")
-        .compile()
-    .into_result()?;
-    # Ok::<_, xsdkit::Diagnostics>(())
+    fn load() -> Result<xsdkit::Schemas, Diagnostics> {
+        SchemaSetBuilder::new()
+            .file("report.xsd")
+            .compile()
+            .into_result()
+    }
     ```
 
     ```rust
-    # use xsdkit::SchemaSetBuilder;
-    # let xsd_text = "";
-    # let raw: Vec<u8> = Vec::new();
-    SchemaSetBuilder::new().text(xsd_text, "report.xsd");
-    SchemaSetBuilder::new().bytes(raw, "report.xsd");
+    use xsdkit::SchemaSetBuilder;
+
+    fn from_memory(xsd_text: String, raw: Vec<u8>) {
+        // The second argument is the URI the document is *treated* as having,
+        // which is what a relative `schemaLocation` inside it resolves against.
+        SchemaSetBuilder::new().text(xsd_text, "report.xsd");
+        SchemaSetBuilder::new().bytes(raw, "report.xsd");
+    }
     ```
 
 The `uri` is not decoration. It is what diagnostics point at and what relative
@@ -94,7 +104,7 @@ When the documents are not on disk at all — in a zip, in a database, behind an
 HTTP client you control, pinned to versions you vendored — supply a resolver.
 It is a function of `(location, base)`.
 
-```python
+```python,ignore
 import zipfile
 
 with zipfile.ZipFile("schemas.zip") as z:
@@ -134,8 +144,7 @@ message becomes the diagnostic.
         .resolver(Vendored)
         .file("report.xsd")
         .compile()
-    .into_result()?;
-    # Ok::<_, xsdkit::Diagnostics>(())
+        .into_result();
     ```
 
 ### The network is off
@@ -247,7 +256,46 @@ keep.
 
 Loading is linear in the size of the documents and is the expensive half;
 querying afterwards is not. A 3,000-declaration schema compiles in about 15 ms.
-Build once and keep the result — see [Performance](project/performance.md).
+Compile once and keep the result — see [Performance](project/performance.md).
+
+## Compiling once and loading thereafter
+
+When "keep the result" has to survive the process — a CLI run repeatedly, a
+Python interpreter started per request — the `serde` feature makes a compiled
+`Schemas` serializable, so compilation happens once and everything afterwards
+is a load.
+
+```toml
+xsdkit = { version = "0.1", features = ["serde"] }
+```
+
+```rust
+use xsdkit::Schemas;
+
+fn cache(schemas: &Schemas) -> Result<Schemas, postcard::Error> {
+    let bytes = postcard::to_allocvec(schemas)?;
+    postcard::from_bytes(&bytes)
+}
+```
+
+Any serde format works, self-describing ones included: names are stored as a
+table and every component refers to them by index, and that table is written
+as a sequence so a format with string-only keys can carry it too.
+
+On a 900 KB schema of 2,000 types this is about 7× — 31 ms to compile against
+4.5 ms to load — at the cost of a cache several times the size of the source
+XSD. Whether that trade is worth taking depends entirely on the schema, so
+measure it on yours:
+
+```console
+cargo run --release --features serde --example cache -- main.xsd [search/path ...]
+```
+
+!!! warning "The format is not stable across versions"
+
+    A name is an index into an interner, so a cache only means anything
+    alongside the code that wrote it. Key the cache on the crate version and
+    rebuild on a miss; do not ship one as a data file.
 
 ## Next
 

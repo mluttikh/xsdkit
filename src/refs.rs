@@ -415,8 +415,11 @@ impl Eq for TypeRef<'_> {}
 
 /// An element as a child of one particular type.
 ///
-/// The occurrence facts belong to the pair, not to the declaration: one
-/// global element may be used by several types under different bounds.
+/// Everything [`ElementRef`] answers, this answers too, plus how often it may
+/// appear *here*. The occurrence facts belong to the pair rather than to the
+/// declaration — one global element may be a repeating child of one type and a
+/// required single child of another — which is why they are not on
+/// `ElementRef` itself. [`Self::element`] drops back to the bare declaration.
 #[derive(Copy, Clone)]
 pub struct ChildRef<'s> {
     schemas: &'s Schemas,
@@ -469,6 +472,51 @@ impl<'s> ChildRef<'s> {
     /// The elements that may appear inside this child.
     pub fn children(self) -> impl Iterator<Item = ChildRef<'s>> {
         self.element().children()
+    }
+
+    /// The child of that local name, if there is one.
+    pub fn child(self, local: &str) -> Option<ChildRef<'s>> {
+        self.element().child(local)
+    }
+
+    /// The attributes this child may carry, with how it may carry them.
+    pub fn attributes(self) -> impl Iterator<Item = AttributeUseRef<'s>> {
+        self.element().attributes()
+    }
+
+    /// Whether a sequence of names may appear inside this child.
+    pub fn accepts(self, names: impl IntoIterator<Item = QName>) -> bool {
+        self.element().accepts(names)
+    }
+
+    /// Whether an instance may say `xsi:nil="true"` here.
+    pub fn is_nillable(self) -> bool {
+        self.element().is_nillable()
+    }
+
+    /// Whether the declaration may not appear itself, only a substitute.
+    pub fn is_abstract(self) -> bool {
+        self.element().is_abstract()
+    }
+
+    /// Whether the declaration is global rather than scoped to a type.
+    pub fn is_global(self) -> bool {
+        self.element().is_global()
+    }
+
+    /// The `default` value on the declaration.
+    pub fn default(self) -> Option<&'s str> {
+        self.element().default()
+    }
+
+    /// The `fixed` value on the declaration.
+    pub fn fixed(self) -> Option<&'s str> {
+        self.element().fixed()
+    }
+
+    /// Every element that may stand in for this one here.
+    pub fn substitutes(self) -> impl Iterator<Item = ElementRef<'s>> {
+        self.element().substitutes()
     }
 }
 

@@ -45,20 +45,25 @@ schema onto a dataframe, or writing a converter.
 === "Rust"
 
     ```rust
-    use xsdkit::SchemaSetBuilder;
+    use xsdkit::{Diagnostics, SchemaSetBuilder};
 
-    let schemas = SchemaSetBuilder::new().file("report.xsd").compile().into_result()?;
-    let report = schemas.element(Some("urn:example"), "report").unwrap();
+    fn main() -> Result<(), Diagnostics> {
+        let schemas = SchemaSetBuilder::new()
+            .file("report.xsd")
+            .compile()
+            .into_result()?;
 
-    for child in report.children() {
-        println!(
-            "{}  repeating={}  optional={}",
-            child.display_name(),
-            child.repeats(),
-            child.optional(),
-        );
+        let report = schemas.element(Some("urn:example"), "report").unwrap();
+        for child in report.children() {
+            println!(
+                "{}  repeating={}  optional={}",
+                child.display_name(),
+                child.repeats(),
+                child.optional(),
+            );
+        }
+        Ok(())
     }
-    # Ok::<_, xsdkit::Diagnostics>(())
     ```
 
 Every example on this site runs against

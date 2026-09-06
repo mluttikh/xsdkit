@@ -25,6 +25,8 @@ Four parts, and each one is addressable:
 === "Python"
 
     ```python
+    import xsdkit
+
     schemas, diagnostics = xsdkit.load("report.xsd", conformance="lax")
 
     for d in diagnostics:
@@ -40,7 +42,8 @@ Four parts, and each one is addressable:
 === "Rust"
 
     ```rust
-    # use xsdkit::{Compilation, Conformance, SchemaSetBuilder};
+    use xsdkit::{Compilation, Conformance, SchemaSetBuilder};
+
     let Compilation { schemas, diagnostics } = SchemaSetBuilder::new()
         .conformance(Conformance::Lax)
         .file("report.xsd")
@@ -77,7 +80,7 @@ Validation is different again: an invalid *document* is an answer, not an
 error, so `validate` returns a report and never raises for one.
 
 ```python
-report = schemas.validate(xml)
+report = schemas.validate(open("report.xml").read())
 report.is_valid
 report.errors        # errors only
 report.diagnostics   # warnings and notes as well

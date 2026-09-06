@@ -99,8 +99,10 @@ xsdkit = { version = "0.1", features = ["serde"] }
 ```
 
 ```rust
-let cached = postcard::to_allocvec(&schemas)?;
-let schemas: xsdkit::Schemas = postcard::from_bytes(&cached)?;
+fn cache(schemas: &xsdkit::Schemas) -> Result<xsdkit::Schemas, postcard::Error> {
+    let bytes = postcard::to_allocvec(schemas)?;
+    postcard::from_bytes(&bytes)
+}
 ```
 
 Any serde format works, self-describing ones included. On a 900 KB schema of
@@ -175,6 +177,8 @@ XSD 1.1 is opt-in, as it is in Rust, and documents may be bytes whose encoding
 is detected rather than assumed:
 
 ```python
+from pathlib import Path
+
 schemas = xsdkit.SchemaSet.from_file("report.xsd", version="1.1")
 schemas.validate(Path("report.xml").read_bytes())
 ```
@@ -182,7 +186,7 @@ schemas.validate(Path("report.xml").read_bytes())
 Schemas need not be on disk. A resolver is a function of `(location, base)`
 that returns the document, or raises to say it could not be found:
 
-```python
+```python,ignore
 with zipfile.ZipFile("schemas.zip") as z:
     schemas = xsdkit.SchemaSet.from_string(main, resolver=lambda loc, _: z.read(loc))
 ```

@@ -7,19 +7,23 @@ decision you make, not one inferred from the file.
 === "Python"
 
     ```python
+    import xsdkit
+
     schemas = xsdkit.SchemaSet.from_file("report.xsd", version="1.1")
     ```
 
 === "Rust"
 
     ```rust
-    use xsdkit::{SchemaSetBuilder, Version};
+    use xsdkit::{Diagnostics, Schemas, SchemaSetBuilder, Version};
 
-    let schemas = SchemaSetBuilder::new()
-        .version(Version::Xsd11)
-        .file("report.xsd")
-        .compile().into_result()?;
-    # Ok::<_, xsdkit::Diagnostics>(())
+    fn load_11() -> Result<Schemas, Diagnostics> {
+        SchemaSetBuilder::new()
+            .version(Version::Xsd11)
+            .file("report.xsd")
+            .compile()
+            .into_result()
+    }
     ```
 
 Where a 1.1 construct is silently ignored under 1.0, you get a warning rather
@@ -50,6 +54,20 @@ interleaved with the declared ones or only at the end.
 ```
 
 ```python
+xsd = """<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema"
+                    xmlns:tns="urn:t" targetNamespace="urn:t"
+                    elementFormDefault="qualified">
+  <xs:complexType name="T">
+    <xs:openContent mode="interleave">
+      <xs:any namespace="##other" processContents="lax"/>
+    </xs:openContent>
+    <xs:sequence>
+      <xs:element name="a" type="xs:string"/>
+    </xs:sequence>
+  </xs:complexType>
+  <xs:element name="e" type="tns:T"/>
+</xs:schema>"""
+
 doc = '<e xmlns="urn:t" xmlns:o="urn:other"><a>x</a><o:extra>y</o:extra></e>'
 
 xsdkit.SchemaSet.from_string(xsd, version="1.0").validate(doc).is_valid  # False

@@ -331,6 +331,23 @@ impl PySchemaSet {
     /// `type="xs:int"` resolves like any other reference — but they are not
     /// part of what a schema *says*, and every Python-facing enumeration
     /// leaves them out.
+    /// The global names, elements before types, each sorted — the order
+    /// `keys`, `values`, `items` and iteration all agree on.
+    fn names(&self) -> Vec<String> {
+        let mut names: Vec<String> = self
+            .elements()
+            .into_iter()
+            .map(|e| clark(&self.inner, self.inner[e.id].name))
+            .chain(
+                self.types()
+                    .into_iter()
+                    .filter_map(|t| self.inner[t.id].name().map(|n| clark(&self.inner, n))),
+            )
+            .collect();
+        names.dedup();
+        names
+    }
+
     fn declared_types(&self) -> impl Iterator<Item = (&QName, &TypeId)> {
         // By namespace, not by `as_builtin`: that one answers from
         // `SimpleType::builtin` and so cannot see `xs:anyType`, which is
@@ -510,19 +527,38 @@ impl PySchemaSet {
         ))
     }
 
+    /// The global names, as a list.
+    ///
+    /// Present so this really is a mapping and not merely a thing that looks
+    /// like one: `dict(schemas)` needs `keys` alongside `__getitem__`, and
+    /// iterating names is not enough for it — the documentation claimed the
+    /// conversion worked long before it did.
+    fn keys(&self) -> PyResult<Vec<String>> {
+        Ok(self.names())
+    }
+
+    /// The global components, in the same order as `keys`.
+    fn values<'py>(&self, py: Python<'py>) -> PyResult<Vec<Bound<'py, PyAny>>> {
+        self.names()
+            .into_iter()
+            .map(|n| self.__getitem__(py, &n.into_bound_py_any(py)?))
+            .collect()
+    }
+
+    /// `(name, component)` pairs, in the same order as `keys`.
+    fn items<'py>(&self, py: Python<'py>) -> PyResult<Vec<(String, Bound<'py, PyAny>)>> {
+        self.names()
+            .into_iter()
+            .map(|n| {
+                let v = self.__getitem__(py, &n.clone().into_bound_py_any(py)?)?;
+                Ok((n, v))
+            })
+            .collect()
+    }
+
     /// The global names, elements before types, each sorted.
     fn __iter__(&self) -> PyResult<Py<PyNameIter>> {
-        let mut names: Vec<String> = self
-            .elements()
-            .into_iter()
-            .map(|e| clark(&self.inner, self.inner[e.id].name))
-            .chain(
-                self.types()
-                    .into_iter()
-                    .filter_map(|t| self.inner[t.id].name().map(|n| clark(&self.inner, n))),
-            )
-            .collect();
-        names.dedup();
+        let names = self.names();
         Python::attach(|py| Py::new(py, PyNameIter { names, at: 0 }))
     }
 

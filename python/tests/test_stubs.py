@@ -249,3 +249,17 @@ def test_the_stub_agrees_about_parameters():
             wrong.append(f"{fn_name}: runtime {runtime} vs stub {_stub_params(fn)}")
 
     assert not wrong, "parameters disagree: " + "; ".join(sorted(wrong))
+
+
+def test_a_child_answers_everything_an_element_does():
+    """The claim `Child` makes, held to.
+
+    A `Child` is handed out wherever a parent is walked, so anything it cannot
+    answer sends the caller back to `.element` for no reason. It grew
+    `attributes` and `child` late, after the docs had already promised them.
+    """
+    element = {m for m in vars(xsdkit.Element) if not m.startswith("__")}
+    child = {m for m in vars(xsdkit.Child) if not m.startswith("__")}
+    assert not element - child, f"Element has, Child lacks: {sorted(element - child)}"
+    # And what it adds is only the occurrence, which is the point of it.
+    assert child - element == {"element", "optional", "repeats"}

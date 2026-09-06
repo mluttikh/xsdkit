@@ -571,6 +571,12 @@ class SchemaSet:
         is an ordinary answer rather than a mistake."""
     def __iter__(self) -> Iterator[str]:
         """The global names in Clark notation, elements before types."""
+    def keys(self) -> list[str]:
+        """The global names, elements before types, each sorted."""
+    def values(self) -> list[Element | Type]:
+        """The global components, in the same order as ``keys``."""
+    def items(self) -> list[tuple[str, Element | Type]]:
+        """``(name, component)`` pairs, in the same order as ``keys``."""
     @property
     def documents(self) -> list[Document]: ...
     @property

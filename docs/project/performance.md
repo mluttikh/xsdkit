@@ -48,6 +48,8 @@ so loading a large schema does not stall other threads.
 The pattern that matters:
 
 ```python
+import xsdkit
+
 SCHEMAS = xsdkit.SchemaSet.from_file("report.xsd")   # once, at startup
 
 def handle(document):                                 # many times

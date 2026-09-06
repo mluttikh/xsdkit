@@ -12,6 +12,11 @@ set -euo pipefail
 cd "$(dirname "$0")/.."
 
 echo "==> rustdoc"
+# Cleaned first: `cargo doc` writes over what it regenerates but never removes
+# what it no longer generates, and this tree is copied wholesale into the site.
+# A module that has since been made private leaves a directory behind, and the
+# reference page went on linking to one.
+rm -rf target/doc
 # Denied warnings here too: a broken intra-doc link should fail the docs build,
 # not ship as a dead link on the website.
 RUSTDOCFLAGS="-D warnings" cargo doc --no-deps --all-features

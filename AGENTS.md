@@ -430,7 +430,13 @@ CI (`.github/workflows/ci.yml`) gates on four things: `cargo fmt --check`,
 `cargo doc` with `RUSTDOCFLAGS=-D warnings` — broken intra-doc links are only
 warnings otherwise, and two had already crept in. A fourth job compiles on the
 declared `rust-version`, because nothing enforces that claim at publish time.
-Run all five locally before pushing; they take seconds.
+The docs job also compiles every Rust snippet in `docs/` and `README.md`
+(`scripts/check-doc-snippets.py`) — `cargo test --doc` only reaches the ones
+inside `src/`, and the website's went stale after a rename with nothing to say
+so. The Python job runs the Python ones the same way
+(`scripts/check-doc-snippets-python.py`), which it can do literally, since they
+all work against `docs/examples/report.xsd`. Run all five locally before
+pushing; they take seconds.
 
 **Check them by exit code, never by grepping output.** `cargo clippy` caches:
 a second run on unchanged code prints `Finished` and re-emits nothing, so
@@ -448,6 +454,7 @@ cargo fmt --check \
   && cargo test --all-targets && cargo test --doc \
   && cargo test --all-targets --features serde && cargo test --doc --features serde \
   && RUSTDOCFLAGS="-D warnings" cargo doc --no-deps --features serde \
+  && python3 scripts/check-doc-snippets.py \
   && cargo +1.87 check --all-targets  # the rust-version in Cargo.toml
 ```
 
@@ -455,7 +462,8 @@ CI uses `dtolnay/rust-toolchain@stable`, which tracks the newest stable. A
 local toolchain even one release behind will miss lints CI enforces, so
 `rustup update stable` before trusting a green local run.
 
-Python: `maturin develop` then `pytest python/tests -q`. On a machine with
+Python: `maturin develop`, then `pytest python/tests -q` and
+`python3 scripts/check-doc-snippets-python.py`. On a machine with
 conda active, maturin refuses to run while both `VIRTUAL_ENV` and
 `CONDA_PREFIX` are set — `env -u CONDA_PREFIX` in front of the command.
 

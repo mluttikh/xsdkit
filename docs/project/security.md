@@ -40,7 +40,7 @@ Every unbounded thing has a bound.
 | Include nesting depth | fixed | An include chain that never ends |
 | Cycle guards | — | Circular includes, derivations, substitutions, structural cycles |
 
-```python
+```python,ignore
 schemas = xsdkit.SchemaSet.from_file("untrusted.xsd", nodes_limit=100_000)
 ```
 

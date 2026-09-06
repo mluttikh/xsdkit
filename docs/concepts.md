@@ -59,6 +59,8 @@ thread, and the Python bindings release the GIL around the build.
 === "Python"
 
     ```python
+    import xsdkit
+
     schemas = xsdkit.SchemaSet.from_file("report.xsd")
 
     schemas.counts
@@ -72,8 +74,10 @@ thread, and the Python bindings release the GIL around the build.
 === "Rust"
 
     ```rust
-    let counts = schemas.component_counts();
-    println!("{} types, {} elements", counts.types, counts.elements);
+    fn summarise(schemas: &Schemas) {
+        let counts = schemas.component_counts();
+        println!("{} types, {} elements", counts.types, counts.elements);
+    }
     ```
 
 Fifty-six types from a sixty-line schema, because **the 50 built-ins are real
@@ -152,15 +156,39 @@ For display and lookup, the pair is written in **Clark notation**:
 `{urn:example}report`. Anywhere `xsdkit` takes a name in Python it accepts
 Clark notation, a bare local name, or an explicit `(namespace, local)` pair.
 
-```python
-schemas["{urn:example}report"]          # Clark notation
-schemas.element("urn:example", "report")  # explicit pair
-report["item"]                            # local name, in the parent's namespace
-```
+=== "Python"
+
+    ```python
+    schemas["{urn:example}report"]             # Clark notation
+    schemas.element("urn:example", "report")   # explicit pair
+    report["item"]                             # local name, in the parent's namespace
+    ```
+
+=== "Rust"
+
+    ```rust
+    use xsdkit::Schemas;
+
+    fn names(schemas: &Schemas) -> Option<()> {
+        let report = schemas.element(Some("urn:example"), "report")?;
+
+        report.namespace();      // Some("urn:example")
+        report.local_name();     // "report"
+        report.display_name();   // "{urn:example}report"
+
+        // The same, for a `QName` held on its own.
+        let q = report.name();
+        schemas.namespace_of(q);
+        schemas.local_of(q);
+        Some(())
+    }
+    ```
 
 Internally names are interned to `u32` ids, so comparing them is an integer
 comparison rather than a string one — which matters when a content automaton
-is comparing thousands of them per document.
+is comparing thousands of them per document. That is an implementation
+decision, not one you are party to: nothing in either API asks you to hold an
+interner to turn a name back into text.
 
 ## Annotations survive
 

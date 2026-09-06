@@ -16,3 +16,6 @@ __pycache__/
 # Staged rustdoc, mounted into the docs site by scripts/build-docs.sh
 docs/rust/
 site/
+
+# Written and deleted by scripts/check-doc-snippets.py; only exists while it runs.
+/examples/doc_snippets.rs
