@@ -20,7 +20,7 @@ fn build(body: &str) -> Schemas {
 /// Validates `lexical` against the named global simple type.
 fn check(s: &Schemas, name: &str, lexical: &str) -> Result<Value, ValidationError> {
     let v = s.validator();
-    v.validate(s.type_(Some(NS), name).expect("type"), lexical)
+    v.validate(s.type_id(Some(NS), name).expect("type"), lexical)
 }
 
 // ---------------------------------------------------------------------------
@@ -173,7 +173,7 @@ fn a_union_reports_which_member_matched() {
         r#"<xs:simpleType name="U"><xs:union memberTypes="xs:int xs:date"/></xs:simpleType>"#,
     );
     let v = s.validator();
-    let u = s.type_(Some(NS), "U").unwrap();
+    let u = s.type_id(Some(NS), "U").unwrap();
     assert_eq!(
         v.union_member(u, "42"),
         Some(s.builtin(xsdkit::datatypes::Builtin::Int))
@@ -290,14 +290,14 @@ fn the_schema_for_schemas_validates_its_own_vocabulary() {
 
     // xs:derivationControl is an enumeration of five tokens.
     let dc = s
-        .type_(Some(xs), "derivationControl")
+        .type_id(Some(xs), "derivationControl")
         .expect("derivationControl");
     assert!(v.validate(dc, "extension").is_ok());
     assert!(v.validate(dc, "restriction").is_ok());
     assert!(v.validate(dc, "nonsense").is_err());
 
     // xs:allNNI is a union of nonNegativeInteger and the token "unbounded".
-    let nni = s.type_(Some(xs), "allNNI").expect("allNNI");
+    let nni = s.type_id(Some(xs), "allNNI").expect("allNNI");
     assert!(v.validate(nni, "0").is_ok());
     assert!(v.validate(nni, "unbounded").is_ok());
     assert!(v.validate(nni, "-1").is_err());
@@ -399,7 +399,7 @@ fn the_two_lexical_spaces_xsd11_widened() {
             .text(xsd, "mem://main.xsd")
             .build()
             .unwrap_or_else(|d| panic!("{d}"));
-        let t = s.type_(Some(NS), "T").expect("type");
+        let t = s.type_id(Some(NS), "T").expect("type");
         s.validator().validate(t, lexical).is_ok()
     }
 

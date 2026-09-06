@@ -51,24 +51,41 @@ let schemas = SchemaSetBuilder::new()
     .build()?;
 
 let report = schemas.element(Some("urn:example"), "report").unwrap();
-let ty = schemas[report].type_id;
 
 // Which children may appear, may they repeat, may they be absent?
 // Answered from the compiled automaton, with substitution groups expanded
-// and inherited content included.
-for child in schemas.possible_children(ty) {
+// and inherited content included — all three from one pass over the model.
+for child in report.children() {
     println!(
         "{}  repeating={}  optional={}",
-        schemas.display_name(schemas[child].name),
-        schemas.child_repeats(ty, child),
-        schemas.child_is_optional(ty, child),
+        child.display_name(),
+        child.repeats(),
+        child.optional(),
     );
 }
 
+// Attributes, and the type of each.
+for a in report.attributes() {
+    println!("@{} {}", a.local_name(), a.type_of().display_name());
+}
+
 // Does a sequence of children satisfy the content model?
+let ty = report.type_of().id();
 let mut m = schemas.match_content(ty).unwrap();
 let ok = m.step(schemas.qname(Some("urn:example"), "title").unwrap()) && m.accepts_end();
 ```
+
+Names resolve to references — `ElementRef`, `TypeRef`, `ChildRef` — each a
+borrow of the schema plus an id, so following a schema costs no allocation
+and no reference counting. Components still live in arenas addressed by
+`Copy` id: `element_id` and its siblings hand those back directly, every
+reference exposes `.id()`, and `schemas.get(id)` goes the other way.
+
+Ask about a whole type's children at once rather than child by child. Each
+of the singular predicates walks the content model, so a type with hundreds
+of children — ordinary in GML, UBL or WITSML — pays for hundreds of walks;
+`children()` does the same work in one, and is about 40× faster on those
+schemas.
 
 ### Caching a compiled schema
 

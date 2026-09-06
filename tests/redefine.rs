@@ -43,7 +43,7 @@ fn build(part_body: &str, main_body: &str) -> Schemas {
 
 /// Local names of a complex type's child elements.
 fn children(s: &Schemas, name: &str) -> Vec<String> {
-    let t = s.type_(Some(NS), name).expect("type");
+    let t = s.type_id(Some(NS), name).expect("type");
     s.possible_children(t)
         .into_iter()
         .map(|e| s.names().resolve(s[e].name.local).to_string())
@@ -94,7 +94,7 @@ fn a_redefinition_replaces_what_the_name_resolves_to() {
            </xs:redefine>"#,
     );
     // An element declared in the *included* document sees the redefinition.
-    let e = s.element(Some(NS), "person").unwrap();
+    let e = s.element_id(Some(NS), "person").unwrap();
     let names: Vec<_> = s
         .possible_children(s[e].type_id)
         .into_iter()
@@ -120,7 +120,7 @@ fn a_redefined_simple_type_restricts_the_original() {
            </xs:redefine>"#,
     );
     let v = s.validator();
-    let code = s.type_(Some(NS), "Code").unwrap();
+    let code = s.type_id(Some(NS), "Code").unwrap();
     assert!(v.validate(code, "abcd").is_ok());
     assert!(
         v.validate(code, "abcde").is_err(),
@@ -166,7 +166,7 @@ fn a_redefined_attribute_group_references_the_original() {
            </xs:complexType>"#,
     );
     let mut names: Vec<_> = s
-        .attribute_uses(s.type_(Some(NS), "Doc").unwrap())
+        .attribute_uses(s.type_id(Some(NS), "Doc").unwrap())
         .iter()
         .map(|u| s.names().resolve(s[u.attribute].name.local).to_string())
         .collect();
@@ -195,13 +195,13 @@ fn other_references_inside_a_redefinition_are_ordinary() {
     );
     assert_eq!(children(&s, "Person"), ["name", "code"]);
     // `tns:Code` is not being redefined, so it is the ordinary one.
-    let t = s.type_(Some(NS), "Person").unwrap();
+    let t = s.type_id(Some(NS), "Person").unwrap();
     let code_el = s
         .possible_children(t)
         .into_iter()
         .find(|e| s.names().resolve(s[*e].name.local) == "code")
         .unwrap();
-    assert_eq!(s[code_el].type_id, s.type_(Some(NS), "Code").unwrap());
+    assert_eq!(s[code_el].type_id, s.type_id(Some(NS), "Code").unwrap());
 }
 
 #[test]
@@ -256,7 +256,7 @@ fn an_override_replaces_a_type_outright() {
     );
     assert_eq!(children(&s, "Person"), ["name", "email"], "fax is gone");
 
-    let e = s.element(Some(NS), "person").unwrap();
+    let e = s.element_id(Some(NS), "person").unwrap();
     let names: Vec<_> = s
         .possible_children(s[e].type_id)
         .into_iter()
@@ -298,7 +298,7 @@ fn an_override_replaces_an_element_declaration() {
              <xs:element name="doc" type="xs:date"/>
            </xs:override>"#,
     );
-    let e = s.element(Some(NS), "doc").expect("doc is declared");
+    let e = s.element_id(Some(NS), "doc").expect("doc is declared");
     let ty = s[e].type_id;
     assert!(s[ty].is_simple(), "the override made `doc` a simple type");
     // And the element-only content model it used to have is gone.
@@ -313,7 +313,7 @@ fn an_override_replaces_an_attribute_declaration() {
              <xs:attribute name="a" type="xs:int"/>
            </xs:override>"#,
     );
-    let a = s.attribute(Some(NS), "a").expect("a is declared");
+    let a = s.attribute_id(Some(NS), "a").expect("a is declared");
     let name = s[s[a].type_id].name().map(|n| s.display_name(n));
     assert_eq!(
         name.as_deref(),

@@ -1464,22 +1464,368 @@ impl Schemas {
                 .filter(|m| m.admits.contains(&child))
                 .all(|m| m.min_occurs == 0),
             ContentModel::Automaton(a) => {
-                // Optional unless every path to the end passes through it.
-                let required: Vec<PositionId> = a
+                // Optional unless every path to the end is forced through it.
+                let forced: Vec<PositionId> = a
                     .positions()
                     .iter()
                     .enumerate()
-                    .filter(|(_, p)| p.admits.contains(&child))
+                    .filter(|(_, p)| forces(p, child))
                     .map(|(i, _)| i as PositionId)
                     .collect();
-                if required.is_empty() {
+                if forced.is_empty() {
                     return true;
                 }
                 // Optional exactly when some accepting path skips it.
-                reaches_end_avoiding(a, &required)
+                reaches_end_avoiding(a, &forced)
             }
         }
     }
+}
+
+// ---------------------------------------------------------------------------
+// Children, answered together
+// ---------------------------------------------------------------------------
+
+/// An element that may appear directly inside a type, and what its
+/// occurrence allows.
+///
+/// The two flags are the questions a config or schema generator asks of
+/// every child: does it repeat (a table rather than a column), and may it be
+/// absent (a nullable column).
+#[derive(Copy, Clone, PartialEq, Eq, Debug)]
+pub struct Child {
+    pub element: ElementId,
+    /// Whether it may appear more than once, whether from its own
+    /// `maxOccurs` or from a repeating ancestor group.
+    pub repeats: bool,
+    /// Whether some valid content leaves it out.
+    pub optional: bool,
+}
+
+/// Which positions lie on a cycle, for the whole automaton at once.
+///
+/// [`ContentAutomaton::repeats`] answers this one position at a time by
+/// walking the follow graph, so asking it for every child walked that graph
+/// once per child. A position may repeat exactly when it can reach itself —
+/// when it lies in a strongly connected component larger than one, or is its
+/// own successor — and Tarjan finds every one of them in a single pass.
+fn positions_on_a_cycle(a: &ContentAutomaton) -> Vec<bool> {
+    const UNVISITED: u32 = u32::MAX;
+    let n = a.positions().len();
+
+    // Glushkov numbers positions in order of appearance, so a model with no
+    // repetition has every edge pointing forward. Any cycle needs an edge
+    // that does not, and looking for one costs no allocation at all — which
+    // is worth having, because most content models are a plain sequence.
+    let cyclic_at_all = (0..n as PositionId).any(|p| a.follow(p).iter().any(|&q| q <= p));
+    if !cyclic_at_all {
+        return vec![false; n];
+    }
+
+    let mut on_cycle = vec![false; n];
+    let (mut index, mut low) = (vec![UNVISITED; n], vec![0u32; n]);
+    let mut on_stack = vec![false; n];
+    let mut stack: Vec<PositionId> = Vec::new();
+    let mut next = 0u32;
+    // Tarjan's recursion made explicit: a model may unroll to
+    // `MAX_POSITIONS`, and recursion that deep is a stack overflow rather
+    // than a slow path.
+    let mut call: Vec<(PositionId, usize)> = Vec::new();
+
+    for root in 0..n as PositionId {
+        if index[root as usize] != UNVISITED {
+            continue;
+        }
+        index[root as usize] = next;
+        low[root as usize] = next;
+        next += 1;
+        stack.push(root);
+        on_stack[root as usize] = true;
+        call.push((root, 0));
+
+        while let Some(&(v, i)) = call.last() {
+            let succs = a.follow(v);
+            if i < succs.len() {
+                call.last_mut().expect("the frame just read").1 += 1;
+                let w = succs[i];
+                if index[w as usize] == UNVISITED {
+                    index[w as usize] = next;
+                    low[w as usize] = next;
+                    next += 1;
+                    stack.push(w);
+                    on_stack[w as usize] = true;
+                    call.push((w, 0));
+                } else if on_stack[w as usize] {
+                    low[v as usize] = low[v as usize].min(index[w as usize]);
+                }
+                continue;
+            }
+            call.pop();
+            if let Some(&(parent, _)) = call.last() {
+                low[parent as usize] = low[parent as usize].min(low[v as usize]);
+            }
+            if low[v as usize] != index[v as usize] {
+                continue;
+            }
+            // `v` roots a component; everything above it on the stack is in it.
+            let base = stack.len()
+                - stack
+                    .iter()
+                    .rev()
+                    .position(|&w| w == v)
+                    .expect("a root is on its own stack")
+                - 1;
+            // A component of one is a cycle only if the position is its own
+            // successor, which is what `a+` over a single element gives.
+            let cyclic = stack.len() - base > 1 || a.follow(v).contains(&v);
+            for &w in &stack[base..] {
+                on_stack[w as usize] = false;
+                on_cycle[w as usize] = cyclic;
+            }
+            stack.truncate(base);
+        }
+    }
+    on_cycle
+}
+
+/// Which children every accepting path must pass through.
+///
+/// The per-child question is "does some accepting path avoid it?", and
+/// answering it one child at a time re-walks the automaton once per child.
+/// Turned around it is a single dataflow: `must[p]`, the children common to
+/// every path from the start to `p`, is what `p` forces united with the
+/// intersection of `must` over `p`'s predecessors. What every accepting path
+/// must contain is then the intersection of `must` over the accepting
+/// positions, and a child is optional exactly when it is not in that set.
+///
+/// The framework is distributive — `f(X) = X ∪ forces(p)` distributes over
+/// intersection — so iterating to a fixpoint gives the same answer as
+/// enumerating paths. That equivalence is what the differential test pins,
+/// against the per-child walk this replaces.
+///
+/// Bit sets are stored flat, `words` per position in one allocation, because
+/// most content models are small enough that a `Vec` per position would cost
+/// more than the analysis.
+fn required_children(a: &ContentAutomaton, forced: &[u64], words: usize) -> Vec<u64> {
+    let n = a.positions().len();
+    // Empty content is accepted outright, so nothing is required.
+    if a.is_nullable() {
+        return vec![0; words];
+    }
+
+    // Predecessors, as one flat array with offsets rather than a `Vec` each.
+    // Counts are accumulated one slot high and then shifted back down, which
+    // is the usual trick for filling a CSR array without a second cursor.
+    let mut offset = vec![0u32; n + 2];
+    for p in 0..n as PositionId {
+        for &q in a.follow(p) {
+            offset[q as usize + 2] += 1;
+        }
+    }
+    for i in 0..n {
+        offset[i + 2] += offset[i + 1];
+    }
+    let mut preds = vec![0u32; offset[n + 1] as usize];
+    for p in 0..n as PositionId {
+        for &q in a.follow(p) {
+            preds[offset[q as usize + 1] as usize] = p;
+            offset[q as usize + 1] += 1;
+        }
+    }
+
+    // One byte of state per position: whether the empty path reaches it, and
+    // whether its `must` has a value yet.
+    const FIRST: u8 = 1;
+    const KNOWN: u8 = 2;
+    let mut flag = vec![0u8; n];
+    // A starting position is reached by the empty path, whose contribution to
+    // the meet is nothing at all — so its `must` is its own admits, final,
+    // and no predecessor can add to it.
+    for &p in a.first() {
+        flag[p as usize] |= FIRST;
+    }
+
+    let mut must = vec![0u64; n * words];
+    // A LIFO worklist: a fixpoint does not care about the order, only that
+    // everything whose inputs changed is revisited.
+    let mut queue: Vec<PositionId> = Vec::new();
+    for &p in a.first() {
+        let i = p as usize;
+        if flag[i] & KNOWN == 0 {
+            must[i * words..(i + 1) * words].copy_from_slice(&forced[i * words..(i + 1) * words]);
+            flag[i] |= KNOWN;
+            queue.push(p);
+        }
+    }
+
+    // A predecessor with no value yet stands for "everything", which is the
+    // optimistic start an intersection dataflow needs to settle on a cycle at
+    // the right answer rather than a smaller one. Values only shrink from
+    // there, so this terminates.
+    let mut next = vec![0u64; words];
+    while let Some(p) = queue.pop() {
+        for &q in a.follow(p) {
+            let j = q as usize;
+            if flag[j] & FIRST != 0 {
+                continue;
+            }
+            let mut seeded = false;
+            for &r in &preds[offset[j] as usize..offset[j + 1] as usize] {
+                let r = r as usize;
+                if flag[r] & KNOWN == 0 {
+                    continue;
+                }
+                let bits = &must[r * words..(r + 1) * words];
+                if seeded {
+                    for (w, b) in next.iter_mut().zip(bits) {
+                        *w &= b;
+                    }
+                } else {
+                    next.copy_from_slice(bits);
+                    seeded = true;
+                }
+            }
+            if !seeded {
+                next.fill(0);
+            }
+            for (w, b) in next.iter_mut().zip(&forced[j * words..(j + 1) * words]) {
+                *w |= b;
+            }
+            if flag[j] & KNOWN == 0 || next[..] != must[j * words..(j + 1) * words] {
+                must[j * words..(j + 1) * words].copy_from_slice(&next);
+                flag[j] |= KNOWN;
+                queue.push(q);
+            }
+        }
+    }
+
+    // An automaton with no reachable accepting position accepts nothing, so
+    // no content can leave any child out: the empty intersection is
+    // everything, which is what an unseeded result means here.
+    let mut required = vec![u64::MAX; words];
+    let mut seeded = false;
+    for &p in a.last() {
+        let i = p as usize;
+        if flag[i] & KNOWN == 0 {
+            continue;
+        }
+        let bits = &must[i * words..(i + 1) * words];
+        if seeded {
+            for (w, b) in required.iter_mut().zip(bits) {
+                *w &= b;
+            }
+        } else {
+            required.copy_from_slice(bits);
+            seeded = true;
+        }
+    }
+    required
+}
+
+impl Schemas {
+    /// Every element that may appear directly inside this type, with
+    /// substitution groups expanded and its occurrence resolved.
+    ///
+    /// Prefer this to [`Self::possible_children`] followed by
+    /// [`Self::child_repeats`] and [`Self::child_is_optional`]: those answer
+    /// one child at a time, and each of them re-walks the whole content
+    /// model. Over a type with hundreds of children — ordinary in GML, UBL or
+    /// WITSML — that is the difference between one pass and several hundred.
+    /// The singular forms remain for a one-off question.
+    ///
+    /// Children come back in the order [`Self::possible_children`] gives.
+    pub fn children(&self, ty: TypeId) -> Vec<Child> {
+        let Some(model) = self.content_model(ty) else {
+            return Vec::new();
+        };
+        match model {
+            ContentModel::Empty => Vec::new(),
+            ContentModel::All(g) => {
+                let mut out: Vec<Child> = Vec::new();
+                let mut at: FxHashMap<ElementId, usize> = FxHashMap::default();
+                for m in &g.members {
+                    for &e in &m.admits {
+                        let i = *at.entry(e).or_insert_with(|| {
+                            out.push(Child {
+                                element: e,
+                                repeats: false,
+                                // Every member admitting it has to be
+                                // skippable for the child to be.
+                                optional: true,
+                            });
+                            out.len() - 1
+                        });
+                        out[i].repeats |= m.max_occurs.is_repeating();
+                        out[i].optional &= m.min_occurs == 0;
+                    }
+                }
+                out
+            }
+            ContentModel::Automaton(a) => self.automaton_children(a),
+        }
+    }
+
+    fn automaton_children(&self, a: &ContentAutomaton) -> Vec<Child> {
+        let mut out: Vec<Child> = Vec::new();
+        let mut at: FxHashMap<ElementId, usize> = FxHashMap::default();
+        for p in a.positions() {
+            for &e in &p.admits {
+                at.entry(e).or_insert_with(|| {
+                    out.push(Child {
+                        element: e,
+                        repeats: false,
+                        optional: false,
+                    });
+                    out.len() - 1
+                });
+            }
+        }
+        if out.is_empty() {
+            return out;
+        }
+
+        // A position repeats if its own particle does or if it lies on a
+        // cycle; every child it admits repeats with it.
+        let cyclic = positions_on_a_cycle(a);
+        for (i, p) in a.positions().iter().enumerate() {
+            if p.admits.is_empty() || !(cyclic[i] || self[p.particle].is_repeating()) {
+                continue;
+            }
+            for &e in &p.admits {
+                out[at[&e]].repeats = true;
+            }
+        }
+
+        // What each position *forces*, which is not what it admits — see
+        // `forces`. The dataflow below is about obligation, so a position
+        // offering a choice of elements contributes nothing to it.
+        let words = out.len().div_ceil(64);
+        let mut forced = vec![0u64; a.positions().len() * words];
+        for (i, p) in a.positions().iter().enumerate() {
+            if let [e] = p.admits[..] {
+                let k = at[&e];
+                forced[i * words + k / 64] |= 1 << (k % 64);
+            }
+        }
+        let required = required_children(a, &forced, words);
+        for (k, child) in out.iter_mut().enumerate() {
+            child.optional = required[k / 64] >> (k % 64) & 1 == 0;
+        }
+        out
+    }
+}
+
+/// Whether reaching `p` obliges the content to contain `child`.
+///
+/// Only when `p` admits nothing else. A position stands for one place in the
+/// content, and a substitution group puts every member on a single position:
+/// reaching it means matching *one* of them, so it forces none of them in
+/// particular. Confusing the position with the element made every member of
+/// a substitution group look required, even though a document naming only
+/// its sibling validates — the shape this crate exists to describe, since
+/// GML and UBL are substitution groups almost all the way down.
+fn forces(p: &Position, child: ElementId) -> bool {
+    p.admits.len() == 1 && p.admits[0] == child
 }
 
 /// Whether the automaton has an accepting path that touches none of

@@ -24,6 +24,7 @@ use crate::diagnostics::{Diagnostic, Diagnostics, Severity, Span};
 use crate::instance::PsviEvent as RustPsvi;
 use crate::model::*;
 use crate::names::QName;
+use crate::refs::{AttributeRef, ElementRef, TypeRef};
 use crate::values::Value;
 use crate::{Conformance, FileResolver, SchemaSetBuilder, Version};
 use pyo3::exceptions::PyValueError;
@@ -949,7 +950,7 @@ impl PySchemaSet {
 /// ten thousand refcounts. Two handles to the same declaration compare equal
 /// and hash alike, so they work as dict keys and set members.
 ///
-///     >>> report = schemas.element("urn:example", "report")
+///     >>> report = schemas.element_id("urn:example", "report")
 ///     >>> report.type.children          # what may appear inside
 ///     >>> report.substitutes            # what may appear *instead*
 #[pyclass(module = "xsdkit", name = "Element", frozen, from_py_object)]
@@ -959,40 +960,47 @@ pub struct PyElement {
     id: ElementId,
 }
 
+impl PyElement {
+    /// The Rust view of this declaration.
+    ///
+    /// Python objects own their schema through an `Arc` — a PyO3 class
+    /// cannot hold a borrow — so the reference is made per call rather than
+    /// stored. It is two words and allocates nothing, and going through it
+    /// is what keeps this binding a projection of the Rust API instead of a
+    /// second implementation of it.
+    fn r(&self) -> ElementRef<'_> {
+        self.s.get(self.id)
+    }
+}
+
 #[pymethods]
 impl PyElement {
     /// `(namespace, local)`; the namespace is `None` when unqualified.
     #[getter]
     fn name(&self) -> (Option<String>, String) {
-        let q = self.s[self.id].name;
+        let r = self.r();
         (
-            q.ns.map(|n| self.s.names().resolve_ns(n).to_string()),
-            self.s.names().resolve(q.local).to_string(),
+            r.namespace().map(str::to_string),
+            r.local_name().to_string(),
         )
     }
 
     /// The name in Clark notation, `{ns}local`.
     #[getter]
     fn qname(&self) -> String {
-        clark(&self.s, self.s[self.id].name)
+        self.r().display_name()
     }
 
     /// The local part of the name, without its namespace.
     #[getter]
     fn local_name(&self) -> String {
-        self.s
-            .names()
-            .resolve(self.s[self.id].name.local)
-            .to_string()
+        self.r().local_name().to_string()
     }
 
     /// The namespace URI, or `None` when the name is unqualified.
     #[getter]
     fn namespace(&self) -> Option<String> {
-        self.s[self.id]
-            .name
-            .ns
-            .map(|n| self.s.names().resolve_ns(n).to_string())
+        self.r().namespace().map(str::to_string)
     }
 
     /// The type in force for this element.
@@ -1000,7 +1008,7 @@ impl PyElement {
     fn r#type(&self) -> PyType_ {
         PyType_ {
             s: self.s.clone(),
-            id: self.s[self.id].type_id,
+            id: self.r().type_of().id(),
         }
     }
 
@@ -1010,7 +1018,7 @@ impl PyElement {
     /// element is *present and has no value*.
     #[getter]
     fn nillable(&self) -> bool {
-        self.s[self.id].nillable
+        self.r().is_nillable()
     }
 
     /// Whether this element may not appear itself.
@@ -1018,25 +1026,24 @@ impl PyElement {
     /// An abstract head exists to be substituted for — see `substitutes`.
     #[getter]
     fn r#abstract(&self) -> bool {
-        self.s[self.id].is_abstract
+        self.r().is_abstract()
     }
 
     /// Whether this is a global declaration rather than one scoped to a type.
     #[getter]
     fn is_global(&self) -> bool {
-        matches!(self.s[self.id].scope, Scope::Global)
+        self.r().is_global()
     }
 
     /// Every element that may appear where this one is permitted, including
     /// itself when it is not abstract. Substitution is transitive.
     #[getter]
     fn substitutes(&self) -> Vec<PyElement> {
-        self.s
-            .substitution_closure(self.id)
-            .into_iter()
+        self.r()
+            .substitutes()
             .map(|e| PyElement {
                 s: self.s.clone(),
-                id: e,
+                id: e.id(),
             })
             .collect()
     }
@@ -1044,19 +1051,13 @@ impl PyElement {
     /// The `default` value, supplied when the element is present but empty.
     #[getter]
     fn default(&self) -> Option<String> {
-        match &self.s[self.id].value_constraint {
-            Some(ValueConstraint::Default(v)) => Some(v.clone()),
-            _ => None,
-        }
+        self.r().default().map(str::to_string)
     }
 
     /// The `fixed` value, which an instance may repeat but not contradict.
     #[getter]
     fn fixed(&self) -> Option<String> {
-        match &self.s[self.id].value_constraint {
-            Some(ValueConstraint::Fixed(v)) => Some(v.clone()),
-            _ => None,
-        }
+        self.r().fixed().map(str::to_string)
     }
 
     /// The `xs:documentation` text, entries joined.
@@ -1465,31 +1466,35 @@ pub struct PyAttribute {
     id: AttributeId,
 }
 
+impl PyAttribute {
+    /// The Rust view of this declaration. See [`PyElement::r`].
+    fn r(&self) -> AttributeRef<'_> {
+        self.s.get(self.id)
+    }
+}
+
 #[pymethods]
 impl PyAttribute {
     /// The name as a `(namespace, local)` pair.
     #[getter]
     fn name(&self) -> (Option<String>, String) {
-        let q = self.s[self.id].name;
+        let r = self.r();
         (
-            q.ns.map(|n| self.s.names().resolve_ns(n).to_string()),
-            self.s.names().resolve(q.local).to_string(),
+            r.namespace().map(str::to_string),
+            r.local_name().to_string(),
         )
     }
 
     /// The name in Clark notation, `{namespace}local`.
     #[getter]
     fn qname(&self) -> String {
-        clark(&self.s, self.s[self.id].name)
+        self.r().display_name()
     }
 
     /// The local part of the name, without its namespace.
     #[getter]
     fn local_name(&self) -> String {
-        self.s
-            .names()
-            .resolve(self.s[self.id].name.local)
-            .to_string()
+        self.r().local_name().to_string()
     }
 
     /// The simple type of this attribute's value.
@@ -1497,27 +1502,21 @@ impl PyAttribute {
     fn r#type(&self) -> PyType_ {
         PyType_ {
             s: self.s.clone(),
-            id: self.s[self.id].type_id,
+            id: self.r().type_of().id(),
         }
     }
 
     /// The `default` value the schema supplies when the attribute is absent.
     #[getter]
     fn default(&self) -> Option<String> {
-        match &self.s[self.id].value_constraint {
-            Some(ValueConstraint::Default(v)) => Some(v.clone()),
-            _ => None,
-        }
+        self.r().default().map(str::to_string)
     }
 
     /// A schema-declared constant value — the case that can be resolved
     /// without seeing an instance document.
     #[getter]
     fn fixed(&self) -> Option<String> {
-        match &self.s[self.id].value_constraint {
-            Some(ValueConstraint::Fixed(v)) => Some(v.clone()),
-            _ => None,
-        }
+        self.r().fixed().map(str::to_string)
     }
 
     /// The `xs:documentation` text, entries joined.
@@ -1669,17 +1668,21 @@ pub struct PyType_ {
     id: TypeId,
 }
 
+impl PyType_ {
+    /// The Rust view of this definition. See [`PyElement::r`].
+    fn r(&self) -> TypeRef<'_> {
+        self.s.get(self.id)
+    }
+}
+
 #[pymethods]
 impl PyType_ {
     /// `(namespace, local)`, or `None` for an anonymous inline type.
     #[getter]
     fn name(&self) -> Option<(Option<String>, String)> {
-        self.s[self.id].name().map(|q| {
-            (
-                q.ns.map(|n| self.s.names().resolve_ns(n).to_string()),
-                self.s.names().resolve(q.local).to_string(),
-            )
-        })
+        let r = self.r();
+        r.local_name()
+            .map(|local| (r.namespace().map(str::to_string), local.to_string()))
     }
 
     /// The name in Clark notation, or `None` for an anonymous type.
@@ -1687,19 +1690,19 @@ impl PyType_ {
     /// A type declared inline inside an element has no name to report.
     #[getter]
     fn qname(&self) -> Option<String> {
-        self.s[self.id].name().map(|q| clark(&self.s, q))
+        self.r().name().map(|q| clark(&self.s, q))
     }
 
     /// Whether this type may have attributes and child elements.
     #[getter]
     fn is_complex(&self) -> bool {
-        self.s[self.id].as_complex().is_some()
+        self.r().is_complex()
     }
 
     /// Whether this type has a value space — something `validate` can parse.
     #[getter]
     fn is_simple(&self) -> bool {
-        self.s[self.id].is_simple()
+        self.r().is_simple()
     }
 
     /// Whether an instance may not use this type directly, only one derived from it.
@@ -1711,10 +1714,9 @@ impl PyType_ {
     /// The type this one derives from, or `None` at `xs:anyType`.
     #[getter]
     fn base(&self) -> Option<PyType_> {
-        let base = self.s[self.id].base();
-        (base != self.id).then(|| PyType_ {
+        self.r().base().map(|b| PyType_ {
             s: self.s.clone(),
-            id: base,
+            id: b.id(),
         })
     }
 
@@ -1764,12 +1766,11 @@ impl PyType_ {
     /// substitution groups expanded and inherited content included.
     #[getter]
     fn children(&self) -> Vec<PyElement> {
-        self.s
-            .possible_children(self.id)
-            .into_iter()
-            .map(|id| PyElement {
+        self.r()
+            .children()
+            .map(|c| PyElement {
                 s: self.s.clone(),
-                id,
+                id: c.id(),
             })
             .collect()
     }
@@ -1789,7 +1790,7 @@ impl PyType_ {
     /// simple type.
     #[getter]
     fn content(&self) -> Option<&'static str> {
-        self.s[self.id].as_complex().map(|c| match c.content {
+        self.r().definition().as_complex().map(|c| match c.content {
             ContentType::Empty => "empty",
             ContentType::Simple(_) => "simple",
             ContentType::ElementOnly(_) => "element-only",

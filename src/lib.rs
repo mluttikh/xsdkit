@@ -14,7 +14,15 @@
 //!     .build()?;
 //!
 //! let report = schemas.element(Some("urn:example"), "report").unwrap();
-//! println!("{}", schemas.display_name(schemas[report].name));
+//! for child in report.children() {
+//!     println!(
+//!         "{}{}{}: {}",
+//!         child.local_name(),
+//!         if child.repeats() { "+" } else { "" },
+//!         if child.optional() { "?" } else { "" },
+//!         child.type_of().display_name(),
+//!     );
+//! }
 //! # Ok::<_, xsdkit::Diagnostics>(())
 //! ```
 //!
@@ -24,6 +32,17 @@
 //! They are separate types on purpose: a `Schemas` never exists in an
 //! unresolved state, so ".NET's did you call `Compile()`?" is not
 //! representable. Compilation is not cheap — build once, query many times.
+//!
+//! # Two ways to ask
+//!
+//! Components live in arenas addressed by `Copy` id, and [`refs`] is the
+//! navigable view over them: [`ElementRef`], [`TypeRef`], [`ChildRef`] and
+//! friends, each a borrow plus an id, so following a schema costs no
+//! allocation and no reference counting. Name lookups
+//! ([`Schemas::element`], [`Schemas::type_`]) hand back references; the
+//! `_id` forms beside them ([`Schemas::element_id`] and so on) hand back
+//! ids, for when the id is what you mean to store or compare.
+//! [`Schemas::get`] turns any id back into a reference.
 //!
 //! # Errors
 //!
@@ -85,6 +104,7 @@ pub mod instance;
 pub mod load;
 pub mod model;
 pub mod names;
+pub mod refs;
 pub mod regex;
 pub(crate) mod restriction;
 pub mod validate;
@@ -94,8 +114,8 @@ pub mod values;
 mod python;
 
 pub use content::{
-    AllGroup, AllMember, Content, ContentAutomaton, ContentMatcher, ContentModel, ContentStats,
-    Label, MAX_POSITIONS, Position,
+    AllGroup, AllMember, Child, Content, ContentAutomaton, ContentMatcher, ContentModel,
+    ContentStats, Label, MAX_POSITIONS, Position,
 };
 pub use diagnostics::{DiagCode, Diagnostic, Diagnostics, Severity, Span};
 pub use load::{Conformance, DEFAULT_NODES_LIMIT, FileResolver, Resolver, Version};
@@ -107,6 +127,7 @@ pub use model::{
     Term, TypeDefinition, TypeId, ValueConstraint, Wildcard,
 };
 pub use names::{Interner, QName};
+pub use refs::{AttributeRef, AttributeUseRef, ChildRef, Component, ElementRef, TypeRef};
 pub use values::{
     FacetViolation, Namespaces, NoNamespaces, QNameValue, Value, ValueError, check_facets,
 };

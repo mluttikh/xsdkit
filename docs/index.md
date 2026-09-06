@@ -49,14 +49,13 @@ schema onto a dataframe, or writing a converter.
 
     let schemas = SchemaSetBuilder::new().file("report.xsd").build()?;
     let report = schemas.element(Some("urn:example"), "report").unwrap();
-    let ty = schemas[report].type_id;
 
-    for child in schemas.possible_children(ty) {
+    for child in report.children() {
         println!(
             "{}  repeating={}  optional={}",
-            schemas.display_name(schemas[child].name),
-            schemas.child_repeats(ty, child),
-            schemas.child_is_optional(ty, child),
+            child.display_name(),
+            child.repeats(),
+            child.optional(),
         );
     }
     # Ok::<_, xsdkit::Diagnostics>(())

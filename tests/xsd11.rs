@@ -282,7 +282,7 @@ fn not_namespace_excludes_rather_than_admits() {
            <xs:element name="e" type="tns:T"/>"###,
         Version::Xsd11,
     );
-    let t = s.type_(Some(NS), "T").expect("type");
+    let t = s.type_id(Some(NS), "T").expect("type");
     let p = s[t].as_complex().unwrap().content.particle().unwrap();
     let kids = s.child_particles(p);
     assert_eq!(kids.len(), 2);
@@ -440,7 +440,7 @@ fn a_local_declaration_may_name_its_own_namespace() {
         Version::Xsd11,
     );
     // The declaration landed in the namespace it named, not the document's.
-    let t = s.type_(Some(NS), "R").expect("type");
+    let t = s.type_id(Some(NS), "R").expect("type");
     let p = s[t].as_complex().unwrap().content.particle().unwrap();
     let kids = s.child_particles(p);
     let Term::Element(e) = s[kids[0]].term else {
@@ -520,7 +520,7 @@ fn conditional_inclusion_picks_one_alternative() {
             .text(xsd, "mem://main.xsd")
             .build()
             .unwrap_or_else(|d| panic!("{version:?}: {d}"));
-        let e = s.element(Some(NS), "e").expect("element");
+        let e = s.element_id(Some(NS), "e").expect("element");
         assert!(
             s[s[e].type_id]
                 .name()
@@ -549,7 +549,7 @@ fn max_version_is_exclusive() {
             .text(xsd.clone(), "mem://main.xsd")
             .build()
             .unwrap()
-            .element(Some(NS), "only10")
+            .element_id(Some(NS), "only10")
             .is_some()
     };
     assert!(read_as(Version::Xsd10), "1.0 is below the ceiling");
@@ -575,7 +575,7 @@ fn an_excluded_element_takes_its_subtree_with_it() {
         .text(xsd, "mem://main.xsd")
         .build()
         .unwrap_or_else(|d| panic!("the unread subtree should raise nothing:\n{d}"));
-    assert!(s.type_(Some(NS), "T").is_none());
+    assert!(s.type_id(Some(NS), "T").is_none());
 }
 
 /// The conditions can sit on `xs:schema` itself, which is the idiom for a
@@ -594,5 +594,5 @@ fn a_whole_document_can_be_excluded() {
         .text(xsd, "mem://main.xsd")
         .build()
         .unwrap_or_else(|d| panic!("{d}"));
-    assert!(s.element(Some(NS), "gone").is_none());
+    assert!(s.element_id(Some(NS), "gone").is_none());
 }

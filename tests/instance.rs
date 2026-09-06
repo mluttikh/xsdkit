@@ -1755,7 +1755,7 @@ fn the_psvi_reports_the_declaration_and_type_in_force() {
         "the root resolves to its global declaration"
     );
     assert!(from_instance, "xsi:type chose the type");
-    assert_eq!(ty, s.type_(Some(NS), "Derived").unwrap());
+    assert_eq!(ty, s.type_id(Some(NS), "Derived").unwrap());
 }
 
 #[test]

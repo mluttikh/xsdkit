@@ -31,9 +31,9 @@ fn the_schema_for_schemas_loads() {
         s.globals().elements.len() > 30,
         "expected the top-level XSD vocabulary"
     );
-    assert!(s.element(Some(XS), "schema").is_some());
-    assert!(s.element(Some(XS), "element").is_some());
-    assert!(s.element(Some(XS), "complexType").is_some());
+    assert!(s.element_id(Some(XS), "schema").is_some());
+    assert!(s.element_id(Some(XS), "element").is_some());
+    assert!(s.element_id(Some(XS), "complexType").is_some());
 }
 
 /// An internal DTD subset must not stop the parse. Every real XSD toolchain
@@ -57,7 +57,7 @@ fn the_xml_prefix_resolves_without_an_import() {
     );
 
     let (s, _) = schema_for_schemas();
-    let lang = s.attribute(Some("http://www.w3.org/XML/1998/namespace"), "lang");
+    let lang = s.attribute_id(Some("http://www.w3.org/XML/1998/namespace"), "lang");
     assert!(lang.is_some(), "xml:lang should be predeclared");
 }
 
@@ -73,7 +73,7 @@ fn redeclaring_the_builtins_is_not_a_duplicate() {
     // The built-in handle still points at our component, so `builtin()` and
     // a `type_()` lookup agree.
     assert_eq!(
-        s.type_(Some(XS), "string"),
+        s.type_id(Some(XS), "string"),
         Some(s.builtin(xsdkit::datatypes::Builtin::String))
     );
 }
@@ -125,7 +125,7 @@ fn identity_constraints_resolve() {
 #[test]
 fn recursive_types_do_not_hang() {
     let (s, _) = schema_for_schemas();
-    let element = s.element(Some(XS), "element").expect("xs:element");
+    let element = s.element_id(Some(XS), "element").expect("xs:element");
     let ty = s[element].type_id;
 
     // The base chain is bounded even though the content model is cyclic.
@@ -245,7 +245,7 @@ fn content_models_compile_without_approximation() {
 #[test]
 fn required_and_repeating_children_are_told_apart() {
     let (s, _) = schema_for_schemas();
-    let keybase = s.type_(Some(XS), "keybase").expect("xs:keybase");
+    let keybase = s.type_id(Some(XS), "keybase").expect("xs:keybase");
 
     let child = |n: &str| {
         s.possible_children(keybase)
@@ -276,7 +276,7 @@ fn required_and_repeating_children_are_told_apart() {
 #[test]
 fn an_extension_exposes_its_bases_children_in_a_real_schema() {
     let (s, _) = schema_for_schemas();
-    let keyref = s.element(Some(XS), "keyref").expect("xs:keyref");
+    let keyref = s.element_id(Some(XS), "keyref").expect("xs:keyref");
     let ty = s[keyref].type_id;
 
     let names: Vec<_> = s

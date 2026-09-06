@@ -146,8 +146,8 @@ fn a_round_trip_preserves_symbol_ids() {
     for (q, id) in &original.globals().types {
         assert_eq!(copy.display_name(*q), original.display_name(*q));
         assert_eq!(
-            copy.type_(Some(NS), "Unit"),
-            original.type_(Some(NS), "Unit")
+            copy.type_id(Some(NS), "Unit"),
+            original.type_id(Some(NS), "Unit")
         );
         assert!(copy.get_type(*id).is_some());
         checked += 1;
@@ -159,8 +159,8 @@ fn a_round_trip_preserves_symbol_ids() {
         assert_eq!(copy[*id].name, original[*id].name);
     }
     assert_eq!(
-        copy.element(Some(NS), "well"),
-        original.element(Some(NS), "well")
+        copy.element_id(Some(NS), "well"),
+        original.element_id(Some(NS), "well")
     );
     // Interning is what makes the ids meaningful, so the table has to be the
     // same length as well as the same order.

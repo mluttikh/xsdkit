@@ -74,7 +74,7 @@ fn schema(body: &str) -> String {
 fn builtins_are_real_components() {
     let s = build(&schema(""));
     let string = s
-        .type_(Some("http://www.w3.org/2001/XMLSchema"), "string")
+        .type_id(Some("http://www.w3.org/2001/XMLSchema"), "string")
         .unwrap();
     assert_eq!(s.as_builtin(string), Some(Builtin::String));
     assert_eq!(s.builtin(Builtin::String), string);
@@ -104,7 +104,7 @@ fn inline_complex_type_yields_child_particles() {
              </xs:complexType>
            </xs:element>"#,
     ));
-    let report = s.element(Some(NS), "report").expect("global element");
+    let report = s.element_id(Some(NS), "report").expect("global element");
     let ty = s[report].type_id;
     assert_eq!(child_elements(&s, ty), ["title", "count"]);
 
@@ -124,15 +124,15 @@ fn named_types_resolve_across_declarations() {
            </xs:complexType>
            <xs:element name="station" type="tns:Station"/>"#,
     ));
-    let e = s.element(Some(NS), "station").unwrap();
-    let named = s.type_(Some(NS), "Station").unwrap();
+    let e = s.element_id(Some(NS), "station").unwrap();
+    let named = s.type_id(Some(NS), "Station").unwrap();
     assert_eq!(s[e].type_id, named);
 }
 
 #[test]
 fn an_element_without_a_type_is_any_type() {
     let s = build(&schema(r#"<xs:element name="loose"/>"#));
-    let e = s.element(Some(NS), "loose").unwrap();
+    let e = s.element_id(Some(NS), "loose").unwrap();
     assert_eq!(s[e].type_id, s.builtin(Builtin::AnyType));
 }
 
@@ -145,7 +145,7 @@ fn element_form_default_governs_local_qualification() {
              </xs:sequence></xs:complexType>
            </xs:element>"#,
     ));
-    let ty = qualified[qualified.element(Some(NS), "a").unwrap()].type_id;
+    let ty = qualified[qualified.element_id(Some(NS), "a").unwrap()].type_id;
     let p = qualified[ty]
         .as_complex()
         .unwrap()
@@ -175,7 +175,7 @@ fn element_form_default_governs_local_qualification() {
         )
         .build()
         .unwrap();
-    let ty = unqualified[unqualified.element(Some(NS), "a").unwrap()].type_id;
+    let ty = unqualified[unqualified.element_id(Some(NS), "a").unwrap()].type_id;
     let p = unqualified[ty]
         .as_complex()
         .unwrap()
@@ -208,7 +208,7 @@ fn occurrence_drives_repeatability_and_optionality() {
              </xs:sequence></xs:complexType>
            </xs:element>"#,
     ));
-    let ty = s[s.element(Some(NS), "root").unwrap()].type_id;
+    let ty = s[s.element_id(Some(NS), "root").unwrap()].type_id;
     let p = s[ty].as_complex().unwrap().content.particle().unwrap();
     let kids = s.child_particles(p);
 
@@ -249,7 +249,7 @@ fn attribute_uses_carry_kind_and_value_constraint() {
              </xs:simpleContent>
            </xs:complexType>"#,
     ));
-    let ty = s.type_(Some(NS), "Measure").unwrap();
+    let ty = s.type_id(Some(NS), "Measure").unwrap();
     let uses = s.attribute_uses(ty);
     assert_eq!(uses.len(), 2);
 
@@ -280,7 +280,7 @@ fn attribute_groups_flatten_transitively() {
              <xs:attribute name="ver" type="xs:string"/>
            </xs:complexType>"#,
     ));
-    let ty = s.type_(Some(NS), "Doc").unwrap();
+    let ty = s.type_id(Some(NS), "Doc").unwrap();
     let mut names: Vec<_> = s
         .attribute_uses(ty)
         .iter()
@@ -322,7 +322,7 @@ fn facets_compose_across_restriction_steps() {
              </xs:restriction>
            </xs:simpleType>"#,
     ));
-    let t = s.type_(Some(NS), "Code").unwrap();
+    let t = s.type_id(Some(NS), "Code").unwrap();
     let st = s[t].as_simple().unwrap();
     assert_eq!(st.variety, Variety::Atomic);
     assert_eq!(st.facets.max_length, Some(4));
@@ -344,7 +344,9 @@ fn enumerations_and_whitespace_survive() {
              </xs:restriction>
            </xs:simpleType>"#,
     ));
-    let st = s[s.type_(Some(NS), "Status").unwrap()].as_simple().unwrap();
+    let st = s[s.type_id(Some(NS), "Status").unwrap()]
+        .as_simple()
+        .unwrap();
     assert_eq!(
         st.facets.enumeration.as_ref().unwrap(),
         &vec!["open".to_string(), "closed".to_string()]
@@ -363,11 +365,11 @@ fn list_and_union_varieties_resolve_their_members() {
              <xs:union memberTypes="xs:int xs:string"/>
            </xs:simpleType>"#,
     ));
-    let ints = s[s.type_(Some(NS), "Ints").unwrap()].as_simple().unwrap();
+    let ints = s[s.type_id(Some(NS), "Ints").unwrap()].as_simple().unwrap();
     assert_eq!(ints.variety, Variety::List);
     assert_eq!(ints.item_type, Some(s.builtin(Builtin::Int)));
 
-    let u = s[s.type_(Some(NS), "IntOrWord").unwrap()]
+    let u = s[s.type_id(Some(NS), "IntOrWord").unwrap()]
         .as_simple()
         .unwrap();
     assert_eq!(u.variety, Variety::Union);
@@ -411,8 +413,8 @@ fn complex_extension_records_its_base_and_method() {
              </xs:complexContent>
            </xs:complexType>"#,
     ));
-    let base = s.type_(Some(NS), "Base").unwrap();
-    let derived = s.type_(Some(NS), "Derived").unwrap();
+    let base = s.type_id(Some(NS), "Base").unwrap();
+    let derived = s.type_id(Some(NS), "Derived").unwrap();
     let c = s[derived].as_complex().unwrap();
     assert_eq!(c.base, base);
     assert_eq!(c.derivation, DerivationMethod::Extension);
@@ -430,7 +432,7 @@ fn substitution_closure_is_transitive_and_skips_abstract_heads() {
            <xs:element name="curve"   type="xs:string" substitutionGroup="tns:feature"/>
            <xs:element name="arc"     type="xs:string" substitutionGroup="tns:curve"/>"#,
     ));
-    let feature = s.element(Some(NS), "feature").unwrap();
+    let feature = s.element_id(Some(NS), "feature").unwrap();
     let mut members: Vec<_> = s
         .substitution_closure(feature)
         .into_iter()
@@ -442,7 +444,7 @@ fn substitution_closure_is_transitive_and_skips_abstract_heads() {
     // The head is abstract, so it cannot itself appear in an instance.
     assert!(!members.contains(&"feature".to_string()));
 
-    let curve = s.element(Some(NS), "curve").unwrap();
+    let curve = s.element_id(Some(NS), "curve").unwrap();
     let mut sub: Vec<_> = s
         .substitution_closure(curve)
         .into_iter()
@@ -490,8 +492,8 @@ fn include_merges_into_the_same_namespace() {
         .text(&main, "mem://main.xsd")
         .build()
         .unwrap();
-    let root = s.element(Some(NS), "root").unwrap();
-    assert_eq!(s[root].type_id, s.type_(Some(NS), "Shared").unwrap());
+    let root = s.element_id(Some(NS), "root").unwrap();
+    assert_eq!(s[root].type_id, s.type_id(Some(NS), "Shared").unwrap());
 }
 
 /// A chameleon include has no `targetNamespace` of its own and is absorbed
@@ -515,8 +517,8 @@ fn chameleon_include_absorbs_the_includers_namespace() {
         .unwrap();
 
     // It answers to the includer's namespace, not to no-namespace.
-    assert!(s.type_(Some(NS), "Chameleon").is_some());
-    assert!(s.type_(None, "Chameleon").is_none());
+    assert!(s.type_id(Some(NS), "Chameleon").is_some());
+    assert!(s.type_id(None, "Chameleon").is_none());
     assert!(s.documents().iter().any(|d| d.chameleon));
 }
 
@@ -540,8 +542,8 @@ fn import_brings_in_another_namespace() {
         .text(&main, "mem://main.xsd")
         .build()
         .unwrap();
-    let root = s.element(Some(NS), "root").unwrap();
-    assert_eq!(s[root].type_id, s.type_(Some("urn:other"), "Id").unwrap());
+    let root = s.element_id(Some(NS), "root").unwrap();
+    assert_eq!(s[root].type_id, s.type_id(Some("urn:other"), "Id").unwrap());
 }
 
 #[test]
@@ -563,8 +565,8 @@ fn circular_includes_terminate() {
         .text(&a, "a.xsd")
         .build()
         .unwrap();
-    assert!(s.element(Some(NS), "a").is_some());
-    assert!(s.element(Some(NS), "b").is_some());
+    assert!(s.element_id(Some(NS), "a").is_some());
+    assert!(s.element_id(Some(NS), "b").is_some());
 }
 
 #[test]
@@ -617,7 +619,7 @@ fn keyref_resolves_to_the_key_it_refers_to() {
              </xs:keyref>
            </xs:element>"#,
     ));
-    let root = s.element(Some(NS), "root").unwrap();
+    let root = s.element_id(Some(NS), "root").unwrap();
     let idcs = &s[root].identity_constraints;
     assert_eq!(idcs.len(), 2);
 
@@ -661,7 +663,7 @@ fn a_simple_type_cannot_contain_itself() {
             "mem://main.xsd",
         )
         .build_with_warnings();
-    let t = s.type_(Some(NS), "L").expect("type");
+    let t = s.type_id(Some(NS), "L").expect("type");
     assert!(s.validator().validate(t, "anything").is_err());
 }
 
@@ -744,8 +746,8 @@ fn an_identity_constraint_can_be_referenced_instead_of_defined() {
         .build()
         .unwrap_or_else(|d| panic!("expected a clean build, got:\n{d}"));
 
-    let first = s.element(Some(NS), "first").unwrap();
-    let second = s.element(Some(NS), "second").unwrap();
+    let first = s.element_id(Some(NS), "first").unwrap();
+    let second = s.element_id(Some(NS), "second").unwrap();
     let a = &s[first].identity_constraints;
     let b = &s[second].identity_constraints;
     assert_eq!(a.len(), 1);
@@ -772,7 +774,7 @@ fn an_unresolved_identity_constraint_reference_drops_the_slot() {
         .build_with_warnings();
     assert!(d.iter().any(|x| x.code == DiagCode::UnresolvedReference));
 
-    let e = s.element(Some(NS), "e").unwrap();
+    let e = s.element_id(Some(NS), "e").unwrap();
     assert!(s[e].identity_constraints.is_empty());
     // And nothing in the arena still holds the placeholder.
     for id in &s[e].identity_constraints {
@@ -821,7 +823,7 @@ fn appinfo_is_kept_verbatim() {
              </xs:annotation>
            </xs:element>"#,
     ));
-    let e = s.element(Some(NS), "pressure").unwrap();
+    let e = s.element_id(Some(NS), "pressure").unwrap();
     let ann = s
         .get_annotation(s[e].annotation.expect("annotation"))
         .unwrap();
@@ -852,7 +854,7 @@ fn wildcards_record_their_namespace_constraint() {
              <xs:anyAttribute namespace="##any"/>
            </xs:complexType>"###,
     ));
-    let ty = s.type_(Some(NS), "Open").unwrap();
+    let ty = s.type_id(Some(NS), "Open").unwrap();
     let c = s[ty].as_complex().unwrap();
     assert!(matches!(
         c.attribute_wildcard.as_ref().unwrap().namespace,
@@ -927,8 +929,8 @@ fn duplicate_globals_collide_only_within_one_symbol_space() {
         r#"<xs:element name="Foo" type="xs:string"/>
            <xs:complexType name="Foo"><xs:sequence/></xs:complexType>"#,
     ));
-    assert!(s.element(Some(NS), "Foo").is_some());
-    assert!(s.type_(Some(NS), "Foo").is_some());
+    assert!(s.element_id(Some(NS), "Foo").is_some());
+    assert!(s.type_id(Some(NS), "Foo").is_some());
 
     // Same name, same symbol space — an error.
     let d = errors(&schema(
@@ -1020,7 +1022,7 @@ fn a_latin1_schema_loads() {
         .build()
         .unwrap_or_else(|d| panic!("a Latin-1 schema must load:\n{d}"));
 
-    let e = s.element(Some(NS), "messgroesse").expect("element");
+    let e = s.element_id(Some(NS), "messgroesse").expect("element");
     let ann = s
         .get_annotation(s[e].annotation.expect("annotation"))
         .unwrap();
@@ -1043,7 +1045,7 @@ fn a_utf16_schema_loads() {
         .bytes(utf16le(&xsd), "mem://utf16.xsd")
         .build()
         .unwrap_or_else(|d| panic!("{d}"));
-    assert!(s.element(Some(NS), "temperatur").is_some());
+    assert!(s.element_id(Some(NS), "temperatur").is_some());
 }
 
 #[test]
@@ -1054,7 +1056,7 @@ fn a_utf8_bom_does_not_break_the_parse() {
         .bytes(b, "mem://bom.xsd")
         .build()
         .unwrap_or_else(|d| panic!("{d}"));
-    assert!(s.element(Some(NS), "a").is_some());
+    assert!(s.element_id(Some(NS), "a").is_some());
 }
 
 /// The failure this fix exists for: an encoding problem used to surface as a
@@ -1130,7 +1132,7 @@ fn an_included_document_is_decoded_on_its_own_terms() {
         .unwrap_or_else(|d| panic!("{d}"));
 
     assert!(
-        s.type_(Some(NS), "Größe").is_some(),
+        s.type_id(Some(NS), "Größe").is_some(),
         "the included document's own encoding declaration must be honoured"
     );
 }
@@ -1163,7 +1165,7 @@ fn attribute_uses_are_inherited_through_derivation() {
            </xs:complexType>"#,
     ));
     let names = |n: &str| -> Vec<String> {
-        s.attribute_uses(s.type_(Some(NS), n).unwrap())
+        s.attribute_uses(s.type_id(Some(NS), n).unwrap())
             .iter()
             .map(|u| s.names().resolve(s[u.attribute].name.local).to_string())
             .collect()
@@ -1202,7 +1204,7 @@ fn a_restriction_narrows_an_inherited_attribute() {
              </xs:restriction></xs:simpleContent>
            </xs:complexType>"#,
     ));
-    let uses = s.attribute_uses(s.type_(Some(NS), "Metres").unwrap());
+    let uses = s.attribute_uses(s.type_id(Some(NS), "Metres").unwrap());
     assert_eq!(uses.len(), 1, "not duplicated with the inherited one");
     // A schema-declared constant unit: known without seeing any document.
     assert_eq!(
@@ -1213,7 +1215,7 @@ fn a_restriction_narrows_an_inherited_attribute() {
         Some("m")
     );
 
-    let prohibited = s.attribute_uses(s.type_(Some(NS), "NoUnit").unwrap());
+    let prohibited = s.attribute_uses(s.type_id(Some(NS), "NoUnit").unwrap());
     assert_eq!(prohibited.len(), 1);
     assert_eq!(prohibited[0].kind, AttributeUseKind::Prohibited);
 }
@@ -1231,7 +1233,7 @@ fn inherited_attributes_accumulate_down_a_chain() {
            </xs:extension></xs:complexContent></xs:complexType>"#,
     ));
     let names: Vec<_> = s
-        .attribute_uses(s.type_(Some(NS), "C").unwrap())
+        .attribute_uses(s.type_id(Some(NS), "C").unwrap())
         .iter()
         .map(|u| s.names().resolve(s[u.attribute].name.local).to_string())
         .collect();
@@ -1320,7 +1322,7 @@ fn a_type_whose_whole_content_is_a_dangling_group_ref_does_not_panic() {
         .build_with_warnings();
     assert!(d.iter().any(|x| x.code == DiagCode::UnresolvedReference));
     // The type survives with empty content rather than a placeholder.
-    let t = s.type_(Some(NS), "T").unwrap();
+    let t = s.type_id(Some(NS), "T").unwrap();
     assert!(s.possible_children(t).is_empty());
     // And the whole model stays walkable.
     assert!(s.content_model(t).is_some());
@@ -1371,7 +1373,7 @@ fn no_placeholder_survives_anywhere_in_the_particle_arena() {
     }
 
     // The wildcard, the one member that did resolve, is still there.
-    let t = s.type_(Some(NS), "T").unwrap();
+    let t = s.type_id(Some(NS), "T").unwrap();
     assert!(s.content_model(t).is_some());
 }
 
@@ -1399,8 +1401,8 @@ fn the_xsi_attributes_are_predeclared() {
         .build()
         .unwrap_or_else(|d| panic!("{d}"));
 
-    assert!(s.attribute(Some(XSI), "type").is_some());
-    assert!(s.attribute(Some(XSI), "nil").is_some());
-    let ty = s[s.element(Some(NS), "v").unwrap()].type_id;
+    assert!(s.attribute_id(Some(XSI), "type").is_some());
+    assert!(s.attribute_id(Some(XSI), "nil").is_some());
+    let ty = s[s.element_id(Some(NS), "v").unwrap()].type_id;
     assert_eq!(s.attribute_uses(ty).len(), 1, "the ref resolved");
 }

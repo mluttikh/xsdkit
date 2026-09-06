@@ -43,7 +43,7 @@ fn load(src: &str) -> Duration {
         .build()
         .expect("the generated schema must compile");
     let elapsed = start.elapsed();
-    assert!(set.element(Some("urn:scale"), "e0").is_some());
+    assert!(set.element_id(Some("urn:scale"), "e0").is_some());
     elapsed
 }
 

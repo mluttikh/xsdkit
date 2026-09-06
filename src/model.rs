@@ -1034,18 +1034,23 @@ impl Schemas {
         Some(QName { ns, local })
     }
 
-    /// Looks up a global element declaration.
-    pub fn element(&self, ns: Option<&str>, local: &str) -> Option<ElementId> {
+    /// Looks up a global element declaration, by id.
+    ///
+    /// [`Self::element`] returns the same declaration as a navigable
+    /// reference, which is what most callers want; this is the form to reach
+    /// for when the id is the thing being stored or compared.
+    pub fn element_id(&self, ns: Option<&str>, local: &str) -> Option<ElementId> {
         self.globals.elements.get(&self.qname(ns, local)?).copied()
     }
 
-    /// Looks up a global type definition.
-    pub fn type_(&self, ns: Option<&str>, local: &str) -> Option<TypeId> {
+    /// Looks up a global type definition, by id. See [`Self::element_id`].
+    pub fn type_id(&self, ns: Option<&str>, local: &str) -> Option<TypeId> {
         self.globals.types.get(&self.qname(ns, local)?).copied()
     }
 
-    /// Looks up a global attribute declaration.
-    pub fn attribute(&self, ns: Option<&str>, local: &str) -> Option<AttributeId> {
+    /// Looks up a global attribute declaration, by id. See
+    /// [`Self::element_id`].
+    pub fn attribute_id(&self, ns: Option<&str>, local: &str) -> Option<AttributeId> {
         self.globals
             .attributes
             .get(&self.qname(ns, local)?)

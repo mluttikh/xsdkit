@@ -165,7 +165,7 @@ fn the_scale_facets_bound_the_scale() {
              </xs:restriction>
            </xs:simpleType>"#,
     );
-    let t = s.type_(Some(NS), "T").expect("type");
+    let t = s.type_id(Some(NS), "T").expect("type");
     let v = s.validator();
     for good in ["0.0000", "0.0030", "2.0e-3", "0.0000003", "-0.0000"] {
         assert!(v.validate(t, good).is_ok(), "{good} should be in scale");
@@ -188,7 +188,7 @@ fn total_digits_applies_to_the_written_form() {
              </xs:restriction>
            </xs:simpleType>"#,
     );
-    let t = s.type_(Some(NS), "T").expect("type");
+    let t = s.type_id(Some(NS), "T").expect("type");
     let v = s.validator();
     for good in [
         "1.234", "1234", "1.000", "0.000000", "1.234e20", "INF", "NaN",
@@ -263,7 +263,7 @@ fn an_enumeration_matches_the_number_not_the_spelling() {
               </xs:restriction>
             </xs:simpleType>"##,
     );
-    let t = s.type_(Some(NS), "T").expect("type");
+    let t = s.type_id(Some(NS), "T").expect("type");
     let v = s.validator();
     for good in [
         "-0.0", "-INF", "+INF", "0.0", "0.0000", "0", "1.0", "1", "10e-1", "1e0",

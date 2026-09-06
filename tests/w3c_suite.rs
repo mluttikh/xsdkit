@@ -246,6 +246,80 @@ impl Tally {
     }
 }
 
+/// `Schemas::children` and the per-child predicates must agree on every
+/// complex type the suite can build.
+///
+/// They are two implementations of one question: the plural form answers it
+/// with a components pass and an intersection dataflow over the whole
+/// automaton, the singular ones by re-walking the model per child. Synthetic
+/// tests pin the shapes that were thought of; this pins the tens of thousands
+/// that were not, over real content models that no one wrote for this.
+#[test]
+fn children_agrees_with_the_predicates_across_the_suite() {
+    let Some(root) = suite() else {
+        eprintln!("XSDTESTS is not set; skipping the W3C suite");
+        return;
+    };
+    let (cases, _) = parse_test_sets(&root);
+    let (mut types, mut pairs) = (0usize, 0usize);
+
+    for case in &cases {
+        let version = version_of(&case.version);
+        let mut b = SchemaSetBuilder::new()
+            .version(version)
+            .conformance(Conformance::Lax);
+        if let Some(dir) = case.documents[0].parent() {
+            b = b.search_path(dir);
+        }
+        for d in &case.documents {
+            b = b.file(d.display().to_string());
+        }
+        // Every case, not just the ones the suite calls valid: a schema with
+        // errors still compiles to components, and its content models are as
+        // good an oracle as any. A panic is another test's business.
+        let Ok((s, _)) =
+            std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| b.build_with_warnings()))
+        else {
+            continue;
+        };
+
+        for (tid, def) in s.iter_types() {
+            if def.as_complex().is_none() {
+                continue;
+            }
+            types += 1;
+            let plural = s.children(tid);
+            assert_eq!(
+                plural.iter().map(|c| c.element).collect::<Vec<_>>(),
+                s.possible_children(tid),
+                "{} disagrees on which children {} has",
+                case.group,
+                s.display_name(def.name().unwrap_or(xsdkit::QName::UNKNOWN)),
+            );
+            for c in &plural {
+                pairs += 1;
+                assert_eq!(
+                    (c.repeats, c.optional),
+                    (
+                        s.child_repeats(tid, c.element),
+                        s.child_is_optional(tid, c.element)
+                    ),
+                    "{} disagrees on {}",
+                    case.group,
+                    s.display_name(s[c.element].name),
+                );
+            }
+        }
+    }
+    // A floor, not a target: it exists so a suite that failed to load cannot
+    // pass this test by checking nothing.
+    assert!(
+        pairs > 2_000,
+        "expected the whole suite; only {pairs} pairs over {types} types"
+    );
+    eprintln!("children: {pairs} parent/child pairs over {types} complex types");
+}
+
 #[test]
 fn w3c_schema_conformance() {
     let Some(root) = suite() else {

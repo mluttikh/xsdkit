@@ -41,7 +41,7 @@ fn ty(content: &str) -> String {
 }
 
 fn type_t(s: &Schemas) -> TypeId {
-    s.type_(Some(NS), "T").expect("type T")
+    s.type_id(Some(NS), "T").expect("type T")
 }
 
 /// Runs a space-separated sequence of local names through the matcher.
@@ -461,6 +461,281 @@ fn child_is_optional_matches_the_schema_exactly() {
     // Either branch of a choice can be absent, so both are nullable columns.
     assert!(s.child_is_optional(t, child("left")));
     assert!(s.child_is_optional(t, child("right")));
+}
+
+// ---------------------------------------------------------------------------
+// The plural form
+// ---------------------------------------------------------------------------
+
+/// `children` and the per-child predicates must agree on every type in the
+/// schema, in content and in order.
+///
+/// The plural form answers all of it from one pass over the automaton —
+/// strongly connected components for repetition, an intersection dataflow for
+/// optionality — where the singular ones re-walk the model per child. Two
+/// implementations of one question is only safe while something keeps
+/// checking they are the same question.
+#[track_caller]
+fn agree(s: &Schemas) -> usize {
+    let mut checked = 0;
+    for (tid, def) in s.iter_types() {
+        if def.as_complex().is_none() {
+            continue;
+        }
+        let plural = s.children(tid);
+        assert_eq!(
+            plural.iter().map(|c| c.element).collect::<Vec<_>>(),
+            s.possible_children(tid),
+            "children and possible_children disagree on {tid:?}"
+        );
+        for c in &plural {
+            let name = s.display_name(s[c.element].name);
+            assert_eq!(
+                c.repeats,
+                s.child_repeats(tid, c.element),
+                "repeats disagree for {name}"
+            );
+            assert_eq!(
+                c.optional,
+                s.child_is_optional(tid, c.element),
+                "optional disagree for {name}"
+            );
+            checked += 1;
+        }
+    }
+    checked
+}
+
+/// Named children of `T`, as `(name, repeats, optional)`, sorted.
+fn facts(s: &Schemas) -> Vec<(String, bool, bool)> {
+    let t = type_t(s);
+    let mut v: Vec<_> = s
+        .children(t)
+        .into_iter()
+        .map(|c| {
+            (
+                s.names().resolve(s[c.element].name.local).to_string(),
+                c.repeats,
+                c.optional,
+            )
+        })
+        .collect();
+    v.sort();
+    v
+}
+
+#[test]
+fn children_answers_both_questions_at_once() {
+    let s = build(&ty(r#"<xs:sequence>
+        <xs:element name="required" type="xs:string"/>
+        <xs:element name="skippable" type="xs:string" minOccurs="0"/>
+        <xs:element name="many" type="xs:string" maxOccurs="unbounded"/>
+        <xs:choice>
+            <xs:element name="left" type="xs:string"/>
+            <xs:element name="right" type="xs:string"/>
+        </xs:choice>
+    </xs:sequence>"#));
+    assert_eq!(
+        facts(&s),
+        [
+            ("left".into(), false, true),
+            ("many".into(), true, false),
+            ("required".into(), false, false),
+            ("right".into(), false, true),
+            ("skippable".into(), false, true),
+        ]
+    );
+    assert_eq!(agree(&s), 5);
+}
+
+/// A repeating ancestor group puts its positions on a cycle, which is how the
+/// components pass sees repetition that no single `maxOccurs` states.
+#[test]
+fn a_cycle_makes_its_children_repeat() {
+    let s = build(&ty(r#"<xs:sequence maxOccurs="unbounded">
+        <xs:element name="a" type="xs:string"/>
+        <xs:element name="b" type="xs:string" minOccurs="0"/>
+    </xs:sequence>"#));
+    assert_eq!(
+        facts(&s),
+        [("a".into(), true, false), ("b".into(), true, true)]
+    );
+    assert_eq!(agree(&s), 2);
+}
+
+/// A single position that is its own successor is a component of one, so the
+/// self-edge has to be looked for separately.
+#[test]
+fn a_lone_repeating_element_is_a_component_of_one() {
+    let s = build(&ty(r#"<xs:sequence>
+        <xs:element name="only" type="xs:string" maxOccurs="unbounded"/>
+    </xs:sequence>"#));
+    assert_eq!(facts(&s), [("only".into(), true, false)]);
+    assert_eq!(agree(&s), 1);
+}
+
+/// The same element in both branches of a choice: no path avoids it, so it is
+/// required even though neither position alone is on every path.
+///
+/// It has to be one global declaration referenced twice. Two local
+/// declarations that merely share a name are two different children, which is
+/// the whole reason local declarations are scoped to their type.
+#[test]
+fn a_child_on_every_branch_is_required() {
+    let s = build(&format!(
+        r#"<xs:element name="both" type="xs:string"/>{}"#,
+        ty(r#"<xs:choice>
+        <xs:sequence>
+            <xs:element ref="tns:both"/>
+            <xs:element name="x" type="xs:string"/>
+        </xs:sequence>
+        <xs:sequence>
+            <xs:element name="y" type="xs:string"/>
+            <xs:element ref="tns:both"/>
+        </xs:sequence>
+    </xs:choice>"#)
+    ));
+    assert_eq!(
+        facts(&s),
+        [
+            ("both".into(), false, false),
+            ("x".into(), false, true),
+            ("y".into(), false, true),
+        ]
+    );
+    assert_eq!(agree(&s), 3);
+}
+
+/// One element at two positions, repeating at only one of them: the facts
+/// belong to the child, not the position, and repetition anywhere counts.
+#[test]
+fn one_repeating_position_is_enough() {
+    let s = build(&format!(
+        r#"<xs:element name="shared" type="xs:string"/>{}"#,
+        ty(r#"<xs:sequence>
+        <xs:element ref="tns:shared"/>
+        <xs:element name="mid" type="xs:string"/>
+        <xs:element ref="tns:shared" maxOccurs="unbounded"/>
+    </xs:sequence>"#)
+    ));
+    assert_eq!(
+        facts(&s),
+        [("mid".into(), false, false), ("shared".into(), true, false)]
+    );
+    assert_eq!(agree(&s), 2);
+}
+
+/// When the whole model is skippable nothing is required, and the dataflow
+/// never runs.
+#[test]
+fn a_nullable_model_makes_every_child_optional() {
+    let s = build(&ty(r#"<xs:sequence minOccurs="0">
+        <xs:element name="a" type="xs:string"/>
+        <xs:element name="b" type="xs:string"/>
+    </xs:sequence>"#));
+    assert_eq!(
+        facts(&s),
+        [("a".into(), false, true), ("b".into(), false, true)]
+    );
+    assert_eq!(agree(&s), 2);
+}
+
+/// `xs:all` is not an automaton, so occurrence is read off the members —
+/// repeating if any member admitting it repeats, optional only if every one
+/// of them is skippable.
+#[test]
+fn an_all_group_reads_its_members() {
+    let s = build(&ty(r#"<xs:all>
+        <xs:element name="need" type="xs:string"/>
+        <xs:element name="skip" type="xs:string" minOccurs="0"/>
+        <xs:element name="many" type="xs:string" minOccurs="0" maxOccurs="unbounded"/>
+    </xs:all>"#));
+    assert_eq!(
+        facts(&s),
+        [
+            ("many".into(), true, true),
+            ("need".into(), false, false),
+            ("skip".into(), false, true),
+        ]
+    );
+    assert_eq!(agree(&s), 3);
+}
+
+#[test]
+fn children_expands_substitution_groups() {
+    let s = build(&format!(
+        r#"<xs:element name="geometry" type="xs:string" abstract="true"/>
+           <xs:element name="point" type="xs:string" substitutionGroup="tns:geometry"/>
+           <xs:element name="curve" type="xs:string" substitutionGroup="tns:geometry"/>
+           {}"#,
+        ty(r#"<xs:sequence>
+                <xs:element ref="tns:geometry" maxOccurs="unbounded"/>
+              </xs:sequence>"#)
+    ));
+    // Both members inherit the reference's occurrence, and neither is
+    // required: the other may stand in its place.
+    assert_eq!(
+        facts(&s),
+        [("curve".into(), true, true), ("point".into(), true, true)]
+    );
+    assert_eq!(agree(&s), 2);
+}
+
+#[test]
+fn a_type_with_no_content_has_no_children() {
+    let s = build(&ty(r#"<xs:attribute name="a" type="xs:string"/>"#));
+    assert!(s.children(type_t(&s)).is_empty());
+}
+
+/// Nested groups, wildcards beside declarations, deep optional chains and a
+/// model wide enough to cross the bit-set word boundary the dataflow packs
+/// children into.
+#[test]
+fn children_agrees_with_the_predicates_on_awkward_models() {
+    let wide: String = (0..70)
+        .map(|i| {
+            format!(
+                r#"<xs:element name="w{i}" type="xs:string" minOccurs="{}" maxOccurs="{}"/>"#,
+                i % 2,
+                if i % 3 == 0 { "unbounded" } else { "1" }
+            )
+        })
+        .collect();
+    for body in [
+        // A wildcard beside declarations: positions admitting nothing sit in
+        // the middle of the graph.
+        ty(r###"<xs:sequence>
+                <xs:element name="a" type="xs:string"/>
+                <xs:any namespace="##other" processContents="lax"/>
+                <xs:element name="b" type="xs:string" minOccurs="0"/>
+              </xs:sequence>"###),
+        // Nested repetition, so components nest too.
+        ty(r#"<xs:sequence maxOccurs="unbounded">
+                <xs:choice maxOccurs="unbounded">
+                  <xs:element name="a" type="xs:string"/>
+                  <xs:sequence minOccurs="0">
+                    <xs:element name="b" type="xs:string"/>
+                    <xs:element name="c" type="xs:string" maxOccurs="3"/>
+                  </xs:sequence>
+                </xs:choice>
+              </xs:sequence>"#),
+        // Everything optional but the model itself is not nullable.
+        ty(r#"<xs:choice>
+                <xs:element name="a" type="xs:string"/>
+                <xs:element name="b" type="xs:string"/>
+                <xs:element name="c" type="xs:string"/>
+              </xs:choice>"#),
+        // Bounded ranges, which unroll into several positions per element.
+        ty(r#"<xs:sequence>
+                <xs:element name="a" type="xs:string" minOccurs="2" maxOccurs="5"/>
+                <xs:element name="b" type="xs:string" minOccurs="0" maxOccurs="3"/>
+              </xs:sequence>"#),
+        // Past 64 children, where the packed bit set needs a second word.
+        format!(r#"<xs:complexType name="T"><xs:sequence>{wide}</xs:sequence></xs:complexType>"#),
+    ] {
+        let (s, _) = build_lax(&body);
+        assert!(agree(&s) > 0, "nothing was checked for:\n{body}");
+    }
 }
 
 #[test]

@@ -39,8 +39,8 @@ fn main() {
     for d in schemas.documents() {
         let ns = d
             .target_namespace
-            .map(|n| schemas.names().resolve_ns(n).to_string())
-            .unwrap_or_else(|| "(none)".into());
+            .map(|n| schemas.names().resolve_ns(n))
+            .unwrap_or("(none)");
         let cham = if d.chameleon { "  [chameleon]" } else { "" };
         println!("  {ns}{cham}\n    {}", d.uri);
     }
@@ -74,7 +74,9 @@ fn main() {
     }
 
     // The two questions the future config generator is built on, answered
-    // from the automata rather than guessed from the particle tree.
+    // from the automata rather than guessed from the particle tree — and
+    // answered together, because each of them costs a walk of the content
+    // model and one walk answers both.
     let mut tables = 0usize;
     let mut nullable = 0usize;
     let mut columns = 0usize;
@@ -82,31 +84,52 @@ fn main() {
         if def.as_complex().is_none() {
             continue;
         }
-        for child in schemas.possible_children(tid) {
+        for child in schemas.get(tid).children() {
             columns += 1;
-            if schemas.child_repeats(tid, child) {
-                tables += 1;
-            }
-            if schemas.child_is_optional(tid, child) {
-                nullable += 1;
-            }
+            tables += usize::from(child.repeats());
+            nullable += usize::from(child.optional());
         }
     }
     println!("\nparent/child pairs  {columns}");
     println!("  repeating         {tables}  (candidate tables)");
     println!("  optional          {nullable}  (candidate nullable columns)");
 
-    let heads: Vec<_> = schemas
+    // One closure per head, not one to filter and another to print.
+    let mut heads: Vec<(String, usize)> = schemas
         .iter_elements()
-        .filter(|(id, _)| schemas.substitution_closure(*id).len() > 1)
+        .filter_map(|(id, _)| {
+            let e = schemas.get(id);
+            let members = e.substitutes().count();
+            (members > 1).then(|| (e.display_name(), members))
+        })
         .collect();
     if !heads.is_empty() {
         println!("\nsubstitution heads  {}", heads.len());
-        for (id, e) in heads.iter().take(5) {
+        heads.sort();
+        for (name, members) in heads.iter().take(5) {
+            println!("  {name} -> {members} member(s)");
+        }
+    }
+
+    // What browsing the schema actually looks like: a reference is a borrow
+    // and an id, so following it allocates nothing.
+    if let Some(root) = schemas.global_elements().find(|e| !e.is_abstract()) {
+        println!("\n{}", root.display_name());
+        for a in root.attributes() {
             println!(
-                "  {} -> {} member(s)",
-                schemas.display_name(e.name),
-                schemas.substitution_closure(*id).len()
+                "  @{}{}: {}",
+                a.local_name(),
+                if a.is_required() { "" } else { "?" },
+                a.type_of().display_name()
+            );
+        }
+        for c in root.children() {
+            println!(
+                "  {}{}{}: {}",
+                c.local_name(),
+                if c.repeats() { "+" } else { "" },
+                if c.optional() { "?" } else { "" },
+                c.type_of().display_name()
             );
         }
     }

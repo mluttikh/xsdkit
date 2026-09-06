@@ -118,16 +118,20 @@ different occurrence constraints in different places.
     ```rust
     # use xsdkit::Schemas;
     # fn demo(schemas: &Schemas, ty: xsdkit::TypeId) {
-    for child in schemas.possible_children(ty) {
-        let repeats  = schemas.child_repeats(ty, child);
-        let optional = schemas.child_is_optional(ty, child);
-        println!("{} {repeats} {optional}", schemas.display_name(schemas[child].name));
+    for child in schemas.get(ty).children() {
+        println!("{} {} {}", child.display_name(), child.repeats(), child.optional());
     }
     # }
     ```
 
 This is exactly the pair of questions a table-versus-column decision needs when
 you are mapping a schema onto a relational or columnar shape.
+
+Ask for all of them at once. Both facts come from walking the content model,
+and `children()` walks it once for the whole type; `child_repeats` and
+`child_is_optional` remain for a single question about a single child, but
+called in a loop they re-walk the model per child — around 40× slower on a
+type with hundreds of children.
 
 ## Attributes
 
