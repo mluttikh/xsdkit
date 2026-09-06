@@ -189,12 +189,16 @@ when a default means something different from an explicit value.
 - Encoding detection — hand `validate` the raw `bytes` rather than decoding
   first, and the byte-order mark and XML declaration are read for you.
 
+`xs:ID` uniqueness and `xs:IDREF` resolution are enforced: an ID binds to the
+element carrying it, no two elements may claim one, and every reference must
+match one somewhere in the document — including one that appears later.
+
 Not yet: **identity constraints** (`xs:key`, `xs:keyref`, `xs:unique`) are read
 into the model but not enforced during validation, and XSD 1.1 **assertions**
 and conditional type assignment are stored and not evaluated. A document that
 violates one of those is currently reported as valid.
 
-[Conformance](project/conformance.md) has the measured numbers: 98.3% of the
+[Conformance](project/conformance.md) has the measured numbers: 98.6% of the
 W3C suite's 21,575 document cases are judged correctly.
 
 ## Next

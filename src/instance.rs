@@ -25,8 +25,9 @@ use crate::content::ContentMatcher;
 use crate::diagnostics::{DiagCode, Diagnostic, Diagnostics, Span};
 use crate::model::*;
 use crate::names::{QName, XSI};
-use crate::validate::Validator;
+use crate::validate::{Validator, nearest_builtin};
 use crate::values::{Namespaces, Value};
+use fxhash::FxHashMap;
 use quick_xml::NsReader;
 use quick_xml::events::Event;
 use quick_xml::name::ResolveResult;
@@ -90,6 +91,8 @@ impl ValidationReport {
 
 /// One level of the element stack.
 struct Frame<'a> {
+    /// Which element this is, for attributing an `xs:ID` it carries.
+    id_scope: u32,
     name: QName,
     declaration: Option<ElementId>,
     type_id: TypeId,
@@ -143,6 +146,10 @@ impl<'a> InstanceValidator<'a> {
             diags: Diagnostics::new(),
             stack: Vec::new(),
             namespaces: Vec::new(),
+            ids: FxHashMap::default(),
+            idrefs: Vec::new(),
+            elements_seen: 0,
+            id_roles: FxHashMap::default(),
             uri: "<instance>".to_string(),
             sink,
         };
@@ -164,6 +171,10 @@ impl<'a> InstanceValidator<'a> {
             diags: Diagnostics::new(),
             stack: Vec::new(),
             namespaces: Vec::new(),
+            ids: FxHashMap::default(),
+            idrefs: Vec::new(),
+            elements_seen: 0,
+            id_roles: FxHashMap::default(),
             uri: uri.to_string(),
             sink,
         };
@@ -185,8 +196,40 @@ struct Run<'a, 'b, S: FnMut(PsviEvent)> {
     /// on the document rather than the schema, and this is what they resolve
     /// against. Pushed and popped in step with `stack`.
     namespaces: Vec<Vec<(Option<String>, String)>>,
+    /// Every `xs:ID` value seen so far, and every `xs:IDREF` still waiting to
+    /// match one.
+    ///
+    /// The only state here that outlives the element stack. It has to: both
+    /// rules are document-scope by definition, and a reference may point
+    /// forward, so the references cannot be settled until the end.
+    ids: FxHashMap<String, u32>,
+    idrefs: Vec<(String, u32)>,
+    /// A counter distinguishing elements, so an `xs:ID` can be attributed to
+    /// the one that claimed it.
+    elements_seen: u32,
+    /// Whether a type plays an identifier role, keyed by type — answering it
+    /// walks a base chain, and most attributes are not identifiers.
+    id_roles: FxHashMap<TypeId, Option<IdKind>>,
     uri: String,
     sink: S,
+}
+
+/// The two document-scope roles a value can play.
+#[derive(Copy, Clone, PartialEq, Eq, Debug)]
+enum IdRole {
+    /// An `xs:ID`: no other element may claim it.
+    Defines,
+    /// An `xs:IDREF`: must match one.
+    References,
+}
+
+/// What a *type* can tell us, before seeing a value.
+#[derive(Copy, Clone, PartialEq, Eq, Debug)]
+enum IdKind {
+    Defines,
+    References,
+    /// A union: the member that matched decides, so ask the value.
+    PerValue,
 }
 
 /// A borrowed view of the open elements' namespace declarations.
@@ -226,6 +269,79 @@ impl<'a, S: FnMut(PsviEvent)> Run<'a, '_, S> {
     fn error(&mut self, code: DiagCode, line: u32, msg: impl Into<String>) {
         let span = Span::new(&self.uri, line);
         self.diags.push(Diagnostic::error(code, msg).at(span));
+    }
+
+    /// Records the identifiers a value carries, if its type gives it that
+    /// role.
+    ///
+    /// `xs:ID` binds a value to the element carrying it, and two *different*
+    /// elements may not claim one — repeating it on a single element is a
+    /// binding with one member, which XSD 1.1 says is fine, so `scope` is
+    /// which element this is.
+    ///
+    /// Splitting on whitespace serves both the atomic types and the list ones
+    /// (`xs:IDREFS`, or a user list of either): an `NCName` cannot contain
+    /// whitespace, so an atomic value is exactly one token, and the split is
+    /// over the *collapsed* value, which is why ` aaa ` and `aaa` are one
+    /// identifier rather than two.
+    fn record_identifiers(&mut self, ty: TypeId, lexical: &str, scope: u32, line: u32) {
+        let kind = match self.id_roles.get(&ty) {
+            Some(k) => *k,
+            None => {
+                let k = id_kind(self.v.schemas, ty);
+                self.id_roles.insert(ty, k);
+                k
+            }
+        };
+        let role = match kind {
+            None => return,
+            Some(IdKind::Defines) => IdRole::Defines,
+            Some(IdKind::References) => IdRole::References,
+            // A union's members are tried in order and the first that
+            // validates wins, so which one it was decides the role — and that
+            // is a question about the value, not about the type.
+            Some(IdKind::PerValue) => match self.union_member_role(ty, lexical) {
+                Some(r) => r,
+                None => return,
+            },
+        };
+        for token in lexical.split_whitespace() {
+            match role {
+                IdRole::Defines => {
+                    let claimed = self.ids.entry(token.to_string()).or_insert(scope);
+                    if *claimed != scope {
+                        self.error(
+                            DiagCode::DuplicateId,
+                            line,
+                            format!("`{token}` is already the `xs:ID` of another element"),
+                        );
+                    }
+                }
+                // Not resolvable yet: an `xs:IDREF` may point forward.
+                IdRole::References => self.idrefs.push((token.to_string(), line)),
+            }
+        }
+    }
+
+    /// The role a union value plays, found the way the validator found its
+    /// member: in declaration order, first one that validates.
+    fn union_member_role(&self, ty: TypeId, lexical: &str) -> Option<IdRole> {
+        let members = self.v.schemas[ty].as_simple()?.member_types.clone();
+        for m in members {
+            if self
+                .v
+                .values
+                .validate_in(m, lexical, &Scopes(&self.namespaces))
+                .is_ok()
+            {
+                return match id_kind(self.v.schemas, m) {
+                    Some(IdKind::Defines) => Some(IdRole::Defines),
+                    Some(IdKind::References) => Some(IdRole::References),
+                    _ => None,
+                };
+            }
+        }
+        None
     }
 
     /// How to refer to a type in a message. An anonymous type has no name
@@ -367,6 +483,17 @@ impl<'a, S: FnMut(PsviEvent)> Run<'a, '_, S> {
                 format!("document ended with `{shown}` still open"),
             );
         }
+
+        // Only now: an `xs:IDREF` may name an `xs:ID` that appears later.
+        for (reference, line) in std::mem::take(&mut self.idrefs) {
+            if !self.ids.contains_key(&reference) {
+                self.error(
+                    DiagCode::UnresolvedIdRef,
+                    line,
+                    format!("`{reference}` matches no `xs:ID` in this document"),
+                );
+            }
+        }
     }
 
     // -- elements ----------------------------------------------------------
@@ -382,12 +509,16 @@ impl<'a, S: FnMut(PsviEvent)> Run<'a, '_, S> {
         // In scope for this element's attributes and for its text, so it goes
         // on before any of them are looked at and comes off in `end`.
         self.namespaces.push(declared_namespaces(&attrs));
+        // An `xs:ID` binds a value to *this* element, so it needs an identity
+        // before its attributes are read.
+        self.elements_seen += 1;
 
         // Inside a skipped subtree nothing is checked, but nesting still has
         // to be tracked so the right `End` closes it.
         if self.stack.last().is_some_and(|f| f.skipped) {
             let name = qname.unwrap_or_else(|| self.stack.last().unwrap().name);
             self.stack.push(Frame {
+                id_scope: self.elements_seen,
                 name,
                 declaration: None,
                 type_id: self.v.schemas.builtin(crate::datatypes::Builtin::AnyType),
@@ -495,6 +626,7 @@ impl<'a, S: FnMut(PsviEvent)> Run<'a, '_, S> {
         });
 
         self.stack.push(Frame {
+            id_scope: self.elements_seen,
             name,
             declaration,
             type_id,
@@ -750,6 +882,7 @@ impl<'a, S: FnMut(PsviEvent)> Run<'a, '_, S> {
                                 None
                             }
                         };
+                    self.record_identifiers(ty, &a.value, self.elements_seen, line);
                     // A `fixed` value is a constraint, not a default: the
                     // document may repeat it but may not differ from it.
                     // Compared in the value space, as for an element, so
@@ -815,18 +948,20 @@ impl<'a, S: FnMut(PsviEvent)> Run<'a, '_, S> {
                     let value = match declaration {
                         Some(id) => {
                             let ty = self.v.schemas[id].type_id;
-                            match self
-                                .v
-                                .values
-                                .validate_in(ty, &a.value, &Scopes(&self.namespaces))
-                            {
+                            let v = match self.v.values.validate_in(
+                                ty,
+                                &a.value,
+                                &Scopes(&self.namespaces),
+                            ) {
                                 Ok(v) => Some(v),
                                 Err(e) => {
                                     let msg = format!("attribute `{shown}`: {e}");
                                     self.error(DiagCode::InvalidValue, line, msg);
                                     None
                                 }
-                            }
+                            };
+                            self.record_identifiers(ty, &a.value, self.elements_seen, line);
+                            v
                         }
                         None => None,
                     };
@@ -876,6 +1011,9 @@ impl<'a, S: FnMut(PsviEvent)> Run<'a, '_, S> {
                 .values
                 .validate_in(ty, &lexical, &Scopes(&self.namespaces))
                 .ok();
+            // A schema-supplied `xs:ID` is still an identifier in the
+            // document it lands in.
+            self.record_identifiers(ty, &lexical, self.elements_seen, line);
             out.push(AttributePsvi {
                 name,
                 declaration: Some(u.attribute),
@@ -1007,6 +1145,7 @@ impl<'a, S: FnMut(PsviEvent)> Run<'a, '_, S> {
                     }
                 }
             }
+            self.record_identifiers(target, &lexical, frame.id_scope, line);
             (self.sink)(PsviEvent::Text {
                 value,
                 type_id: target,
@@ -1075,6 +1214,36 @@ fn predefined_entity(name: &str) -> Option<&'static str> {
         "gt" => Some(">"),
         "quot" => Some("\""),
         "apos" => Some("'"),
+        _ => None,
+    }
+}
+
+/// Whether values of this type can be document-scope identifiers.
+///
+/// A list of either plays the same role item by item, so the item type
+/// decides for one. A union cannot be answered from the type alone — which
+/// member matched decides — so it defers to the value.
+fn id_kind(schemas: &Schemas, ty: TypeId) -> Option<IdKind> {
+    let simple = schemas[ty].as_simple();
+    let target = match simple {
+        Some(t) if t.variety == crate::datatypes::Variety::List => t.item_type.unwrap_or(ty),
+        _ => ty,
+    };
+    if let Some(t) = schemas[target].as_simple() {
+        if t.variety == crate::datatypes::Variety::Union {
+            // Only worth asking per value if some member could be one.
+            let any = t
+                .member_types
+                .iter()
+                .any(|m| id_kind(schemas, *m).is_some());
+            return any.then_some(IdKind::PerValue);
+        }
+    }
+    match nearest_builtin(schemas, target) {
+        Some(crate::datatypes::Builtin::Id) => Some(IdKind::Defines),
+        Some(crate::datatypes::Builtin::IdRef | crate::datatypes::Builtin::IdRefs) => {
+            Some(IdKind::References)
+        }
         _ => None,
     }
 }

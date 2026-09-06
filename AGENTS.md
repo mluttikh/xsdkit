@@ -192,6 +192,20 @@ cannot express this.
   may only widen; restriction states its wildcard in full and keeps only what
   it declared. Both live in `compile.rs`; the operations are
   `NamespaceConstraint::intersect` / `union`.
+- **An `xs:ID` binds to an *element*, not to a value.** Two different elements
+  may not claim one; a single element repeating it across two attributes is a
+  binding with one member and is legal, which XSD 1.1 spells out and the
+  suite's own annotation states. Frames carry an `id_scope` for this. Two
+  suite documents disagree — `saxonData/Id/id003.v01` and `id004.v01` put the
+  same value on two sibling elements and expect valid — but they contradict
+  their own negative counterparts, which add a *third* element carrying that
+  value and expect invalid. No rule counting distinct elements satisfies both,
+  so the specification wins and those two stay as false alarms.
+- **Whether a union value is an identifier depends on the member that
+  matched**, not on the type: members are tried in declaration order and the
+  first that validates wins, so `union of (integer, boolean, ID)` makes `abc`
+  an ID and leaves `123` an integer. `nearest_builtin` finds nothing on a
+  union, so `IdKind::PerValue` defers the question to the value.
 - **`processContents` decides what happens inside a wildcard.** `skip` looks
   no further, `lax` validates against a global declaration when one exists,
   `strict` requires one. `ContentMatcher` knew a wildcard had matched only by
@@ -308,8 +322,8 @@ is fifty cases one rule buys.
 
 The instance half — 21,671 documents — is `#[ignore]`d because it takes
 minutes where the schema half takes seconds (4.5 minutes in `--release`; run
-it that way). Run it with `-- --ignored`. It scores 21,575 of them, 98.3%
-correct: **99.5%** of valid documents accepted, **96.9%** of invalid ones
+it that way). Run it with `-- --ignored`. It scores 21,575 of them, 98.6%
+correct: **99.5%** of valid documents accepted, **97.4%** of invalid ones
 rejected.
 
 That first figure was 88.1% until a one-line bug turned up: an *enumeration on

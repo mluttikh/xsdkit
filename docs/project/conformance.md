@@ -46,9 +46,9 @@ the list is short enough to be worked through.
 
 | | |
 |---|---|
-| valid documents accepted | **99.5%** (11,849 / 11,907) |
-| invalid documents rejected | **96.9%** (9,366 / 9,668) |
-| overall correct | **98.3%** (21,215 / 21,575) |
+| valid documents accepted | **99.5%** (11,847 / 11,907) |
+| invalid documents rejected | **97.4%** (9,418 / 9,668) |
+| overall correct | **98.6%** (21,265 / 21,575) |
 
 Here the two rows are much closer, because validating a document against a
 model you already built is the part that is finished.
@@ -74,6 +74,13 @@ wrong. They were failing because an `xs:anyAttribute` written inside an
 `xs:attributeGroup` never reached the types that referenced the group — a
 plain bug, now fixed, and the documents pass without any schema being
 supplied to the harness.
+
+Two of the false *alarms* are a deliberate disagreement. `saxonData/Id`'s
+`id003.v01` and `id004.v01` put the same `xs:ID` value on two sibling elements
+and expect valid, while their own negative counterparts add a third element
+carrying that value and expect invalid. No rule that counts the elements bound
+to a value satisfies both, so this follows the specification and reports the
+duplicate.
 
 The false *acceptances* are what is left of the same measurement, taken by
 test set rather than assumed. Identity constraints (`xs:key`, `xs:keyref`,

@@ -166,6 +166,10 @@ pub enum DiagCode {
     /// validated against it — an `xsi:type` naming a concrete derivation is
     /// what an abstract type is for.
     AbstractType,
+    /// The same `xs:ID` value appears twice in one document.
+    DuplicateId,
+    /// An `xs:IDREF` names an `xs:ID` the document does not contain.
+    UnresolvedIdRef,
 }
 
 impl DiagCode {
@@ -212,6 +216,8 @@ impl DiagCode {
             DiagCode::InvalidXsiType => "XSD2008",
             DiagCode::NilElementNotEmpty => "XSD2009",
             DiagCode::AbstractType => "XSD2010",
+            DiagCode::DuplicateId => "XSD2011",
+            DiagCode::UnresolvedIdRef => "XSD2012",
         }
     }
 }
@@ -388,6 +394,8 @@ mod tests {
             DiagCode::InvalidXsiType,
             DiagCode::NilElementNotEmpty,
             DiagCode::AbstractType,
+            DiagCode::DuplicateId,
+            DiagCode::UnresolvedIdRef,
         ];
         let mut seen = std::collections::HashSet::new();
         for c in all {

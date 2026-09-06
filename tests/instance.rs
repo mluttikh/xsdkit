@@ -328,6 +328,101 @@ fn an_enumeration_on_a_simple_content_restriction_is_enforced() {
 }
 
 // ---------------------------------------------------------------------------
+// xs:ID and xs:IDREF
+// ---------------------------------------------------------------------------
+
+fn identified() -> Schemas {
+    schema(
+        r#"<xs:element name="doc">
+             <xs:complexType><xs:sequence>
+               <xs:element ref="tns:para" maxOccurs="unbounded"/>
+               <xs:element name="u" type="tns:MaybeId" minOccurs="0" maxOccurs="unbounded"/>
+               <xs:element name="r" type="xs:IDREF" minOccurs="0" maxOccurs="unbounded"/>
+             </xs:sequence></xs:complexType>
+           </xs:element>
+           <xs:element name="para">
+             <xs:complexType>
+               <xs:attribute name="a" type="xs:ID"/>
+               <xs:attribute name="b" type="xs:ID"/>
+               <xs:attribute name="rs" type="xs:IDREFS"/>
+             </xs:complexType>
+           </xs:element>
+           <xs:simpleType name="MaybeId">
+             <xs:union memberTypes="xs:integer xs:boolean xs:ID"/>
+           </xs:simpleType>"#,
+    )
+}
+
+/// An `xs:ID` binds a value to the element carrying it. Two *different*
+/// elements may not claim one — but one element repeating it is a binding
+/// with a single member, which is legal.
+#[test]
+fn an_id_binds_to_an_element_not_merely_to_a_value() {
+    let s = identified();
+    valid(
+        &s,
+        r#"<doc xmlns="urn:example"><para a="eee" b="eee"/></doc>"#,
+    );
+    invalid(
+        &s,
+        r#"<doc xmlns="urn:example"><para a="x"/><para b="x"/></doc>"#,
+        DiagCode::DuplicateId,
+    );
+    // Compared after whitespace collapse, so these are one identifier.
+    invalid(
+        &s,
+        r#"<doc xmlns="urn:example"><para a="x"/><para b=" x "/></doc>"#,
+        DiagCode::DuplicateId,
+    );
+}
+
+/// An `xs:IDREF` may point forward, so references are settled only once the
+/// document ends.
+#[test]
+fn an_idref_must_match_an_id_somewhere_in_the_document() {
+    let s = identified();
+    valid(
+        &s,
+        r#"<doc xmlns="urn:example"><para a="x"/><r>x</r></doc>"#,
+    );
+    // Declared after the reference to it.
+    valid(
+        &s,
+        r#"<doc xmlns="urn:example"><para rs="x"/><para a="x"/></doc>"#,
+    );
+    invalid(
+        &s,
+        r#"<doc xmlns="urn:example"><para a="x"/><r>nope</r></doc>"#,
+        DiagCode::UnresolvedIdRef,
+    );
+    // `xs:IDREFS` is a list, and every item has to resolve.
+    invalid(
+        &s,
+        r#"<doc xmlns="urn:example"><para a="x" rs="x nope"/></doc>"#,
+        DiagCode::UnresolvedIdRef,
+    );
+}
+
+/// A union's members are tried in order and the first that validates wins, so
+/// whether a value is an identifier is a question about the *value*, not
+/// about the type.
+#[test]
+fn a_union_is_an_id_only_when_the_id_member_is_the_one_that_matched() {
+    let s = identified();
+    // `abc` is neither an integer nor a boolean, so it reaches `xs:ID`.
+    valid(
+        &s,
+        r#"<doc xmlns="urn:example"><para a="p"/><u>abc</u><r>abc</r></doc>"#,
+    );
+    // `123` matches `xs:integer` first, so it never becomes an identifier.
+    invalid(
+        &s,
+        r#"<doc xmlns="urn:example"><para a="p"/><u>123</u><r>123</r></doc>"#,
+        DiagCode::UnresolvedIdRef,
+    );
+}
+
+// ---------------------------------------------------------------------------
 // Wildcard processContents
 // ---------------------------------------------------------------------------
 
