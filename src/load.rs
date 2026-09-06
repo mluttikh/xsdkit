@@ -835,6 +835,10 @@ impl<'r> Loader<'r> {
         // Replacing a name the included document declared is the point here,
         // not a duplicate-global error.
         let outer = std::mem::replace(&mut self.in_redefine, true);
+        // `xs:redefine` may revise only types and the two kinds of group.
+        // `xs:override` replaces *any* top-level component, which is most of
+        // the difference between them.
+        let overriding = node.tag_name().name() == "override";
         for c in node.children().filter(|n| reads(n, ctx.version)) {
             let span = Span::new(&ctx.uri, line_of(ctx, c));
             let before = self.fixups.len();
@@ -866,6 +870,21 @@ impl<'r> Loader<'r> {
                         self.pin_self_references(before, o);
                     }
                 }
+                "element" if overriding => {
+                    let id = self.read_element_decl(c, ctx, Scope::Global, true);
+                    let name = self.elements.get(id.0).name;
+                    self.replace_global(name, span, |s| {
+                        s.globals.elements.insert(name, id);
+                    });
+                }
+                "attribute" if overriding => {
+                    let id = self.read_attribute_decl(c, ctx, Scope::Global, true);
+                    let name = self.attributes.get(id.0).name;
+                    self.replace_global(name, span, |s| {
+                        s.globals.attributes.insert(name, id);
+                    });
+                }
+                "notation" if overriding => self.read_notation(c, ctx),
                 "annotation" => {}
                 other => {
                     let what = node.tag_name().name();
@@ -972,6 +991,27 @@ impl<'r> Loader<'r> {
             return;
         }
         self.globals.types.insert(name, id);
+    }
+
+    /// Installs a component over whatever the overridden document declared.
+    ///
+    /// Displacing a name is the point of `xs:override`, so this is not the
+    /// duplicate-global error `register_global_*` would raise — but a
+    /// predeclared built-in still may not be displaced, or `Schemas::builtin`
+    /// would stop being a stable handle.
+    fn replace_global(&mut self, name: QName, span: Span, insert: impl FnOnce(&mut Self)) {
+        if self.predeclared.contains(&name) {
+            let shown = self.names.display(name);
+            self.diags.push(
+                Diagnostic::error(
+                    DiagCode::DuplicateGlobal,
+                    format!("cannot override the built-in `{shown}`"),
+                )
+                .at(span),
+            );
+            return;
+        }
+        insert(self);
     }
 
     fn read_import(&mut self, node: roxmltree::Node, ctx: &DocCtx) {
@@ -2064,7 +2104,7 @@ impl<'r> Loader<'r> {
             annotation,
             span: span.clone(),
         }));
-        if self.globals.notations.insert(name, id).is_some() {
+        if self.globals.notations.insert(name, id).is_some() && !self.in_redefine {
             let shown = self.names.display(name);
             self.diags.push(
                 Diagnostic::error(

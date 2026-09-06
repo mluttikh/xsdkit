@@ -283,6 +283,70 @@ fn an_override_replaces_a_group() {
     assert_eq!(children(&s, "Uses"), ["new"]);
 }
 
+/// `xs:override` may replace *any* top-level component, not just the four
+/// `xs:redefine` allows. An element declaration is the common case, and
+/// ignoring it left the overridden document's own version in force.
+#[test]
+fn an_override_replaces_an_element_declaration() {
+    let s = build(
+        r#"<xs:element name="doc">
+             <xs:complexType>
+               <xs:sequence><xs:element name="para" type="xs:string"/></xs:sequence>
+             </xs:complexType>
+           </xs:element>"#,
+        r#"<xs:override schemaLocation="part.xsd">
+             <xs:element name="doc" type="xs:date"/>
+           </xs:override>"#,
+    );
+    let e = s.element(Some(NS), "doc").expect("doc is declared");
+    let ty = s[e].type_id;
+    assert!(s[ty].is_simple(), "the override made `doc` a simple type");
+    // And the element-only content model it used to have is gone.
+    assert!(s.possible_children(ty).is_empty());
+}
+
+#[test]
+fn an_override_replaces_an_attribute_declaration() {
+    let s = build(
+        r#"<xs:attribute name="a" type="xs:string"/>"#,
+        r#"<xs:override schemaLocation="part.xsd">
+             <xs:attribute name="a" type="xs:int"/>
+           </xs:override>"#,
+    );
+    let a = s.attribute(Some(NS), "a").expect("a is declared");
+    let name = s[s[a].type_id].name().map(|n| s.display_name(n));
+    assert_eq!(
+        name.as_deref(),
+        Some("{http://www.w3.org/2001/XMLSchema}int")
+    );
+}
+
+/// `xs:redefine` is limited to types and the two kinds of group, so an
+/// element there is still unrecognised rather than silently applied.
+#[test]
+fn a_redefine_does_not_take_an_element() {
+    let (_, diags) = SchemaSetBuilder::new()
+        .resolver(MapResolver::default().with(
+            "part.xsd",
+            &part(r#"<xs:element name="doc" type="xs:string"/>"#),
+        ))
+        .text(
+            part(
+                r#"<xs:redefine schemaLocation="part.xsd">
+                     <xs:element name="doc" type="xs:date"/>
+                   </xs:redefine>"#,
+            ),
+            "mem://main.xsd",
+        )
+        .build_with_warnings();
+    assert!(
+        diags
+            .iter()
+            .any(|d| d.message.contains("ignoring `xs:element`")),
+        "expected the element to be refused inside a redefine:\n{diags}"
+    );
+}
+
 /// Components the modification does not mention come through untouched.
 #[test]
 fn untouched_components_survive() {

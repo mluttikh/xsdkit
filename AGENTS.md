@@ -149,6 +149,12 @@ cannot express this.
 - **The innermost enumeration wins**; a restriction may only narrow.
 - **Chameleon includes** key the document cache on `(uri, coerced_ns)`, never
   on `uri` alone. The same file yields different components per includer.
+- **`xs:override` replaces *any* top-level component; `xs:redefine` only
+  four.** They share `read_modifications`, which handled just the types and
+  the two kinds of group — so an `<xs:element>` inside an override fell
+  through to "ignoring unrecognised" and the overridden document's own
+  declaration stayed in force. Element, attribute and notation are accepted
+  there now, and still refused inside a redefine.
 - **Inside `xs:redefine`, a reference to the name being redefined means the
   *original*.** `<complexType name="T"><extension base="T">` extends the
   included T, not the one being declared. `capture_originals` snapshots them
@@ -270,7 +276,7 @@ is fifty cases one rule buys.
 The instance half — 21,671 documents — is `#[ignore]`d because it takes
 minutes where the schema half takes seconds (4.5 minutes in `--release`; run
 it that way). Run it with `-- --ignored`. It scores 21,575 of them, 97.5%
-correct: **99.4%** of valid documents accepted, **95.1%** of invalid ones
+correct: **99.5%** of valid documents accepted, **95.1%** of invalid ones
 rejected.
 
 That first figure was 88.1% until a one-line bug turned up: an *enumeration on

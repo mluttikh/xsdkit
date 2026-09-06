@@ -46,23 +46,26 @@ the list is short enough to be worked through.
 
 | | |
 |---|---|
-| valid documents accepted | **99.4%** (11,841 / 11,907) |
-| invalid documents rejected | **95.1%** (9,192 / 9,668) |
-| overall correct | **97.5%** (21,033 / 21,575) |
+| valid documents accepted | **99.5%** (11,849 / 11,907) |
+| invalid documents rejected | **95.1%** (9,197 / 9,668) |
+| overall correct | **97.5%** (21,046 / 21,575) |
 
 Here the two rows are much closer, because validating a document against a
 model you already built is the part that is finished.
 
-The 66 remaining false alarms are not 66 separate bugs. Grouped by the
+The 58 remaining false alarms are not 58 separate bugs. Grouped by the
 diagnostic we wrongly emit:
 
 | Diagnostic | Documents | Cause |
 |---|---|---|
-| `XSD2002` unexpected element | 35 | Conditional type assignment (a declared gap), `xs:all`, and `openContent` |
+| `XSD2002` unexpected element | 34 | Conditional type assignment, `openContent` and `xs:all` — all three features this version does not claim |
 | `XSD2001` element not declared | 6 | Scattered |
-| `XSD2005` `XSD2006` `XSD2007` `XSD2008` | 20 | At most five each; the `XSD2007` group is `xs:override` failing to replace the component it overrides |
-| `XSD2004` invalid value | 4 | Scattered |
-| `XSD2003` incomplete content | 1 | One case |
+| `XSD2006` missing attribute, `XSD2008` bad `xsi:type` | 10 | Five each |
+| `XSD2005` attribute not allowed | 4 | Scattered |
+| `XSD2004` invalid value, `XSD2003` incomplete content | 4 | Scattered |
+
+What is left is now mostly the declared gaps rather than defects: the largest
+group is one this version says up front it does not implement.
 
 This table used to be dominated by 112 `xlink:href` documents, written off as
 a harness gap on the grounds that the suite's catalogue schema imports
