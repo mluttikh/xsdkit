@@ -118,6 +118,7 @@ impl Resolver for FileResolver {
 /// particle competing with a wildcard is an error in 1.0 and legal in 1.1.
 /// A schema cannot be checked without knowing which is meant.
 #[derive(Copy, Clone, PartialEq, Eq, Debug, Default)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub enum Version {
     /// XSD 1.0. The default: it is what most shipping schemas are, and it is
     /// the stricter reading, so a 1.0-clean schema is also 1.1-clean.

@@ -18,6 +18,7 @@ pub const XMLNS: &str = "http://www.w3.org/2000/xmlns/";
 
 /// An interned string: either a namespace URI or a local name.
 #[derive(Copy, Clone, PartialEq, Eq, Hash, PartialOrd, Ord, Debug)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct Symbol(u32);
 
 /// An interned namespace URI.
@@ -25,6 +26,7 @@ pub struct Symbol(u32);
 /// Absent means "no namespace" — an unqualified name, which is a distinct
 /// thing from a name in some default namespace.
 #[derive(Copy, Clone, PartialEq, Eq, Hash, PartialOrd, Ord, Debug)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct Namespace(Symbol);
 
 /// A namespace-qualified name.
@@ -33,6 +35,7 @@ pub struct Namespace(Symbol);
 /// attribute declarations are scoped to their containing type and are not
 /// addressable this way — see [`crate::model::Scope`].
 #[derive(Copy, Clone, PartialEq, Eq, Hash, PartialOrd, Ord, Debug)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct QName {
     pub ns: Option<Namespace>,
     pub local: Symbol,
@@ -85,6 +88,33 @@ impl Namespace {
 pub struct Interner {
     map: FxHashMap<Box<str>, u32>,
     vec: Vec<Box<str>>,
+}
+
+/// The interner serializes as its table alone.
+///
+/// A [`Symbol`] *is* an index into that table, and those indices are spread
+/// through every component in the model — so the table has to come back in
+/// exactly the order it went out, and the lookup map is rebuilt from it
+/// rather than stored. Serializing the map instead would round-trip the
+/// strings and silently renumber every name in the schema.
+#[cfg(feature = "serde")]
+impl serde::Serialize for Interner {
+    fn serialize<S: serde::Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
+        serde::Serialize::serialize(&self.vec, s)
+    }
+}
+
+#[cfg(feature = "serde")]
+impl<'de> serde::Deserialize<'de> for Interner {
+    fn deserialize<D: serde::Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
+        let vec: Vec<Box<str>> = serde::Deserialize::deserialize(d)?;
+        let map = vec
+            .iter()
+            .enumerate()
+            .map(|(i, s)| (s.clone(), i as u32))
+            .collect();
+        Ok(Self { map, vec })
+    }
 }
 
 impl Default for Interner {
@@ -219,5 +249,70 @@ mod tests {
         assert_eq!(i.display(q), "{urn:x}well");
         assert_eq!(i.display(u), "well");
         assert_ne!(q, u);
+    }
+}
+
+/// Serializing a map whose key is not a string, as a sequence of pairs.
+///
+/// `QName` is a struct, and a JSON object's key has to be a string — so the
+/// derived impl would make the model serializable to `postcard` and not to
+/// `serde_json`. Writing pairs costs nothing in a binary format and keeps
+/// every format open.
+#[cfg(feature = "serde")]
+pub(crate) mod map_as_seq {
+    use serde::{Deserialize, Deserializer, Serialize, Serializer};
+    use std::hash::{BuildHasher, Hash};
+
+    pub fn serialize<K, V, H, S>(
+        map: &std::collections::HashMap<K, V, H>,
+        s: S,
+    ) -> Result<S::Ok, S::Error>
+    where
+        K: Serialize,
+        V: Serialize,
+        S: Serializer,
+    {
+        s.collect_seq(map.iter())
+    }
+
+    pub fn deserialize<'de, K, V, H, D>(
+        d: D,
+    ) -> Result<std::collections::HashMap<K, V, H>, D::Error>
+    where
+        K: Deserialize<'de> + Eq + Hash,
+        V: Deserialize<'de>,
+        H: BuildHasher + Default,
+        D: Deserializer<'de>,
+    {
+        let pairs: Vec<(K, V)> = Deserialize::deserialize(d)?;
+        Ok(pairs.into_iter().collect())
+    }
+}
+
+/// The same, for a set.
+#[cfg(feature = "serde")]
+pub(crate) mod set_as_seq {
+    use serde::{Deserialize, Deserializer, Serialize, Serializer};
+    use std::hash::{BuildHasher, Hash};
+
+    pub fn serialize<T, H, S>(
+        set: &std::collections::HashSet<T, H>,
+        s: S,
+    ) -> Result<S::Ok, S::Error>
+    where
+        T: Serialize,
+        S: Serializer,
+    {
+        s.collect_seq(set.iter())
+    }
+
+    pub fn deserialize<'de, T, H, D>(d: D) -> Result<std::collections::HashSet<T, H>, D::Error>
+    where
+        T: Deserialize<'de> + Eq + Hash,
+        H: BuildHasher + Default,
+        D: Deserializer<'de>,
+    {
+        let items: Vec<T> = Deserialize::deserialize(d)?;
+        Ok(items.into_iter().collect())
     }
 }

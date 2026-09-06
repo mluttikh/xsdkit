@@ -10,8 +10,8 @@
   into a queryable **schema component model**. Python bindings are the next
   phase and are first-class, not an afterthought.
 - **Stack:** Rust (edition 2024), `roxmltree` (schema documents),
-  `encoding_rs`, `fxhash`, `pyo3` (behind the `python` feature), and
-  `quick-xml` later for instance reading.
+  `encoding_rs`, `fxhash`, `pyo3` (behind the `python` feature), `serde`
+  (behind the `serde` feature), and `quick-xml` for instance reading.
 
 **Two XML libraries, on purpose.** Schema loading needs random access —
 lookahead into children before deciding, three passes over one subtree,
@@ -443,8 +443,10 @@ so a chain of gates joined by `&&` prints OK while one of them failed. Pipe to
 cargo fmt --check \
   && cargo clippy --all-targets -- -D warnings \
   && cargo clippy --all-targets --features python -- -D warnings \
+  && cargo clippy --all-targets --features serde -- -D warnings \
   && cargo test --all-targets && cargo test --doc \
-  && RUSTDOCFLAGS="-D warnings" cargo doc --no-deps \
+  && cargo test --all-targets --features serde && cargo test --doc --features serde \
+  && RUSTDOCFLAGS="-D warnings" cargo doc --no-deps --features serde \
   && cargo +1.87 check --all-targets  # the rust-version in Cargo.toml
 ```
 

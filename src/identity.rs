@@ -24,6 +24,7 @@ use crate::names::QName;
 
 /// One step of a path: a name to match, or anything.
 #[derive(Clone, PartialEq, Eq, Debug)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub(crate) enum Step {
     /// A named element, or `*` for any.
     Element(Option<QName>),
@@ -33,6 +34,7 @@ pub(crate) enum Step {
 
 /// One alternative of a selector or field.
 #[derive(Clone, PartialEq, Eq, Debug)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub(crate) struct Path {
     /// `.//` — the steps may start at any descendant depth rather than
     /// directly below the context node.
@@ -44,6 +46,7 @@ pub(crate) struct Path {
 
 /// A parsed selector or field: alternatives, tried in turn.
 #[derive(Clone, PartialEq, Eq, Debug)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub(crate) struct Paths(pub Vec<Path>);
 
 /// What went wrong, for a diagnostic that quotes the offending text.

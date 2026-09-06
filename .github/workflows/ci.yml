@@ -27,6 +27,8 @@ jobs:
       # them. CI is the only thing that will.
       - name: Clippy (python feature)
         run: cargo clippy --all-targets --features python -- -D warnings
+      - name: Clippy (serde feature)
+        run: cargo clippy --all-targets --features serde -- -D warnings
 
   test:
     name: Test (${{ matrix.os }})
@@ -45,6 +47,13 @@ jobs:
       # crate docs are the first thing a new user copies.
       - name: Run doctests
         run: cargo test --doc
+      # The round trip is only checked when the feature is on, and a compiled
+      # schema is a graph of interned ids — exactly the thing a wire format
+      # can reorder without anyone noticing.
+      - name: Run tests (serde feature)
+        run: cargo test --all-targets --features serde
+      - name: Run doctests (serde feature)
+        run: cargo test --doc --features serde
 
   docs:
     name: Docs
@@ -59,7 +68,7 @@ jobs:
       - name: Build docs with warnings denied
         env:
           RUSTDOCFLAGS: -D warnings
-        run: cargo doc --no-deps
+        run: cargo doc --no-deps --features serde
 
   python:
     name: Python (${{ matrix.os }})

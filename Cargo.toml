@@ -12,10 +12,19 @@ keywords = ["xsd", "xml", "schema", "parser", "validation"]
 categories = ["parser-implementations", "data-structures"]
 readme = "README.md"
 
+[package.metadata.docs.rs]
+# `extension-module` links libpython, which docs.rs cannot do.
+features = ["serde"]
+
 [lib]
 # `cdylib` for the Python extension module; `rlib` so the Rust crate, tests and
 # examples still build normally.
 crate-type = ["cdylib", "rlib"]
+
+# `cache` measures the `serde` feature, so it cannot build without it.
+[[example]]
+name = "cache"
+required-features = ["serde"]
 
 [dependencies]
 roxmltree = "0.20"
@@ -26,8 +35,16 @@ regex = "1.13.1"
 regex-syntax = "0.8.11"
 quick-xml = "0.41"
 
+[dependencies.serde]
+version = "1.0"
+default-features = false
+optional = true
+features = ["derive", "alloc"]
+
 [dev-dependencies]
 rstest = "0.25"
+serde_json = "1.0"
+postcard = { version = "1.1", features = ["alloc"] }
 encoding_rs = "0.8.35"
 roxmltree = "0.20"
 
@@ -40,12 +57,12 @@ features = ["abi3-py39", "macros"]
 [features]
 default = []
 python = ["dep:pyo3"]
+# Serialize a compiled `Schemas` and read it back, so a large schema is
+# compiled once and loaded thereafter.
+serde = ["dep:serde"]
 # Linking against libpython is only correct when building an actual wheel;
 # `cargo check`/`clippy`/`test` must not. maturin turns this on, CI does not.
 extension-module = ["python", "pyo3/extension-module"]
-# Reserved for later phases; see DESIGN.md §3.11.
-#   validate = []   # streaming validator + PSVI       (P4)
-#
 # Generating a config for a particular downstream reader is deliberately NOT a
 # feature here — it belongs in its own package, so that reading a schema never
 # drags in that reader's dependencies. See DESIGN.md §3.0b.

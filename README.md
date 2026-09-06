@@ -70,6 +70,35 @@ let mut m = schemas.match_content(ty).unwrap();
 let ok = m.step(schemas.qname(Some("urn:example"), "title").unwrap()) && m.accepts_end();
 ```
 
+### Caching a compiled schema
+
+Compiling is the expensive step. The `serde` feature makes `Schemas` — and
+every component it holds — serializable, so a large schema set is compiled
+once and loaded thereafter:
+
+```toml
+xsdkit = { version = "0.1", features = ["serde"] }
+```
+
+```rust
+let cached = postcard::to_allocvec(&schemas)?;
+let schemas: xsdkit::Schemas = postcard::from_bytes(&cached)?;
+```
+
+Any serde format works, self-describing ones included. On a 900 KB schema of
+2,000 types this is a 7x speedup — 31 ms to compile against 4.5 ms to load —
+at the cost of a cache several times the size of the source XSD. Measure it
+on your own schema before deciding:
+
+```
+cargo run --release --features serde --example cache -- main.xsd [search/path ...]
+```
+
+The format is not stable across versions of xsdkit: names are interned and
+every component refers to them by index, so a cache is only meaningful
+alongside the code that wrote it. Key it on the crate version and rebuild on
+a miss.
+
 ### Python
 
 ```bash

@@ -23,6 +23,7 @@ use std::ops::Index;
 
 /// A typed, append-only store of one kind of component.
 #[derive(Clone, Debug)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct Arena<T> {
     items: Vec<T>,
 }
@@ -70,6 +71,7 @@ macro_rules! component_id {
     ($(#[$m:meta])* $name:ident) => {
         $(#[$m])*
         #[derive(Copy, Clone, PartialEq, Eq, Hash, PartialOrd, Ord, Debug)]
+        #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
         pub struct $name(pub(crate) u32);
 
         impl $name {
@@ -135,6 +137,7 @@ component_id!(
 /// Local declarations are scoped to the complex type containing them, so
 /// `{name, targetNamespace}` is **not** a key for them.
 #[derive(Copy, Clone, PartialEq, Eq, Debug)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub enum Scope {
     Global,
     Local(TypeId),
@@ -142,6 +145,7 @@ pub enum Scope {
 
 /// A `default` or `fixed` value on a declaration.
 #[derive(Clone, PartialEq, Eq, Debug)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub enum ValueConstraint {
     Default(String),
     Fixed(String),
@@ -165,6 +169,7 @@ impl ValueConstraint {
 /// `FinalResolved`; here there is only the resolved form, because
 /// [`Schemas`] never exists before composition.
 #[derive(Copy, Clone, Default, PartialEq, Eq, Debug)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct DerivationSet {
     pub extension: bool,
     pub restriction: bool,
@@ -230,6 +235,7 @@ impl DerivationSet {
 
 /// How a complex type is derived from its base.
 #[derive(Copy, Clone, PartialEq, Eq, Debug)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub enum DerivationMethod {
     Extension,
     Restriction,
@@ -240,6 +246,7 @@ pub enum DerivationMethod {
 // ---------------------------------------------------------------------------
 
 #[derive(Clone, Debug)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct ElementDecl {
     pub name: QName,
     pub type_id: TypeId,
@@ -257,6 +264,7 @@ pub struct ElementDecl {
 }
 
 #[derive(Clone, Debug)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct AttributeDecl {
     pub name: QName,
     pub type_id: TypeId,
@@ -267,6 +275,7 @@ pub struct AttributeDecl {
 }
 
 #[derive(Copy, Clone, PartialEq, Eq, Debug)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub enum AttributeUseKind {
     Optional,
     Required,
@@ -275,6 +284,7 @@ pub enum AttributeUseKind {
 
 /// An attribute declaration as used by one complex type.
 #[derive(Clone, Debug)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct AttributeUse {
     pub attribute: AttributeId,
     pub kind: AttributeUseKind,
@@ -293,6 +303,7 @@ impl AttributeUse {
 // ---------------------------------------------------------------------------
 
 #[derive(Clone, Debug)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub enum TypeDefinition {
     Simple(SimpleType),
     Complex(ComplexType),
@@ -340,6 +351,7 @@ impl TypeDefinition {
 }
 
 #[derive(Clone, Debug)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct SimpleType {
     /// Absent for an anonymous type declared inline.
     pub name: Option<QName>,
@@ -361,6 +373,7 @@ pub struct SimpleType {
 }
 
 #[derive(Clone, Debug)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct ComplexType {
     pub name: Option<QName>,
     pub base: TypeId,
@@ -382,6 +395,7 @@ pub struct ComplexType {
 
 /// What a complex type may contain.
 #[derive(Copy, Clone, PartialEq, Eq, Debug)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub enum ContentType {
     /// No child elements and no character data.
     Empty,
@@ -416,6 +430,7 @@ impl ContentType {
 // ---------------------------------------------------------------------------
 
 #[derive(Copy, Clone, PartialEq, Eq, Debug)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub enum MaxOccurs {
     Bounded(u32),
     Unbounded,
@@ -438,6 +453,7 @@ impl MaxOccurs {
 }
 
 #[derive(Clone, Debug)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct Particle {
     pub min_occurs: u32,
     pub max_occurs: MaxOccurs,
@@ -462,6 +478,7 @@ impl Particle {
 }
 
 #[derive(Clone, Debug)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub enum Term {
     Element(ElementId),
     Wildcard(Wildcard),
@@ -473,6 +490,7 @@ pub enum Term {
 }
 
 #[derive(Copy, Clone, PartialEq, Eq, Debug)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub enum Compositor {
     Sequence,
     Choice,
@@ -480,12 +498,14 @@ pub enum Compositor {
 }
 
 #[derive(Clone, Debug)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct ModelGroup {
     pub compositor: Compositor,
     pub particles: Vec<ParticleId>,
 }
 
 #[derive(Clone, Debug)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct ModelGroupDef {
     pub name: QName,
     pub group: ModelGroup,
@@ -494,6 +514,7 @@ pub struct ModelGroupDef {
 }
 
 #[derive(Clone, Debug)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct AttributeGroupDef {
     pub name: QName,
     pub attribute_uses: Vec<AttributeUse>,
@@ -508,6 +529,7 @@ pub struct AttributeGroupDef {
 // ---------------------------------------------------------------------------
 
 #[derive(Copy, Clone, PartialEq, Eq, Debug)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub enum ProcessContents {
     Skip,
     Lax,
@@ -516,6 +538,7 @@ pub enum ProcessContents {
 
 /// Which namespaces a wildcard admits.
 #[derive(Clone, PartialEq, Eq, Debug)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub enum NamespaceConstraint {
     /// `##any`.
     Any,
@@ -607,6 +630,7 @@ impl NamespaceConstraint {
 
 /// Where an XSD 1.1 `xs:openContent` wildcard may appear.
 #[derive(Copy, Clone, PartialEq, Eq, Debug)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub enum OpenContentMode {
     /// Between any two particles, and at either end.
     Interleave,
@@ -622,12 +646,14 @@ pub enum OpenContentMode {
 /// the wildcard's — which a position automaton cannot express, but a matcher
 /// can decide in one extra check.
 #[derive(Clone, PartialEq, Eq, Debug)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct OpenContent {
     pub mode: OpenContentMode,
     pub wildcard: Wildcard,
 }
 
 #[derive(Clone, PartialEq, Eq, Debug)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct Wildcard {
     pub namespace: NamespaceConstraint,
     pub process_contents: ProcessContents,
@@ -695,6 +721,7 @@ impl Wildcard {
 // ---------------------------------------------------------------------------
 
 #[derive(Copy, Clone, PartialEq, Eq, Debug)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub enum IdcKind {
     Unique,
     Key,
@@ -707,6 +734,7 @@ pub enum IdcKind {
 /// exactly the relational structure a future config generator needs for its
 /// `links:` entries.
 #[derive(Clone, Debug)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct IdentityConstraint {
     pub name: QName,
     pub kind: IdcKind,
@@ -725,6 +753,7 @@ pub struct IdentityConstraint {
 }
 
 #[derive(Clone, Debug)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct NotationDecl {
     pub name: QName,
     pub public_id: Option<String>,
@@ -738,6 +767,7 @@ pub struct NotationDecl {
 /// This is the seam a caller's own conventions hang on: whatever a schema
 /// family encodes here needs the original XML, not a summary of it.
 #[derive(Clone, PartialEq, Eq, Debug)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct AppInfo {
     pub source: Option<String>,
     /// The `appinfo` element's children, re-serialized.
@@ -745,6 +775,7 @@ pub struct AppInfo {
 }
 
 #[derive(Clone, Default, PartialEq, Eq, Debug)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct Annotation {
     pub documentation: Vec<String>,
     pub appinfo: Vec<AppInfo>,
@@ -795,18 +826,27 @@ impl SymbolSpace {
 }
 
 #[derive(Clone, Default, Debug)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct SymbolTables {
+    #[cfg_attr(feature = "serde", serde(with = "crate::names::map_as_seq"))]
     pub types: FxHashMap<QName, TypeId>,
+    #[cfg_attr(feature = "serde", serde(with = "crate::names::map_as_seq"))]
     pub elements: FxHashMap<QName, ElementId>,
+    #[cfg_attr(feature = "serde", serde(with = "crate::names::map_as_seq"))]
     pub attributes: FxHashMap<QName, AttributeId>,
+    #[cfg_attr(feature = "serde", serde(with = "crate::names::map_as_seq"))]
     pub model_groups: FxHashMap<QName, GroupId>,
+    #[cfg_attr(feature = "serde", serde(with = "crate::names::map_as_seq"))]
     pub attribute_groups: FxHashMap<QName, AttrGroupId>,
+    #[cfg_attr(feature = "serde", serde(with = "crate::names::map_as_seq"))]
     pub notations: FxHashMap<QName, NotationId>,
+    #[cfg_attr(feature = "serde", serde(with = "crate::names::map_as_seq"))]
     pub identity_constraints: FxHashMap<QName, IdcId>,
 }
 
 /// Provenance for one loaded schema document.
 #[derive(Clone, Debug)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct SourceDocument {
     pub uri: String,
     pub target_namespace: Option<Namespace>,
@@ -837,6 +877,7 @@ pub struct SourceDocument {
 /// an unresolved state — "did you call `Compile()`?", the .NET footgun, is
 /// not representable here.
 #[derive(Clone, Debug)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct Schemas {
     pub(crate) types: Arena<TypeDefinition>,
     pub(crate) elements: Arena<ElementDecl>,
@@ -850,8 +891,10 @@ pub struct Schemas {
 
     pub(crate) names: Interner,
     pub(crate) globals: SymbolTables,
+    #[cfg_attr(feature = "serde", serde(with = "crate::names::map_as_seq"))]
     pub(crate) builtins: FxHashMap<Builtin, TypeId>,
     /// Element id -> every element that may substitute for it, transitively.
+    #[cfg_attr(feature = "serde", serde(with = "crate::names::map_as_seq"))]
     pub(crate) substitution_closure: FxHashMap<ElementId, Vec<ElementId>>,
     /// Compiled content models, indexed by `TypeId`. `None` for simple types.
     pub(crate) content_models: Vec<Option<crate::content::Content>>,

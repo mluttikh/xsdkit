@@ -11,6 +11,7 @@ use std::fmt;
 
 /// Where a diagnostic points, in the source schema document.
 #[derive(Clone, PartialEq, Eq, Debug)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct Span {
     /// Absolute URI of the schema document.
     pub uri: String,

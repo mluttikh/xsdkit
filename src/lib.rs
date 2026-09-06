@@ -41,8 +41,32 @@
 //! XSD 1.1 is opt-in via [`Version::Xsd11`]: `openContent`,
 //! `defaultAttributes` and the relaxed UPA rule.
 //!
-//! Not yet: XSD 1.1 assertions and conditional type assignment, and identity
-//! constraints.
+//! Not yet: XSD 1.1 assertions and conditional type assignment, both of
+//! which need an XPath 2.0 evaluator.
+//!
+//! # Cargo features
+//!
+//! `serde` derives `Serialize`/`Deserialize` for [`Schemas`] and everything
+//! it holds, so a schema set is compiled once and loaded thereafter.
+//! Any serde format works, self-describing ones included.
+//!
+#![cfg_attr(
+    feature = "serde",
+    doc = r#"```no_run
+# let schemas = xsdkit::SchemaSetBuilder::new().file("report.xsd").build().unwrap();
+let cached = postcard::to_allocvec(&schemas)?;
+let schemas: xsdkit::Schemas = postcard::from_bytes(&cached)?;
+# Ok::<_, Box<dyn std::error::Error>>(())
+```
+"#
+)]
+//!
+//! The format is not stable across versions of this crate — a cache written
+//! by one version has to be rebuilt for the next. Names are interned and
+//! every component refers to them by index, so a cache is only meaningful
+//! alongside the code that wrote it. Key it on the crate version.
+//!
+//! `python` builds the PyO3 extension module and is not for library use.
 
 #![forbid(unsafe_code)]
 #![warn(missing_debug_implementations)]

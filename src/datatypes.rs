@@ -15,6 +15,7 @@ use std::fmt;
 
 /// The `whiteSpace` facet, which normalises the lexical form before parsing.
 #[derive(Copy, Clone, PartialEq, Eq, Debug)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub enum WhiteSpace {
     /// Leave the lexical form exactly as written.
     Preserve,
@@ -89,6 +90,7 @@ impl fmt::Display for WhiteSpace {
 
 /// The `explicitTimezone` facet, new in XSD 1.1.
 #[derive(Copy, Clone, PartialEq, Eq, Debug)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub enum ExplicitTimezone {
     Optional,
     Required,
@@ -97,6 +99,7 @@ pub enum ExplicitTimezone {
 
 /// How a simple type's value space is constructed.
 #[derive(Copy, Clone, PartialEq, Eq, Debug)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub enum Variety {
     /// A single value drawn from a primitive's value space.
     Atomic,
@@ -239,6 +242,7 @@ impl Facet {
 /// The facets in force on a simple type, after composing its whole
 /// restriction chain.
 #[derive(Clone, Default, PartialEq, Eq, Debug)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct FacetSet {
     pub length: Option<u64>,
     pub min_length: Option<u64>,
@@ -356,6 +360,7 @@ impl FacetSet {
 /// `precisionDecimal` is deliberately absent: it appeared in drafts and did
 /// not make the final Recommendation.
 #[derive(Copy, Clone, PartialEq, Eq, Hash, Debug, PartialOrd, Ord)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[non_exhaustive]
 pub enum Builtin {
     // ur-types

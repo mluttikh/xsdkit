@@ -68,6 +68,7 @@ pub type PositionId = u32;
 
 /// What a position matches.
 #[derive(Clone, PartialEq, Eq, Debug)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub enum Label {
     /// An element particle. Admits the element itself plus every member of
     /// its substitution group, so the admitted set is usually larger than
@@ -79,6 +80,7 @@ pub enum Label {
 
 /// One occurrence of an element or wildcard in a content model.
 #[derive(Clone, Debug)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct Position {
     /// The particle this position came from. Several positions share one
     /// particle when a numeric range was unrolled.
@@ -95,6 +97,7 @@ pub struct Position {
 
 /// A Glushkov position automaton over a content model.
 #[derive(Clone, Debug)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct ContentAutomaton {
     positions: Vec<Position>,
     first: Vec<PositionId>,
@@ -163,11 +166,13 @@ impl ContentAutomaton {
 /// members is `n!` paths as a regex, and a per-member counter is both
 /// smaller and exactly what the specification describes.
 #[derive(Clone, Debug)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct AllGroup {
     pub members: Vec<AllMember>,
 }
 
 #[derive(Clone, Debug)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct AllMember {
     pub particle: ParticleId,
     pub label: Label,
@@ -185,6 +190,7 @@ impl AllGroup {
 
 /// The compiled form of a complex type's content.
 #[derive(Clone, Debug)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub enum ContentModel {
     /// No child elements are permitted.
     Empty,
@@ -194,6 +200,7 @@ pub enum ContentModel {
 
 /// A content model together with any XSD 1.1 open content around it.
 #[derive(Clone, Debug)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct Content {
     pub model: ContentModel,
     /// Every element name written out in this content model, which is what
@@ -204,6 +211,7 @@ pub struct Content {
     /// and an extension's base is folded in. Names, not declarations: a
     /// substitution group member is admitted through its head rather than
     /// named, so it is not a sibling.
+    #[cfg_attr(feature = "serde", serde(with = "crate::names::set_as_seq"))]
     pub siblings: FxHashSet<QName>,
     /// The declaration each of those names carries.
     ///
@@ -213,6 +221,7 @@ pub struct Content {
     /// model. 1.0 rejected such a schema outright; 1.1 accepts it and reports
     /// the clash only when a document actually walks into it, which is why
     /// this has to be answerable at validation time.
+    #[cfg_attr(feature = "serde", serde(with = "crate::names::map_as_seq"))]
     pub sibling_decls: FxHashMap<QName, ElementId>,
     /// Kept beside the model rather than compiled into it: interleaved open
     /// content is the *shuffle* of the declared language with the wildcard's,
