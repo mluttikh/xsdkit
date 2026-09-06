@@ -941,6 +941,38 @@ impl<'a, S: FnMut(PsviEvent)> Run<'a, '_, S> {
                 // `skip` looks no further; the other two want the global
                 // declaration this name has, if it has one.
                 let global = self.v.schemas.globals().elements.get(&q).copied();
+                // XSD 1.1 checks Element Declarations Consistent here rather
+                // than when the schema is read: a wildcard admitting a name
+                // the model also writes out is only a problem if the two
+                // declarations disagree, and only a document can show that
+                // they were both reachable.
+                let sibling = matcher.sibling_declaration(q);
+                if let (Some(id), Some(other)) = (global, sibling) {
+                    // Consistent means related, not identical: a wildcard
+                    // resolving `e` to `xs:positiveInteger` beside a declared
+                    // `xs:integer` describes documents that exist, while one
+                    // resolving to `xs:time` beside `xs:date` describes none.
+                    let a = self.v.schemas[id].type_id;
+                    let b = self.v.schemas[other].type_id;
+                    let related = a == b
+                        || self.v.schemas.derives_from(a, b)
+                        || self.v.schemas.derives_from(b, a)
+                        // A union and its members are related too: a value of
+                        // the member type is a value of the union, which the
+                        // base chain does not record.
+                        || in_union(self.v.schemas, a, b)
+                        || in_union(self.v.schemas, b, a);
+                    if !related && mode != ProcessContents::Skip {
+                        self.error(
+                            DiagCode::InconsistentDeclarations,
+                            line,
+                            format!(
+                                "`{shown}` is admitted by a wildcard here, but this content model also declares it with a different type"
+                            ),
+                        );
+                        return (None, true);
+                    }
+                }
                 return match (mode, global) {
                     (ProcessContents::Skip, _) => (None, true),
                     (_, Some(id)) => (Some(id), false),
@@ -1514,6 +1546,27 @@ fn id_kind(schemas: &Schemas, ty: TypeId) -> Option<IdKind> {
 /// Only those with `NDATA` count: a parsed entity is text the reader expands,
 /// while an *unparsed* one names external content the document merely points
 /// at, and naming one is the whole meaning of `xs:ENTITY`.
+/// Whether `member` is one of `union`'s member types, or derives from one.
+///
+/// Union membership is not derivation — the base chain does not record it —
+/// but a value of a member type *is* a value of the union, which is what
+/// makes two declarations consistent.
+fn in_union(schemas: &Schemas, union: TypeId, member: TypeId) -> bool {
+    fn walk(schemas: &Schemas, union: TypeId, member: TypeId, depth: u32) -> bool {
+        if depth == 0 {
+            return false;
+        }
+        let Some(t) = schemas[union].as_simple() else {
+            return false;
+        };
+        t.member_types.iter().any(|m| {
+            *m == member || schemas.derives_from(member, *m) || walk(schemas, *m, member, depth - 1)
+        })
+    }
+    // A union of unions is legal; one deep enough to exhaust this is not.
+    walk(schemas, union, member, 16)
+}
+
 fn unparsed_entities(doctype: &str) -> Vec<String> {
     let mut out = Vec::new();
     let mut rest = doctype;

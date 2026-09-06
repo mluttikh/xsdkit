@@ -327,6 +327,98 @@ fn an_enumeration_on_a_simple_content_restriction_is_enforced() {
     );
 }
 
+/// XSD 1.1 checks Element Declarations Consistent when a document walks into
+/// it rather than when the schema is read: a wildcard may admit a name the
+/// content model also declares, and that is only a problem if the two
+/// declarations describe no common value.
+fn edc_schema(local: &str, global: &str) -> Schemas {
+    schema(&format!(
+        r#"<xs:complexType name="T">
+             <xs:sequence>
+               <xs:element name="e" {local}/>
+               <xs:element name="f" type="xs:string"/>
+               <xs:any namespace="{}" processContents="lax"/>
+             </xs:sequence>
+           </xs:complexType>
+           <xs:element name="doc" type="tns:T"/>
+           <xs:element name="e" {global}/>"#,
+        "##targetNamespace"
+    ))
+}
+
+const TWO: &str = r#"<doc xmlns="urn:example"><e>2008-11-03</e><f>x</f><e>2008-11-04</e></doc>"#;
+
+#[test]
+fn a_wildcard_may_not_admit_a_name_the_model_declares_incompatibly() {
+    // `xs:date` here and `xs:time` there: no document satisfies both.
+    let s = edc_schema(r#"type="xs:date""#, r#"type="xs:time""#);
+    invalid(
+        &s,
+        r#"<doc xmlns="urn:example"><e>2008-11-03</e><f>x</f><e>12:20:02</e></doc>"#,
+        DiagCode::InconsistentDeclarations,
+    );
+}
+
+/// Consistent means *related*, not identical — a value of one can be a value
+/// of the other.
+#[test]
+fn related_declarations_are_consistent() {
+    // Derivation, either way round.
+    valid(
+        &edc_schema(r#"type="xs:integer""#, r#"type="xs:positiveInteger""#),
+        r#"<doc xmlns="urn:example"><e>-12</e><f>x</f><e>12</e></doc>"#,
+    );
+    valid(
+        &edc_schema(r#"type="xs:integer""#, r#"type="xs:decimal""#),
+        r#"<doc xmlns="urn:example"><e>12</e><f>x</f><e>1.5</e></doc>"#,
+    );
+    // The same declaration on both sides.
+    valid(&edc_schema(r#"type="xs:date""#, r#"type="xs:date""#), TWO);
+}
+
+/// A union and its members are related too, which the base chain does not
+/// record: every `xs:date` is a value of a union that has `xs:date` in it.
+#[test]
+fn a_union_and_its_members_are_consistent() {
+    let s = schema(
+        r###"<xs:complexType name="T">
+             <xs:sequence>
+               <xs:element name="e">
+                 <xs:simpleType><xs:union memberTypes="xs:date xs:time"/></xs:simpleType>
+               </xs:element>
+               <xs:element name="f" type="xs:string"/>
+               <xs:any namespace="##targetNamespace" processContents="lax"/>
+             </xs:sequence>
+           </xs:complexType>
+           <xs:element name="doc" type="tns:T"/>
+           <xs:element name="e" type="xs:date"/>"###,
+    );
+    valid(
+        &s,
+        r#"<doc xmlns="urn:example"><e>12:12:00</e><f>x</f><e>2008-11-02</e></doc>"#,
+    );
+}
+
+/// `skip` looks at nothing, so there is no declaration to disagree with.
+#[test]
+fn a_skip_wildcard_raises_no_consistency_question() {
+    let s = schema(
+        r###"<xs:complexType name="T">
+             <xs:sequence>
+               <xs:element name="e" type="xs:date"/>
+               <xs:element name="f" type="xs:string"/>
+               <xs:any namespace="##targetNamespace" processContents="skip"/>
+             </xs:sequence>
+           </xs:complexType>
+           <xs:element name="doc" type="tns:T"/>
+           <xs:element name="e" type="xs:time"/>"###,
+    );
+    valid(
+        &s,
+        r#"<doc xmlns="urn:example"><e>2008-11-03</e><f>x</f><e>12:20:02</e></doc>"#,
+    );
+}
+
 // ---------------------------------------------------------------------------
 // xs:ID and xs:IDREF
 // ---------------------------------------------------------------------------

@@ -210,6 +210,16 @@ cannot express this.
   their own negative counterparts, which add a *third* element carrying that
   value and expect invalid. No rule counting distinct elements satisfies both,
   so the specification wins and those two stay as false alarms.
+- **Element Declarations Consistent is *dynamic* in XSD 1.1.** 1.0 rejected a
+  schema where a wildcard could admit a name the model also declares; 1.1
+  accepts it and reports the clash only when a document reaches it, which is
+  why `Content::sibling_decls` exists and the check lives in
+  `match_in_parent`. Consistent means *related*, not identical — a value of
+  one can be a value of the other — and that covers derivation in either
+  direction **and union membership**, which the base chain does not record.
+  Narrowing it to "types differ" rejects `xs:positiveInteger` beside
+  `xs:integer`; narrowing it to derivation alone rejects a union beside one of
+  its own members.
 - **`xs:ENTITY` reads the one part of a DTD that matters to it.** A value must
   name an *unparsed* entity — declared with `NDATA`, pointing at content the
   document does not contain. A parsed entity is text the reader expands and
@@ -358,7 +368,7 @@ is fifty cases one rule buys.
 The instance half — 21,671 documents — is `#[ignore]`d because it takes
 minutes where the schema half takes seconds (4.5 minutes in `--release`; run
 it that way). Run it with `-- --ignored`. It scores 21,575 of them, 99.0%
-correct: **99.5%** of valid documents accepted, **98.3%** of invalid ones
+correct: **99.5%** of valid documents accepted, **98.4%** of invalid ones
 rejected.
 
 That first figure was 88.1% until a one-line bug turned up: an *enumeration on

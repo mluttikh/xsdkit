@@ -49,7 +49,7 @@
 use crate::diagnostics::{DiagCode, Diagnostic, Diagnostics, Severity, Span};
 use crate::model::*;
 use crate::names::QName;
-use fxhash::FxHashSet;
+use fxhash::{FxHashMap, FxHashSet};
 
 /// Cap on positions per content model, bounding total model size.
 ///
@@ -205,6 +205,15 @@ pub struct Content {
     /// substitution group member is admitted through its head rather than
     /// named, so it is not a sibling.
     pub siblings: FxHashSet<QName>,
+    /// The declaration each of those names carries.
+    ///
+    /// For the XSD 1.1 *dynamic* Element Declarations Consistent check: a
+    /// wildcard may admit a name this model also declares, and if the two
+    /// declarations disagree about the type then no document can satisfy the
+    /// model. 1.0 rejected such a schema outright; 1.1 accepts it and reports
+    /// the clash only when a document actually walks into it, which is why
+    /// this has to be answerable at validation time.
+    pub sibling_decls: FxHashMap<QName, ElementId>,
     /// Kept beside the model rather than compiled into it: interleaved open
     /// content is the *shuffle* of the declared language with the wildcard's,
     /// which a position automaton cannot express — but a matcher decides it
@@ -521,6 +530,7 @@ pub(crate) fn build_all(
             model,
             open,
             siblings: named_elements(schemas, &particles),
+            sibling_decls: named_declarations(schemas, &particles),
         });
     }
 
@@ -772,6 +782,43 @@ pub(crate) fn wildcard_admits(
         && !(w.not_defined && schemas.globals().elements.contains_key(&name))
 }
 
+/// The declaration each written-out name carries, for the dynamic Element
+/// Declarations Consistent check.
+///
+/// A name written twice with two declarations is exactly the clash the check
+/// looks for, so the first is kept and the walk does not merge them.
+fn named_declarations(schemas: &Schemas, particles: &[ParticleId]) -> FxHashMap<QName, ElementId> {
+    fn walk(
+        schemas: &Schemas,
+        p: ParticleId,
+        out: &mut FxHashMap<QName, ElementId>,
+        seen: &mut FxHashSet<GroupId>,
+    ) {
+        match &schemas[p].term {
+            Term::Element(e) if !e.is_placeholder() => {
+                out.entry(schemas[*e].name).or_insert(*e);
+            }
+            Term::Group(g) => {
+                for c in &g.particles {
+                    walk(schemas, *c, out, seen);
+                }
+            }
+            Term::GroupRef(gid) if !gid.is_placeholder() && seen.insert(*gid) => {
+                for c in &schemas[*gid].group.particles {
+                    walk(schemas, *c, out, seen);
+                }
+            }
+            _ => {}
+        }
+    }
+    let mut out = FxHashMap::default();
+    let mut seen = FxHashSet::default();
+    for p in particles {
+        walk(schemas, *p, &mut out, &mut seen);
+    }
+    out
+}
+
 /// The element names a set of particles writes out, with group references
 /// expanded.
 fn named_elements(schemas: &Schemas, particles: &[ParticleId]) -> FxHashSet<QName> {
@@ -917,6 +964,9 @@ pub struct ContentMatcher<'a> {
     open: Option<&'a OpenContent>,
     /// The names this model writes out, for `notQName="##definedSibling"`.
     siblings: &'a FxHashSet<QName>,
+    /// Their declarations, for the dynamic Element Declarations Consistent
+    /// check.
+    sibling_decls: &'a FxHashMap<QName, ElementId>,
     /// Active positions, for an automaton model.
     active: Vec<PositionId>,
     /// The declaration the last successful `step` matched, if it named one.
@@ -943,6 +993,7 @@ impl<'a> ContentMatcher<'a> {
             model,
             siblings,
             open: content.open.as_ref(),
+            sibling_decls: &content.sibling_decls,
             active: Vec::new(),
             matched: None,
             matched_wildcard: None,
@@ -1233,6 +1284,14 @@ impl<'a> ContentMatcher<'a> {
     /// declaration for it.
     pub fn matched(&self) -> Option<ElementId> {
         self.matched
+    }
+
+    /// The declaration this content model writes out for `name`, if any.
+    ///
+    /// A wildcard that admits a name the model also declares has to agree
+    /// with it about the type; this is how the validator asks.
+    pub fn sibling_declaration(&self, name: QName) -> Option<ElementId> {
+        self.sibling_decls.get(&name).copied()
     }
 
     /// How the wildcard that admitted the last child says it must be

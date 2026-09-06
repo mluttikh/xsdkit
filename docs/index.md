@@ -115,7 +115,7 @@ Schema Test Suite on every change.
 |---|---|
 | valid schemas accepted | **99.7%** (5,231 / 5,247) |
 | invalid schemas rejected | **66.7%** (320 / 480) |
-| documents judged correctly | **99.0%** (21,354 / 21,575) |
+| documents judged correctly | **99.0%** (21,361 / 21,575) |
 
 The gap in the second row is the honest description of what this is.
 `xsdkit` reads real schemas well; it does not yet enforce most of the

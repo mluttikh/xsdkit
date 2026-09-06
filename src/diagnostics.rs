@@ -183,6 +183,9 @@ pub enum DiagCode {
     /// An `xs:ENTITY` names something the document's DTD does not declare as
     /// an unparsed entity.
     UnknownEntity,
+    /// A wildcard admitted an element the same content model also declares,
+    /// and the two declarations disagree about its type.
+    InconsistentDeclarations,
 }
 
 impl DiagCode {
@@ -236,6 +239,7 @@ impl DiagCode {
             DiagCode::MissingKeyField => "XSD2015",
             DiagCode::UnresolvedKeyRef => "XSD2016",
             DiagCode::UnknownEntity => "XSD2017",
+            DiagCode::InconsistentDeclarations => "XSD2018",
         }
     }
 }
@@ -419,6 +423,7 @@ mod tests {
             DiagCode::MissingKeyField,
             DiagCode::UnresolvedKeyRef,
             DiagCode::UnknownEntity,
+            DiagCode::InconsistentDeclarations,
         ];
         let mut seen = std::collections::HashSet::new();
         for c in all {

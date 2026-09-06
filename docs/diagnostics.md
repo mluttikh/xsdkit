@@ -164,6 +164,7 @@ in.
 | `XSD2015` | An `xs:key` field is absent |
 | `XSD2016` | An `xs:keyref` matches no key |
 | `XSD2017` | An `xs:ENTITY` names no unparsed entity in the DTD |
+| `XSD2018` | A wildcard admitted a name the model declares with another type |
 
 ## Rendering
 

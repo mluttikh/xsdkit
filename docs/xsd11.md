@@ -89,6 +89,9 @@ fallback side by side.
 ### Richer wildcards
 
 - `notNamespace` — everything *except* the listed namespaces.
+- Element Declarations Consistent, checked when a document reaches it rather
+  than when the schema is read: a wildcard may admit a name the content model
+  also declares, and that is an error only if no value could satisfy both.
 - `explicitTimezone` — `required` insists a temporal value name an instant,
   `prohibited` says it is meant to be read locally.
 - `notQName` — everything except the listed names, including the special
