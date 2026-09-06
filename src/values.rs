@@ -19,7 +19,7 @@ use crate::atomic::{
     Date, DateTime, DayTimeDuration, Decimal, Double, Duration, Float, GDay, GMonth, GMonthDay,
     GYear, GYearMonth, PrecisionDecimal, Time, YearMonthDuration,
 };
-use crate::datatypes::{Builtin, BuiltinKind, FacetSet};
+use crate::datatypes::{Builtin, BuiltinKind, ExplicitTimezone, FacetSet};
 use crate::load::Version;
 use std::fmt;
 
@@ -281,6 +281,28 @@ pub struct QNameValue {
     /// with no default namespace in scope.
     pub namespace: Option<String>,
     pub local: String,
+}
+
+impl Value {
+    /// Whether this value carries a timezone, for the types that can have
+    /// one.
+    ///
+    /// `None` for everything else, which is what makes `explicitTimezone`
+    /// silently inapplicable rather than wrong on, say, an `xs:int`.
+    fn has_timezone(&self) -> Option<bool> {
+        use Value::*;
+        Some(match self {
+            DateTime(v) => v.timezone_offset().is_some(),
+            Time(v) => v.timezone_offset().is_some(),
+            Date(v) => v.timezone_offset().is_some(),
+            GYearMonth(v) => v.timezone_offset().is_some(),
+            GYear(v) => v.timezone_offset().is_some(),
+            GMonthDay(v) => v.timezone_offset().is_some(),
+            GDay(v) => v.timezone_offset().is_some(),
+            GMonth(v) => v.timezone_offset().is_some(),
+            _ => return None,
+        })
+    }
 }
 
 impl fmt::Display for QNameValue {
@@ -835,6 +857,27 @@ pub fn check_facets(
                     "`{value}` is not one of the {} permitted values",
                     allowed.len()
                 ),
+            ));
+        }
+    }
+
+    // XSD 1.1's `explicitTimezone`. A value with no timezone names a 28-hour
+    // window rather than an instant, so a schema may insist on one — or
+    // refuse it, for a value that is meant to be read locally.
+    if let (Some(rule), Some(present)) = (facets.explicit_timezone, value.has_timezone()) {
+        let violated = match rule {
+            ExplicitTimezone::Required => !present,
+            ExplicitTimezone::Prohibited => present,
+            ExplicitTimezone::Optional => false,
+        };
+        if violated {
+            let (what, want) = match rule {
+                ExplicitTimezone::Required => ("has no", "required"),
+                _ => ("carries a", "prohibited"),
+            };
+            return Err(violation(
+                "explicitTimezone",
+                format!("`{value}` {what} timezone, and `explicitTimezone` is `{want}`"),
             ));
         }
     }

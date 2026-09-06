@@ -473,3 +473,46 @@ fn a_repeated_facet_under_simple_content_is_reported() {
         "expected a duplicate-facet report, got:\n{d}"
     );
 }
+
+/// XSD 1.1's `explicitTimezone`. A value with no timezone names a 28-hour
+/// window rather than an instant, so a schema may insist on one — or refuse
+/// it, for a value meant to be read locally.
+#[test]
+fn explicit_timezone_is_enforced() {
+    let xsd = r#"<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema"
+                   xmlns:tns="urn:example" targetNamespace="urn:example">
+        <xs:simpleType name="Instant">
+          <xs:restriction base="xs:dateTime">
+            <xs:explicitTimezone value="required"/>
+          </xs:restriction>
+        </xs:simpleType>
+        <xs:simpleType name="Local">
+          <xs:restriction base="xs:date">
+            <xs:explicitTimezone value="prohibited"/>
+          </xs:restriction>
+        </xs:simpleType>
+        <xs:element name="r" type="tns:Instant"/>
+        <xs:element name="p" type="tns:Local"/>
+      </xs:schema>"#;
+    let s = SchemaSetBuilder::new()
+        .version(Version::Xsd11)
+        .text(xsd.to_string(), "mem://tz.xsd")
+        .build()
+        .unwrap_or_else(|d| panic!("{d}"));
+    let check = |xml: &str| s.instance_validator().validate(xml).is_valid();
+
+    assert!(check(r#"<r xmlns="urn:example">2001-01-01T00:00:00Z</r>"#));
+    assert!(check(
+        r#"<r xmlns="urn:example">2001-01-01T00:00:00+02:00</r>"#
+    ));
+    assert!(
+        !check(r#"<r xmlns="urn:example">2001-01-01T00:00:00</r>"#),
+        "`required` must reject a value with no timezone"
+    );
+
+    assert!(check(r#"<p xmlns="urn:example">2001-01-01</p>"#));
+    assert!(
+        !check(r#"<p xmlns="urn:example">2001-01-01Z</p>"#),
+        "`prohibited` must reject a value that carries one"
+    );
+}

@@ -336,8 +336,8 @@ is fifty cases one rule buys.
 
 The instance half — 21,671 documents — is `#[ignore]`d because it takes
 minutes where the schema half takes seconds (4.5 minutes in `--release`; run
-it that way). Run it with `-- --ignored`. It scores 21,575 of them, 98.6%
-correct: **99.5%** of valid documents accepted, **97.6%** of invalid ones
+it that way). Run it with `-- --ignored`. It scores 21,575 of them, 98.7%
+correct: **99.5%** of valid documents accepted, **97.7%** of invalid ones
 rejected.
 
 That first figure was 88.1% until a one-line bug turned up: an *enumeration on

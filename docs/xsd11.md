@@ -89,6 +89,8 @@ fallback side by side.
 ### Richer wildcards
 
 - `notNamespace` — everything *except* the listed namespaces.
+- `explicitTimezone` — `required` insists a temporal value name an instant,
+  `prohibited` says it is meant to be read locally.
 - `notQName` — everything except the listed names, including the special
   `##defined` (any element declared as a global) and `##definedSibling` (any
   element declared as a sibling in this content model).
