@@ -321,3 +321,35 @@ fn block_separates_the_group_from_what_may_appear() {
         .has_errors();
     assert!(rejected, "a barred substitute must be rejected");
 }
+
+/// `accepts` existed only in Python until now, which is how the two surfaces
+/// drift: a convenience gets added where it is first wanted and never grows
+/// the other half.
+#[test]
+fn accepts_answers_yes_or_no_about_a_child_sequence() {
+    let s = report();
+    let report = s.element(Some(NS), "report").unwrap();
+    let q = |n: &str| s.qname(Some(NS), n).expect("an interned name");
+
+    assert!(report.accepts([q("title")]));
+    assert!(report.accepts([q("title"), q("depth"), q("units")]));
+    assert!(!report.accepts([]), "title is required");
+    assert!(!report.accepts([q("depth"), q("title")]), "out of order");
+    assert!(
+        !report.accepts([q("title"), q("title")]),
+        "title appears once"
+    );
+
+    // Substitution is expanded, so a member stands in for the head.
+    assert!(report.accepts([q("title"), q("circle"), q("square")]));
+
+    // Reached through the type, it is the same answer.
+    assert_eq!(
+        report.type_of().accepts([q("title")]),
+        report.accepts([q("title")])
+    );
+
+    // A simple type has no content model, so nothing satisfies it — not even
+    // the empty sequence.
+    assert!(!s.type_(Some(NS), "Unit").unwrap().accepts([]));
+}

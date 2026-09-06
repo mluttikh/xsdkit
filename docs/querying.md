@@ -231,8 +231,21 @@ report.type.accepts([N+"title", N+"issued"])                      # False — it
 ```
 
 Answered by running the compiled content automaton, not by pattern-matching
-particles. In Rust the matcher is available directly, so you can step through a
-document and ask `accepts_end()` when you reach the end:
+particles. Rust says the same thing the same way:
+
+```rust
+# use xsdkit::Schemas;
+# fn demo(schemas: &Schemas) -> Option<()> {
+let report = schemas.element(Some("urn:example"), "report")?;
+let title = schemas.qname(Some("urn:example"), "title")?;
+let ok = report.accepts([title]);
+# Some(())
+# }
+```
+
+The matcher underneath is available too, for stepping through a document and
+asking `accepts_end()` when you reach the end rather than judging a whole
+sequence at once:
 
 ```rust
 # use xsdkit::Schemas;

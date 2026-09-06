@@ -171,6 +171,13 @@ impl<'s> ElementRef<'s> {
         self.type_of().attributes()
     }
 
+    /// Whether a sequence of child names may appear inside this element.
+    ///
+    /// The same as `element.type_of().accepts(..)`, without the hop.
+    pub fn accepts(self, names: impl IntoIterator<Item = QName>) -> bool {
+        self.type_of().accepts(names)
+    }
+
     /// Every element that may stand in for this one, this one included when
     /// it is not abstract.
     ///
@@ -335,6 +342,27 @@ impl<'s> TypeRef<'s> {
     /// The attribute of that local name, if there is one.
     pub fn attribute(self, local: &str) -> Option<AttributeUseRef<'s>> {
         self.attributes().find(|a| a.local_name() == local)
+    }
+
+    /// Whether a sequence of child names satisfies this type's content
+    /// model.
+    ///
+    /// The one-shot form of [`Schemas::match_content`], for when the answer
+    /// wanted is yes or no rather than where a sequence went wrong. A simple
+    /// type accepts nothing, not even the empty sequence: it has no content
+    /// model to satisfy.
+    ///
+    /// ```no_run
+    /// # let schemas = xsdkit::SchemaSetBuilder::new().file("report.xsd").compile().into_result().unwrap();
+    /// # let report = schemas.element(Some("urn:example"), "report").unwrap();
+    /// let title = schemas.qname(Some("urn:example"), "title").unwrap();
+    /// assert!(report.type_of().accepts([title]));
+    /// ```
+    pub fn accepts(self, names: impl IntoIterator<Item = QName>) -> bool {
+        let Some(mut m) = self.schemas.match_content(self.id) else {
+            return false;
+        };
+        names.into_iter().all(|q| m.step(q)) && m.accepts_end()
     }
 
     /// Atomic, list or union. Absent for a complex type.

@@ -2030,20 +2030,15 @@ impl PyType_ {
     ///
     /// Names may be Clark notation, bare local names, or `(ns, local)` pairs.
     fn accepts(&self, names: &Bound<'_, PyAny>) -> PyResult<bool> {
-        let Some(mut m) = self.s.match_content(self.id) else {
-            return Ok(false);
-        };
+        let mut wanted = Vec::new();
         for item in names.try_iter()? {
-            let item = item?;
-            let Some(q) = parse_name(&self.s, &item)? else {
+            let Some(q) = parse_name(&self.s, &item?)? else {
                 // A name no component in this schema carries cannot match.
                 return Ok(false);
             };
-            if !m.step(q) {
-                return Ok(false);
-            }
+            wanted.push(q);
         }
-        Ok(m.accepts_end())
+        Ok(self.r().accepts(wanted))
     }
 
     /// Validates a lexical form against this type, returning its typed value.

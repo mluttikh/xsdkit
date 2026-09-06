@@ -819,6 +819,25 @@ practice, since each was a real complaint:
   `SimpleType::builtin` and so cannot see the complex `xs:anyType`. `type()`
   still resolves them: the mapping is "what this schema says", the lookup
   methods are "resolve this name".
+- **The bindings project `src/refs.rs`, they do not reimplement it.** Every
+  `#[pyclass]` holds an `Arc<Schemas>` and an id — a PyO3 class cannot hold a
+  borrow — and each accessor makes a reference with `self.r()` and reads
+  through that. Anything answered twice will eventually be answered
+  differently: `variety` and `accepts` were Python-only until the Rust view
+  layer grew them, and `substitutes` disagreed with the validator for as long
+  as it called the wrong one of two similarly named methods.
+
+  What is deliberately Python-only is rendering: `tree`, `_repr_html_` and
+  `Tree` exist for notebooks and have no business in a Rust API. That is the
+  whole list. Anything else appearing on one side and not the other is drift,
+  not a decision.
+- **The stub is checked in both directions, by test.** `_xsdkit.pyi` is
+  hand-written and is the only type surface Python users have.
+  `python/tests/test_stubs.py` asserts that everything stubbed exists at
+  runtime *and* that everything at runtime is stubbed, that getters are
+  stubbed as `@property` and methods are not, and that parameter names and
+  keyword-only-ness agree. Adding a `#[getter]` and forgetting the stub is
+  otherwise completely silent.
 - **Every handle needs `__eq__` and `__hash__`.** Without them a `#[pyclass]`
   falls back to identity, so two lookups of one declaration are unequal and
   hash apart — a set of them silently holds duplicates and nothing raises.

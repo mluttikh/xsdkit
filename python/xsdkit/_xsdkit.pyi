@@ -70,9 +70,15 @@ class SchemaError(XsdError):
     diagnostics: list[Diagnostic]
 
 class Span:
-    uri: str
-    line: int
-    label: str | None
+    @property
+    def uri(self) -> str:
+        """The document the diagnostic points into."""
+    @property
+    def line(self) -> int:
+        """1-based line number, or 0 when unknown."""
+    @property
+    def label(self) -> str | None:
+        """What this span is, when a diagnostic carries more than one."""
 
 class Diagnostic:
     def _repr_html_(self) -> str:
@@ -92,20 +98,32 @@ class Diagnostic:
     def is_error(self) -> bool: ...
 
 class Document:
-    uri: str
-    target_namespace: str | None
-    #: True when the document had no ``targetNamespace`` of its own and was
-    #: absorbed into its includer's.
-    chameleon: bool
-    #: The ``xs:schema`` ``version`` attribute, verbatim. The specification
-    #: declares it as a bare token with no processing role, so it is reported
-    #: rather than interpreted.
-    version: str | None
+    @property
+    def uri(self) -> str:
+        """Where the document was read from."""
+    @property
+    def target_namespace(self) -> str | None:
+        """Its ``targetNamespace``, absent when it declares none."""
+    @property
+    def chameleon(self) -> bool:
+        """True when it had no ``targetNamespace`` of its own and was
+        absorbed into its includer's."""
+    @property
+    def version(self) -> str | None:
+        """The ``xs:schema`` ``version`` attribute, verbatim.
+
+        The specification declares it as a bare token with no processing
+        role, so it is reported rather than interpreted.
+        """
 
 class AppInfo:
-    source: str | None
-    #: The ``appinfo`` children, re-serialized with names in Clark notation.
-    xml: str
+    @property
+    def source(self) -> str | None:
+        """The ``source`` attribute, if the ``xs:appinfo`` carried one."""
+    @property
+    def xml(self) -> str:
+        """The ``appinfo`` children, re-serialized with names in Clark
+        notation."""
 
 class Facets:
     """A set of facets on a simple type.
