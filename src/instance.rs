@@ -53,6 +53,9 @@ pub enum PsviEvent {
         value: Option<Value>,
         type_id: TypeId,
         lexical: String,
+        /// True when the element was empty and its declaration's `default`
+        /// or `fixed` value supplied the content, as for an absent attribute.
+        from_schema: bool,
         line: u32,
     },
     EndElement {
@@ -291,14 +294,55 @@ impl<'a, S: FnMut(PsviEvent)> Run<'a, '_, S> {
                 }
                 Event::End(_) => self.end(line),
                 Event::Text(t) => {
-                    // Decode, then resolve character and predefined entity
-                    // references — done explicitly so it is obvious that
-                    // element text is unescaped before it becomes a value.
-                    if let Ok(raw) = t.decode() {
-                        if let Ok(text) = quick_xml::escape::unescape(&raw) {
+                    // References arrive as their own `GeneralRef` events, so
+                    // what reaches here is literal text with nothing left to
+                    // unescape.
+                    match t.decode() {
+                        Ok(text) => {
                             if let Some(f) = self.stack.last_mut() {
                                 f.text.push_str(&text);
                             }
+                        }
+                        Err(e) => self.error(DiagCode::MalformedXml, line, e.to_string()),
+                    }
+                }
+                // `&amp;` and `&#233;` are events of their own, *not* part of
+                // the surrounding text. Ignoring them reads `caf&#233;` as
+                // `caf` — silently, which is the worst way to be wrong about
+                // a value.
+                Event::GeneralRef(r) => {
+                    let resolved = match r.resolve_char_ref() {
+                        Ok(Some(c)) => Some(c.to_string()),
+                        Ok(None) => r
+                            .decode()
+                            .ok()
+                            .and_then(|name| predefined_entity(&name).map(str::to_owned)),
+                        Err(e) => {
+                            self.error(DiagCode::MalformedXml, line, e.to_string());
+                            continue;
+                        }
+                    };
+                    match resolved {
+                        Some(text) => {
+                            if let Some(f) = self.stack.last_mut() {
+                                f.text.push_str(&text);
+                            }
+                        }
+                        // A general entity from a DTD. Expanding it needs the
+                        // declaration, which this reader does not process, and
+                        // guessing the empty string would quietly corrupt the
+                        // value.
+                        None => {
+                            let name = r.decode().unwrap_or_default().into_owned();
+                            self.error(
+                                DiagCode::MalformedXml,
+                                line,
+                                format!(
+                                    "cannot expand the entity reference `&{name};`; \
+                                     only the five XML predefines and character \
+                                     references are resolved"
+                                ),
+                            );
                         }
                     }
                 }
@@ -818,22 +862,52 @@ impl<'a, S: FnMut(PsviEvent)> Run<'a, '_, S> {
         };
 
         if let Some(target) = simple_target {
-            let value =
-                match self
-                    .v
-                    .values
-                    .validate_in(target, &frame.text, &Scopes(&self.namespaces))
-                {
-                    Ok(v) => Some(v),
-                    Err(e) => {
-                        self.error(DiagCode::InvalidValue, line, format!("`{shown}`: {e}"));
-                        None
+            // An element with no character content takes its declaration's
+            // `default` or `fixed` value — the schema supplying what the
+            // document left out, exactly as for an absent attribute. An
+            // `xsi:nil` element never reaches here, which is right: nil and a
+            // value constraint are alternatives, not a pair.
+            let constraint = frame
+                .declaration
+                .and_then(|d| self.v.schemas[d].value_constraint.clone());
+            let from_schema = constraint.is_some() && frame.text.is_empty();
+            let lexical = match &constraint {
+                Some(vc) if from_schema => vc.value().to_string(),
+                _ => frame.text.clone(),
+            };
+            let value = match self
+                .v
+                .values
+                .validate_in(target, &lexical, &Scopes(&self.namespaces))
+            {
+                Ok(v) => Some(v),
+                Err(e) => {
+                    self.error(DiagCode::InvalidValue, line, format!("`{shown}`: {e}"));
+                    None
+                }
+            };
+            // `fixed` is a constraint, not a default: content the document
+            // did write may not differ from it. Compared in the value space,
+            // so `1.0` satisfies a decimal fixed at `1.00`.
+            if let (Some(vc), Some(v)) = (&constraint, &value) {
+                if vc.is_fixed() && !from_schema {
+                    let want = self
+                        .v
+                        .values
+                        .validate_in(target, vc.value(), &Scopes(&self.namespaces))
+                        .ok();
+                    if want.as_ref() != Some(v) {
+                        let msg =
+                            format!("`{shown}` is fixed at `{}`, not `{lexical}`", vc.value());
+                        self.error(DiagCode::InvalidValue, line, msg);
                     }
-                };
+                }
+            }
             (self.sink)(PsviEvent::Text {
                 value,
                 type_id: target,
-                lexical: frame.text.clone(),
+                lexical,
+                from_schema,
                 line,
             });
         } else {
@@ -886,6 +960,19 @@ fn read_attributes(
             }
         })
         .collect()
+}
+
+/// The five entities XML predefines. Anything else is declared in a DTD,
+/// which this reader does not process.
+fn predefined_entity(name: &str) -> Option<&'static str> {
+    match name {
+        "amp" => Some("&"),
+        "lt" => Some("<"),
+        "gt" => Some(">"),
+        "quot" => Some("\""),
+        "apos" => Some("'"),
+        _ => None,
+    }
 }
 
 fn count_lines(xml: &str, upto: usize) -> u32 {

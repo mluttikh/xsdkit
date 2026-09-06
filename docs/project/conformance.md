@@ -46,22 +46,22 @@ the list is short enough to be worked through.
 
 | | |
 |---|---|
-| valid documents accepted | **98.3%** (11,708 / 11,907) |
-| invalid documents rejected | **94.6%** (9,146 / 9,668) |
-| overall correct | **96.7%** (20,854 / 21,575) |
+| valid documents accepted | **98.5%** (11,734 / 11,907) |
+| invalid documents rejected | **94.6%** (9,144 / 9,668) |
+| overall correct | **96.8%** (20,878 / 21,575) |
 
 Here the two rows are much closer, because validating a document against a
 model you already built is the part that is finished.
 
-The 199 remaining false alarms are not 199 separate bugs. Grouped by the
+The 173 remaining false alarms are not 173 separate bugs. Grouped by the
 diagnostic we wrongly emit:
 
 | Diagnostic | Documents | Cause |
 |---|---|---|
-| `XSD2005` attribute not allowed | 112 | `xlink:href`, because the suite's own catalogue schema imports `xlink.xsd` over the network and we refuse to fetch it |
-| `XSD2002` unexpected element | 35 | Content-model mismatches, not yet traced to a single rule |
-| `XSD2004` invalid value | 30 | A mixed bag; the largest group is an empty `xs:ID`, which is not an `NCName` and which we may be right to reject |
-| five other codes | 22 | A long tail — at most six documents each |
+| `XSD2005` attribute not allowed | 112 | ~91 are `xlink:href`, because the suite's own catalogue schema imports `xlink.xsd` over the network and we refuse to fetch it; 15 are attribute-wildcard **intersection**, where two `xs:anyAttribute`s reaching a type from different attribute groups must be combined |
+| `XSD2002` unexpected element | 35 | Conditional type assignment (a declared gap), `xs:all`, and `openContent` |
+| `XSD2007` unexpected text | 5 | `xs:override` does not replace the component it overrides |
+| five other codes | 21 | A long tail — at most six documents each |
 
 The first is not a defect at all: `schemaLocation` is a hint, network fetching
 is off by default (see [Security](security.md)), and a processor is expected

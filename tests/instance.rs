@@ -250,6 +250,120 @@ fn boolean_schema_attributes_accept_the_numeric_spelling() {
 }
 
 // ---------------------------------------------------------------------------
+// References, and schema-supplied element content
+// ---------------------------------------------------------------------------
+
+/// The character content the PSVI reports for a one-element document.
+fn text_of(s: &Schemas, xml: &str) -> Vec<String> {
+    let mut out = Vec::new();
+    s.instance_validator().validate_with(xml, |ev| {
+        if let PsviEvent::Text { lexical, .. } = ev {
+            out.push(lexical);
+        }
+    });
+    out
+}
+
+/// `&amp;` and `&#233;` are parser events of their own rather than part of
+/// the surrounding text. Dropping them reads `caf&#233;` as `caf` — a wrong
+/// value with no diagnostic, which is the worst way to be wrong.
+#[test]
+fn character_and_entity_references_reach_the_value() {
+    let s = schema(r#"<xs:element name="item" type="xs:string"/>"#);
+    for (written, want) in [
+        ("plain", "plain"),
+        ("a&amp;b", "a&b"),
+        ("a&lt;b&gt;c", "a<b>c"),
+        ("&quot;q&quot;", "\"q\""),
+        ("it&apos;s", "it's"),
+        ("caf&#233;", "café"),
+        ("&#65;", "A"),
+        ("x&#x41;y", "xAy"),
+        // Beyond the basic plane, so the reference is not one UTF-16 unit.
+        ("&#x10000;", "\u{10000}"),
+    ] {
+        let xml = format!(r#"<item xmlns="urn:example">{written}</item>"#);
+        assert_eq!(text_of(&s, &xml), vec![want.to_string()], "for `{written}`");
+    }
+}
+
+/// An entity this reader cannot expand is reported rather than silently
+/// treated as nothing.
+#[test]
+fn an_unexpandable_entity_reference_is_reported() {
+    let s = schema(r#"<xs:element name="item" type="xs:string"/>"#);
+    invalid(
+        &s,
+        r#"<item xmlns="urn:example">&mystery;</item>"#,
+        DiagCode::MalformedXml,
+    );
+}
+
+fn defaulted_schema() -> Schemas {
+    schema(
+        r#"<xs:element name="doc">
+             <xs:complexType><xs:sequence>
+               <xs:element name="d" type="xs:int" default="7" minOccurs="0"/>
+               <xs:element name="f" type="xs:decimal" fixed="1.00" minOccurs="0"/>
+             </xs:sequence></xs:complexType>
+           </xs:element>"#,
+    )
+}
+
+/// An empty element takes its declaration's `default` — the schema supplying
+/// what the document left out, as it does for an absent attribute.
+#[test]
+fn an_empty_element_takes_its_declarations_default() {
+    let s = defaulted_schema();
+    let mut seen = Vec::new();
+    let r = s
+        .instance_validator()
+        .validate_with(r#"<doc xmlns="urn:example"><d/></doc>"#, |ev| {
+            if let PsviEvent::Text {
+                value, from_schema, ..
+            } = ev
+            {
+                seen.push((value, from_schema));
+            }
+        });
+    assert!(r.is_valid(), "{}", r.diagnostics);
+    assert_eq!(seen, vec![(Some(Value::Integer(7)), true)]);
+}
+
+/// `fixed` behaves the same way when the element is empty.
+#[test]
+fn an_empty_element_takes_its_declarations_fixed_value() {
+    let s = defaulted_schema();
+    valid(&s, r#"<doc xmlns="urn:example"><f/></doc>"#);
+}
+
+/// And constrains the content when the document does write some. The
+/// comparison is in the value space, so `1.0` satisfies a decimal fixed at
+/// `1.00`.
+#[test]
+fn content_must_match_a_fixed_element_value() {
+    let s = defaulted_schema();
+    valid(&s, r#"<doc xmlns="urn:example"><f>1.0</f></doc>"#);
+    invalid(
+        &s,
+        r#"<doc xmlns="urn:example"><f>8</f></doc>"#,
+        DiagCode::InvalidValue,
+    );
+}
+
+/// Whitespace is character content, so it is not the absence a `default`
+/// fills — and it is not a valid `xs:int` either.
+#[test]
+fn whitespace_content_is_not_an_absent_value() {
+    let s = defaulted_schema();
+    invalid(
+        &s,
+        r#"<doc xmlns="urn:example"><d> </d></doc>"#,
+        DiagCode::InvalidValue,
+    );
+}
+
+// ---------------------------------------------------------------------------
 // xs:enumeration over QNames
 // ---------------------------------------------------------------------------
 

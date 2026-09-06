@@ -158,6 +158,16 @@ cannot express this.
   one argument.
 - **The `xml:` prefix is bound implicitly**, and `xml:lang`/`space`/`base`/`id`
   are predeclared. A schema must not need to fetch `xml.xsd`.
+- **A reference is its own parser event.** `quick-xml` reports `&amp;` and
+  `&#233;` as `Event::GeneralRef`, *not* as part of the surrounding
+  `Event::Text`. A `match` that falls through on them reads `caf&#233;` as
+  `caf` with no diagnostic. The five XML predefines and character references
+  are resolved in `instance.rs`; anything else needs a DTD and is reported.
+- **An empty element takes its declaration's `default` or `fixed` value**, the
+  same way an absent attribute does, and `PsviEvent::Text::from_schema` says
+  so. Whitespace is content, not absence, so `<n> </n>` does not take one.
+  `fixed` also constrains content the document *did* write, compared in the
+  value space — `1.0` satisfies a decimal fixed at `1.00`.
 - **An `xs:boolean` attribute has four spellings.** `mixed`, `nillable`,
   `abstract`, `appliesToEmpty` and `xsi:nil` all take `true`, `false`, `1` and
   `0`, and the value is whitespace-collapsed first. Read them with `flag()` in
@@ -246,8 +256,8 @@ is fifty cases one rule buys.
 
 The instance half — 21,671 documents — is `#[ignore]`d because it takes
 minutes where the schema half takes seconds (4.5 minutes in `--release`; run
-it that way). Run it with `-- --ignored`. It scores 21,575 of them, 96.7%
-correct: **98.3%** of valid documents accepted, **94.6%** of invalid ones
+it that way). Run it with `-- --ignored`. It scores 21,575 of them, 96.8%
+correct: **98.5%** of valid documents accepted, **94.6%** of invalid ones
 rejected.
 
 That first figure was 88.1% until a one-line bug turned up: an *enumeration on

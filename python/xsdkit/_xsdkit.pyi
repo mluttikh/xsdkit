@@ -373,6 +373,14 @@ class PsviEvent:
     def value(self) -> XsdValue | None:
         """The typed value, on a ``"text"`` event."""
     @property
+    def from_schema(self) -> bool:
+        """Whether the schema supplied this text.
+
+        True on a ``"text"`` event when the element was empty and its
+        declaration carried a ``default`` or ``fixed`` value, the same
+        distinction :attr:`AttributeValue.from_schema` draws.
+        """
+    @property
     def lexical(self) -> str | None: ...
     @property
     def line(self) -> int: ...

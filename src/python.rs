@@ -885,6 +885,7 @@ impl PySchemaSet {
                     attributes: attrs,
                     value: None,
                     lexical: None,
+                    from_schema: false,
                     line,
                 }
             }
@@ -892,6 +893,7 @@ impl PySchemaSet {
                 value,
                 type_id,
                 lexical,
+                from_schema,
                 line,
             } => PyPsviEvent {
                 kind: "text",
@@ -909,6 +911,7 @@ impl PySchemaSet {
                     None => None,
                 },
                 lexical: Some(lexical),
+                from_schema,
                 line,
             },
             RustPsvi::EndElement {
@@ -928,6 +931,7 @@ impl PySchemaSet {
                 attributes: Vec::new(),
                 value: None,
                 lexical: None,
+                from_schema: false,
                 line,
             },
         };
@@ -2772,6 +2776,7 @@ pub struct PyPsviEvent {
     attributes: Vec<PyAttributeValue>,
     value: Option<Py<PyAny>>,
     lexical: Option<String>,
+    from_schema: bool,
     line: u32,
 }
 
@@ -2823,6 +2828,15 @@ impl PyPsviEvent {
     #[getter]
     fn value(&self, py: Python<'_>) -> Option<Py<PyAny>> {
         self.value.as_ref().map(|v| v.clone_ref(py))
+    }
+    /// Whether the schema supplied this text, because the element was empty
+    /// and its declaration had a `default` or `fixed` value.
+    ///
+    /// Named `is_from_schema` in Rust so clippy does not read it as a
+    /// constructor; Python sees `from_schema`.
+    #[getter(from_schema)]
+    fn is_from_schema(&self) -> bool {
+        self.from_schema
     }
     /// The character content exactly as the document wrote it.
     #[getter]

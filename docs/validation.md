@@ -178,7 +178,12 @@ when a default means something different from an explicit value.
 - Substitution groups, closed transitively.
 - Wildcards, with `strict`, `lax` and `skip` processing.
 - Mixed content, `xs:all`, and repeated particles.
-- Default and fixed values, for attributes and for elements.
+- Default and fixed values, for attributes and for elements with simple
+  content — an empty element takes the value its declaration supplies, and
+  `from_schema` on the event says the schema wrote it rather than the
+  document. An element with *mixed* content does not take one yet.
+- Character and entity references, resolved into the value: `caf&#233;` is
+  `café`, not `caf`.
 - Encoding detection — hand `validate` the raw `bytes` rather than decoding
   first, and the byte-order mark and XML declaration are read for you.
 
@@ -187,7 +192,7 @@ into the model but not enforced during validation, and XSD 1.1 **assertions**
 and conditional type assignment are stored and not evaluated. A document that
 violates one of those is currently reported as valid.
 
-[Conformance](project/conformance.md) has the measured numbers: 96.7% of the
+[Conformance](project/conformance.md) has the measured numbers: 96.8% of the
 W3C suite's 21,575 document cases are judged correctly.
 
 ## Next
