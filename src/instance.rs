@@ -532,6 +532,17 @@ impl<'a, S: FnMut(PsviEvent)> Run<'a, '_, S> {
             // it — which is exactly what wildcards are for. Matching on
             // interned ids alone would reject every foreign element.
             if matcher.step_foreign(ns_uri, local) {
+                // A name the schema never interned has no global declaration
+                // to find, so `lax` has nothing to check it against and only
+                // `strict` has anything to say.
+                let strict = matcher.matched_wildcard() == Some(ProcessContents::Strict);
+                if strict {
+                    self.error(
+                        DiagCode::ElementNotDeclared,
+                        line,
+                        format!("`{shown}` is admitted by a `strict` wildcard, which requires a global element declaration"),
+                    );
+                }
                 return (None, true);
             }
             let owner = self.show(parent_name);
@@ -543,6 +554,26 @@ impl<'a, S: FnMut(PsviEvent)> Run<'a, '_, S> {
             return (None, true);
         };
         if matcher.step(q) {
+            if let Some(mode) = matcher.matched_wildcard() {
+                // A wildcard admitted it, so `processContents` decides what
+                // happens next rather than the wildcard's mere presence.
+                // `skip` looks no further; the other two want the global
+                // declaration this name has, if it has one.
+                let global = self.v.schemas.globals().elements.get(&q).copied();
+                return match (mode, global) {
+                    (ProcessContents::Skip, _) => (None, true),
+                    (_, Some(id)) => (Some(id), false),
+                    (ProcessContents::Lax, None) => (None, true),
+                    (ProcessContents::Strict, None) => {
+                        self.error(
+                            DiagCode::ElementNotDeclared,
+                            line,
+                            format!("`{shown}` is admitted by a `strict` wildcard, which requires a global element declaration"),
+                        );
+                        (None, true)
+                    }
+                };
+            }
             (matcher.matched(), false)
         } else {
             let owner = self.show(parent_name);

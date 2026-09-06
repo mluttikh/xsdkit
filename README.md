@@ -246,12 +246,12 @@ need a conformance checker, use Xerces or Saxon; if you need to read a schema
 that already works, this is built for that.
 
 Document validation is the other half of the suite — 21,575 scored cases,
-97.6% correct:
+98.3% correct:
 
 | | |
 |---|---|
 | valid documents accepted | **99.5%** (11,849 / 11,907) |
-| invalid documents rejected | **95.1%** (9,198 / 9,668) |
+| invalid documents rejected | **96.8%** (9,358 / 9,668) |
 
 ```bash
 git clone --depth 1 https://github.com/w3c/xsdtests /tmp/xsdtests

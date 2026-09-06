@@ -47,8 +47,8 @@ the list is short enough to be worked through.
 | | |
 |---|---|
 | valid documents accepted | **99.5%** (11,849 / 11,907) |
-| invalid documents rejected | **95.1%** (9,198 / 9,668) |
-| overall correct | **97.6%** (21,047 / 21,575) |
+| invalid documents rejected | **96.8%** (9,358 / 9,668) |
+| overall correct | **98.3%** (21,207 / 21,575) |
 
 Here the two rows are much closer, because validating a document against a
 model you already built is the part that is finished.
@@ -75,10 +75,19 @@ wrong. They were failing because an `xs:anyAttribute` written inside an
 plain bug, now fixed, and the documents pass without any schema being
 supplied to the harness.
 
-The false *acceptances* are dominated by the two unimplemented XSD 1.1
-features — assertions and conditional type assignment — and by identity
-constraints (`xs:key`, `xs:keyref`, `xs:unique`), which are read into the
-model but not enforced.
+The false *acceptances* are what is left of the same measurement, taken by
+test set rather than assumed. Identity constraints (`xs:key`, `xs:keyref`,
+`xs:unique`, and `xs:ID` uniqueness) are the largest group, at about 80; they
+are read into the model and not enforced. XSD 1.1 **assertions** account for
+around 70 and **conditional type assignment** for 13 — both stored,
+unevaluated, and both waiting on an XPath 2.0 subset.
+
+Until recently the biggest group was none of those: 150 documents from the
+NIST datatype sets, which wrap the element under test in
+`<xs:any processContents="strict"/>`. Every wildcard behaved as `skip`, so
+nothing inside one was checked and those tests passed vacuously on the valid
+side while failing to catch anything on the invalid side. `processContents`
+is now honoured, which is where the jump in this row comes from.
 
 ## Running it yourself
 

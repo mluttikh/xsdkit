@@ -328,6 +328,91 @@ fn an_enumeration_on_a_simple_content_restriction_is_enforced() {
 }
 
 // ---------------------------------------------------------------------------
+// Wildcard processContents
+// ---------------------------------------------------------------------------
+
+/// A wildcard admitting a child says how it must be processed. Treating every
+/// wildcard as `skip` leaves a hole in the document where nothing is checked
+/// — which is what the W3C's own datatype tests sit inside.
+fn wrapped_in(process_contents: &str) -> Schemas {
+    schema(&format!(
+        r#"<xs:element name="inner" type="tns:Small"/>
+           <xs:simpleType name="Small">
+             <xs:restriction base="xs:int"><xs:maxInclusive value="10"/></xs:restriction>
+           </xs:simpleType>
+           <xs:element name="out">
+             <xs:complexType><xs:sequence>
+               <xs:any processContents="{process_contents}"/>
+             </xs:sequence></xs:complexType>
+           </xs:element>"#
+    ))
+}
+
+const OUT: &str = r#"<out xmlns="urn:example">"#;
+
+#[test]
+fn a_strict_wildcard_validates_what_it_admits() {
+    let s = wrapped_in("strict");
+    valid(&s, &format!("{OUT}<inner>5</inner></out>"));
+    // The declaration is found and its facets apply.
+    invalid(
+        &s,
+        &format!("{OUT}<inner>999</inner></out>"),
+        DiagCode::InvalidValue,
+    );
+    // And `strict` insists there be a declaration at all.
+    invalid(
+        &s,
+        &format!("{OUT}<nosuch>x</nosuch></out>"),
+        DiagCode::ElementNotDeclared,
+    );
+}
+
+#[test]
+fn a_lax_wildcard_validates_only_what_it_can_find() {
+    let s = wrapped_in("lax");
+    valid(&s, &format!("{OUT}<inner>5</inner></out>"));
+    invalid(
+        &s,
+        &format!("{OUT}<inner>999</inner></out>"),
+        DiagCode::InvalidValue,
+    );
+    // Nothing to check it against, which `lax` accepts and `strict` does not.
+    valid(&s, &format!("{OUT}<nosuch>x</nosuch></out>"));
+}
+
+#[test]
+fn a_skip_wildcard_looks_no_further() {
+    let s = wrapped_in("skip");
+    valid(&s, &format!("{OUT}<inner>999</inner></out>"));
+    valid(&s, &format!("{OUT}<nosuch>x</nosuch></out>"));
+}
+
+/// The subtree under a validated wildcard is validated too, not just its
+/// immediate child.
+#[test]
+fn a_strict_wildcard_reaches_the_whole_subtree() {
+    let s = schema(
+        r#"<xs:element name="inner">
+             <xs:complexType><xs:sequence>
+               <xs:element name="n" type="xs:int"/>
+             </xs:sequence></xs:complexType>
+           </xs:element>
+           <xs:element name="out">
+             <xs:complexType><xs:sequence>
+               <xs:any processContents="strict"/>
+             </xs:sequence></xs:complexType>
+           </xs:element>"#,
+    );
+    valid(&s, &format!("{OUT}<inner><n>1</n></inner></out>"));
+    invalid(
+        &s,
+        &format!("{OUT}<inner><n>oops</n></inner></out>"),
+        DiagCode::InvalidValue,
+    );
+}
+
+// ---------------------------------------------------------------------------
 // Attribute wildcards
 // ---------------------------------------------------------------------------
 

@@ -921,6 +921,9 @@ pub struct ContentMatcher<'a> {
     active: Vec<PositionId>,
     /// The declaration the last successful `step` matched, if it named one.
     matched: Option<ElementId>,
+    /// How the wildcard that admitted the last child says it must be
+    /// processed, when a wildcard admitted it rather than a declaration.
+    matched_wildcard: Option<ProcessContents>,
     /// Per-member counts, for an `xs:all` model.
     counts: Vec<u32>,
     started: bool,
@@ -942,6 +945,7 @@ impl<'a> ContentMatcher<'a> {
             open: content.open.as_ref(),
             active: Vec::new(),
             matched: None,
+            matched_wildcard: None,
             counts,
             started: false,
             failed: false,
@@ -954,6 +958,7 @@ impl<'a> ContentMatcher<'a> {
         if self.failed {
             return false;
         }
+        self.matched_wildcard = None;
         let ok = match self.model {
             ContentModel::Empty => false,
             ContentModel::Automaton(a) => self.step_automaton(a, name),
@@ -964,6 +969,7 @@ impl<'a> ContentMatcher<'a> {
                 name,
                 self.siblings,
                 &mut self.matched,
+                &mut self.matched_wildcard,
             ),
         };
         if ok {
@@ -974,6 +980,7 @@ impl<'a> ContentMatcher<'a> {
         // makes interleaved open content a shuffle rather than a sequence.
         if self.open_admits(name) {
             self.matched = None;
+            self.matched_wildcard = self.open.map(|o| o.wildcard.process_contents);
             return true;
         }
         self.failed = true;
@@ -1023,6 +1030,7 @@ impl<'a> ContentMatcher<'a> {
         };
         let mut next = Vec::new();
         let mut matched = None;
+        let mut wildcard = None;
         for c in candidates {
             if let Some(decl) = admits(self.schemas, a.position(c), name, self.siblings) {
                 if !next.contains(&c) {
@@ -1033,6 +1041,11 @@ impl<'a> ContentMatcher<'a> {
                 // had the model been unambiguous.
                 if matched.is_none() {
                     matched = decl;
+                }
+                if wildcard.is_none() && decl.is_none() {
+                    if let Term::Wildcard(w) = &self.schemas[a.position(c).particle].term {
+                        wildcard = Some(w.process_contents);
+                    }
                 }
             }
         }
@@ -1045,6 +1058,8 @@ impl<'a> ContentMatcher<'a> {
         self.started = true;
         self.active = next;
         self.matched = matched;
+        // Only the wildcard's word when no declaration named the child.
+        self.matched_wildcard = matched.is_none().then_some(wildcard).flatten();
         true
     }
 
@@ -1055,6 +1070,7 @@ impl<'a> ContentMatcher<'a> {
         name: QName,
         siblings: &FxHashSet<QName>,
         matched: &mut Option<ElementId>,
+        wildcard: &mut Option<ProcessContents>,
     ) -> bool {
         for (i, m) in g.members.iter().enumerate() {
             let decl = match &m.label {
@@ -1076,6 +1092,11 @@ impl<'a> ContentMatcher<'a> {
             if room {
                 counts[i] += 1;
                 *matched = decl;
+                if decl.is_none() {
+                    if let Term::Wildcard(w) = &schemas[m.particle].term {
+                        *wildcard = Some(w.process_contents);
+                    }
+                }
                 return true;
             }
         }
@@ -1090,12 +1111,18 @@ impl<'a> ContentMatcher<'a> {
         if self.failed {
             return false;
         }
+        self.matched_wildcard = None;
         let ok = match self.model {
             ContentModel::Empty => false,
             ContentModel::Automaton(a) => self.step_automaton_foreign(a, ns_uri, local),
-            ContentModel::All(g) => {
-                Self::step_all_foreign(self.schemas, g, &mut self.counts, ns_uri, local)
-            }
+            ContentModel::All(g) => Self::step_all_foreign(
+                self.schemas,
+                g,
+                &mut self.counts,
+                ns_uri,
+                local,
+                &mut self.matched_wildcard,
+            ),
         };
         if ok {
             self.matched = None;
@@ -1103,6 +1130,7 @@ impl<'a> ContentMatcher<'a> {
         }
         if self.open_admits_uri(ns_uri, local) {
             self.matched = None;
+            self.matched_wildcard = self.open.map(|o| o.wildcard.process_contents);
             return true;
         }
         self.failed = true;
@@ -1136,6 +1164,9 @@ impl<'a> ContentMatcher<'a> {
                 && !excluded(self.schemas, w, ns_uri, local)
                 && !next.contains(&c)
             {
+                if next.is_empty() {
+                    self.matched_wildcard = Some(w.process_contents);
+                }
                 next.push(c);
             }
         }
@@ -1153,6 +1184,7 @@ impl<'a> ContentMatcher<'a> {
         counts: &mut [u32],
         ns_uri: Option<&str>,
         local: &str,
+        wildcard: &mut Option<ProcessContents>,
     ) -> bool {
         for (i, m) in g.members.iter().enumerate() {
             if !matches!(m.label, Label::Wildcard) {
@@ -1172,6 +1204,7 @@ impl<'a> ContentMatcher<'a> {
             };
             if room {
                 counts[i] += 1;
+                *wildcard = Some(w.process_contents);
                 return true;
             }
         }
@@ -1200,6 +1233,17 @@ impl<'a> ContentMatcher<'a> {
     /// declaration for it.
     pub fn matched(&self) -> Option<ElementId> {
         self.matched
+    }
+
+    /// How the wildcard that admitted the last child says it must be
+    /// processed, when it was a wildcard rather than a declaration that
+    /// admitted it.
+    ///
+    /// `skip` means the subtree is not looked at, `lax` validates it against
+    /// a global declaration if one exists, and `strict` requires one. Without
+    /// this a wildcard is a hole in the document where nothing is checked.
+    pub fn matched_wildcard(&self) -> Option<ProcessContents> {
+        self.matched_wildcard
     }
 
     /// Whether the content seen so far is a complete, valid match.

@@ -192,7 +192,7 @@ into the model but not enforced during validation, and XSD 1.1 **assertions**
 and conditional type assignment are stored and not evaluated. A document that
 violates one of those is currently reported as valid.
 
-[Conformance](project/conformance.md) has the measured numbers: 97.6% of the
+[Conformance](project/conformance.md) has the measured numbers: 98.3% of the
 W3C suite's 21,575 document cases are judged correctly.
 
 ## Next
