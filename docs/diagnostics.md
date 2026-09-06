@@ -163,6 +163,7 @@ in.
 | `XSD2014` | Two nodes carry the same `xs:key` or `xs:unique` value |
 | `XSD2015` | An `xs:key` field is absent |
 | `XSD2016` | An `xs:keyref` matches no key |
+| `XSD2017` | An `xs:ENTITY` names no unparsed entity in the DTD |
 
 ## Rendering
 

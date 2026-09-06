@@ -470,6 +470,57 @@ fn a_union_is_an_id_only_when_the_id_member_is_the_one_that_matched() {
     );
 }
 
+/// An `xs:ENTITY` names an *unparsed* entity — one declared with `NDATA`,
+/// pointing at content the document does not contain. A parsed entity is text
+/// the reader expands and is not one of these.
+#[test]
+fn an_entity_must_name_an_unparsed_entity_the_dtd_declares() {
+    let s = schema(
+        r#"<xs:element name="doc">
+             <xs:complexType><xs:sequence>
+               <xs:element name="e" type="xs:ENTITY" maxOccurs="unbounded"/>
+             </xs:sequence></xs:complexType>
+           </xs:element>"#,
+    );
+    let doc = |body: &str, decls: &str| {
+        format!("<!DOCTYPE doc [{decls}]><doc xmlns=\"urn:example\">{body}</doc>")
+    };
+    let declared = r#"<!ENTITY pic SYSTEM "p.gif" NDATA GIF>
+                      <!NOTATION GIF SYSTEM "v.exe">"#;
+    valid(&s, &doc("<e>pic</e>", declared));
+    invalid(&s, &doc("<e>other</e>", declared), DiagCode::UnknownEntity);
+    // A *parsed* entity is not an unparsed one, however it is spelled.
+    invalid(
+        &s,
+        &doc("<e>text</e>", r#"<!ENTITY text "just words">"#),
+        DiagCode::UnknownEntity,
+    );
+}
+
+/// `xs:ENTITIES` is a list, and every item has to name one.
+#[test]
+fn every_item_of_an_entities_value_must_be_declared() {
+    let s = schema(
+        r#"<xs:element name="doc">
+             <xs:complexType>
+               <xs:attribute name="pics" type="xs:ENTITIES"/>
+             </xs:complexType>
+           </xs:element>"#,
+    );
+    let decls = r#"<!ENTITY a SYSTEM "a.gif" NDATA GIF>
+                   <!ENTITY b SYSTEM "b.gif" NDATA GIF>
+                   <!NOTATION GIF SYSTEM "v.exe">"#;
+    valid(
+        &s,
+        &format!("<!DOCTYPE doc [{decls}]><doc xmlns=\"urn:example\" pics=\"a b\"/>"),
+    );
+    invalid(
+        &s,
+        &format!("<!DOCTYPE doc [{decls}]><doc xmlns=\"urn:example\" pics=\"a nope\"/>"),
+        DiagCode::UnknownEntity,
+    );
+}
+
 // ---------------------------------------------------------------------------
 // Wildcard processContents
 // ---------------------------------------------------------------------------

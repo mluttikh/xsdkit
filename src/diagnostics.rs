@@ -180,6 +180,9 @@ pub enum DiagCode {
     MissingKeyField,
     /// An `xs:keyref` names a key no node carries.
     UnresolvedKeyRef,
+    /// An `xs:ENTITY` names something the document's DTD does not declare as
+    /// an unparsed entity.
+    UnknownEntity,
 }
 
 impl DiagCode {
@@ -232,6 +235,7 @@ impl DiagCode {
             DiagCode::DuplicateKey => "XSD2014",
             DiagCode::MissingKeyField => "XSD2015",
             DiagCode::UnresolvedKeyRef => "XSD2016",
+            DiagCode::UnknownEntity => "XSD2017",
         }
     }
 }
@@ -414,6 +418,7 @@ mod tests {
             DiagCode::DuplicateKey,
             DiagCode::MissingKeyField,
             DiagCode::UnresolvedKeyRef,
+            DiagCode::UnknownEntity,
         ];
         let mut seen = std::collections::HashSet::new();
         for c in all {

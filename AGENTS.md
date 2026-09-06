@@ -210,6 +210,12 @@ cannot express this.
   their own negative counterparts, which add a *third* element carrying that
   value and expect invalid. No rule counting distinct elements satisfies both,
   so the specification wins and those two stay as false alarms.
+- **`xs:ENTITY` reads the one part of a DTD that matters to it.** A value must
+  name an *unparsed* entity — declared with `NDATA`, pointing at content the
+  document does not contain. A parsed entity is text the reader expands and
+  does not count, and `<!ENTITY % x ...>` is a parameter entity, not this.
+  `unparsed_entities` in `instance.rs` scans the internal subset for exactly
+  that and nothing else.
 - **The XPath in an identity constraint is not XPath.** Appendix I defines a
   tiny subset — an optional `.//`, child steps, and an attribute as a field's
   last step — so no engine is needed; `src/identity.rs` is the whole of it.
@@ -351,7 +357,7 @@ is fifty cases one rule buys.
 
 The instance half — 21,671 documents — is `#[ignore]`d because it takes
 minutes where the schema half takes seconds (4.5 minutes in `--release`; run
-it that way). Run it with `-- --ignored`. It scores 21,575 of them, 98.9%
+it that way). Run it with `-- --ignored`. It scores 21,575 of them, 99.0%
 correct: **99.5%** of valid documents accepted, **98.3%** of invalid ones
 rejected.
 

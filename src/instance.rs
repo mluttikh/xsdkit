@@ -27,7 +27,7 @@ use crate::model::*;
 use crate::names::{QName, XSI};
 use crate::validate::{Validator, nearest_builtin};
 use crate::values::{Namespaces, Value};
-use fxhash::FxHashMap;
+use fxhash::{FxHashMap, FxHashSet};
 use quick_xml::NsReader;
 use quick_xml::events::Event;
 use quick_xml::name::ResolveResult;
@@ -149,6 +149,7 @@ impl<'a> InstanceValidator<'a> {
             ids: FxHashMap::default(),
             idrefs: Vec::new(),
             elements_seen: 0,
+            entities: FxHashSet::default(),
             path: Vec::new(),
             scopes: Vec::new(),
             targets: Vec::new(),
@@ -177,6 +178,7 @@ impl<'a> InstanceValidator<'a> {
             ids: FxHashMap::default(),
             idrefs: Vec::new(),
             elements_seen: 0,
+            entities: FxHashSet::default(),
             path: Vec::new(),
             scopes: Vec::new(),
             targets: Vec::new(),
@@ -213,6 +215,9 @@ struct Run<'a, 'b, S: FnMut(PsviEvent)> {
     /// A counter distinguishing elements, so an `xs:ID` can be attributed to
     /// the one that claimed it.
     elements_seen: u32,
+    /// The unparsed entities the document's DTD declares, which is the only
+    /// thing an `xs:ENTITY` value may name.
+    entities: FxHashSet<String>,
     /// The names of the open elements, which is what an identity-constraint
     /// path is matched against — the validator has no tree to walk.
     path: Vec<QName>,
@@ -234,6 +239,8 @@ enum IdRole {
     Defines,
     /// An `xs:IDREF`: must match one.
     References,
+    /// An `xs:ENTITY`: must name an unparsed entity the DTD declared.
+    Entity,
 }
 
 /// What a *type* can tell us, before seeing a value.
@@ -241,6 +248,7 @@ enum IdRole {
 enum IdKind {
     Defines,
     References,
+    Entity,
     /// A union: the member that matched decides, so ask the value.
     PerValue,
 }
@@ -492,6 +500,7 @@ impl<'a, S: FnMut(PsviEvent)> Run<'a, '_, S> {
             let role = match kind {
                 IdKind::Defines => IdRole::Defines,
                 IdKind::References => IdRole::References,
+                IdKind::Entity => IdRole::Entity,
                 // A union's members are tried in order and the first that
                 // validates wins, so which one it was decides the role — and
                 // that is a question about this token, not about the type.
@@ -513,6 +522,19 @@ impl<'a, S: FnMut(PsviEvent)> Run<'a, '_, S> {
                 }
                 // Not resolvable yet: an `xs:IDREF` may point forward.
                 IdRole::References => self.idrefs.push((token.to_string(), line)),
+                // An entity, by contrast, is declared in the DTD before the
+                // root element, so it can be settled at once.
+                IdRole::Entity => {
+                    if !self.entities.contains(token) {
+                        self.error(
+                            DiagCode::UnknownEntity,
+                            line,
+                            format!(
+                                "`{token}` is not an unparsed entity declared by this document"
+                            ),
+                        );
+                    }
+                }
             }
         }
     }
@@ -531,6 +553,7 @@ impl<'a, S: FnMut(PsviEvent)> Run<'a, '_, S> {
                 return match id_kind(self.v.schemas, item_type(self.v.schemas, m)) {
                     Some(IdKind::Defines) => Some(IdRole::Defines),
                     Some(IdKind::References) => Some(IdRole::References),
+                    Some(IdKind::Entity) => Some(IdRole::Entity),
                     _ => None,
                 };
             }
@@ -661,6 +684,14 @@ impl<'a, S: FnMut(PsviEvent)> Run<'a, '_, S> {
                         if let Some(f) = self.stack.last_mut() {
                             f.text.push_str(text);
                         }
+                    }
+                }
+                // The only part of a DTD this reader looks at: an
+                // `xs:ENTITY` value must name an unparsed entity, and the
+                // internal subset is where those are declared.
+                Event::DocType(t) => {
+                    if let Ok(text) = t.decode() {
+                        self.entities.extend(unparsed_entities(&text));
                     }
                 }
                 Event::Eof => break,
@@ -1471,8 +1502,37 @@ fn id_kind(schemas: &Schemas, ty: TypeId) -> Option<IdKind> {
         Some(crate::datatypes::Builtin::IdRef | crate::datatypes::Builtin::IdRefs) => {
             Some(IdKind::References)
         }
+        Some(crate::datatypes::Builtin::Entity | crate::datatypes::Builtin::Entities) => {
+            Some(IdKind::Entity)
+        }
         _ => None,
     }
+}
+
+/// The unparsed entities an internal DTD subset declares.
+///
+/// Only those with `NDATA` count: a parsed entity is text the reader expands,
+/// while an *unparsed* one names external content the document merely points
+/// at, and naming one is the whole meaning of `xs:ENTITY`.
+fn unparsed_entities(doctype: &str) -> Vec<String> {
+    let mut out = Vec::new();
+    let mut rest = doctype;
+    while let Some(at) = rest.find("<!ENTITY") {
+        rest = &rest[at + "<!ENTITY".len()..];
+        let Some(end) = rest.find('>') else { break };
+        let decl = &rest[..end];
+        rest = &rest[end + 1..];
+        let mut words = decl.split_whitespace();
+        let Some(name) = words.next() else { continue };
+        // `<!ENTITY % foo ...>` is a parameter entity, not this.
+        if name == "%" {
+            continue;
+        }
+        if decl.split_whitespace().any(|w| w == "NDATA") {
+            out.push(name.to_string());
+        }
+    }
+    out
 }
 
 fn count_lines(xml: &str, upto: usize) -> u32 {
