@@ -32,6 +32,7 @@ pub(crate) fn compile(mut loader: Loader<'_>, mode: Conformance) -> (Schemas, Di
     resolve_references(&mut loader, mode);
     merge_attribute_groups(&mut loader);
     merge_inherited_attributes(&mut loader);
+    merge_inherited_wildcards(&mut loader);
     resolve_simple_content(&mut loader);
     check_cycles(&mut loader);
     check_structural_cycles(&mut loader);
@@ -458,7 +459,7 @@ fn particle_is_dangling(l: &Loader<'_>, p: ParticleId) -> bool {
 /// first, memoising the result and guarding against cycles.
 fn merge_attribute_groups(l: &mut Loader<'_>) {
     let n = l.attribute_groups.len();
-    let mut expanded: Vec<Option<Vec<AttributeUse>>> = vec![None; n];
+    let mut expanded: Vec<Option<Expanded>> = vec![None; n];
     let mut in_progress = FxHashSet::default();
 
     for i in 0..n {
@@ -479,9 +480,19 @@ fn merge_attribute_groups(l: &mut Loader<'_>) {
             continue;
         }
         let mut extra = Vec::new();
+        let mut from_groups: Option<Wildcard> = None;
         for g in refs {
-            if let Some(uses) = &expanded[g.index()] {
-                extra.extend(uses.iter().cloned());
+            if let Some(e) = &expanded[g.index()] {
+                extra.extend(e.uses.iter().cloned());
+                // A wildcard written inside an attribute group reaches every
+                // type that references the group, and several of them
+                // *intersect*: an attribute must satisfy each.
+                if let Some(w) = &e.wildcard {
+                    from_groups = Some(match from_groups {
+                        Some(acc) => acc.intersect(w),
+                        None => w.clone(),
+                    });
+                }
             }
         }
         if let TypeDefinition::Complex(c) = l.types.get_mut(i) {
@@ -490,16 +501,29 @@ fn merge_attribute_groups(l: &mut Loader<'_>) {
                     c.attribute_uses.push(u);
                 }
             }
+            // The *complete wildcard*: the type's own, narrowed by every one
+            // its groups brought in.
+            c.attribute_wildcard = match (c.attribute_wildcard.take(), from_groups) {
+                (Some(own), Some(g)) => Some(own.intersect(&g)),
+                (own, g) => own.or(g),
+            };
         }
     }
+}
+
+/// One attribute group, with the groups it references folded in.
+#[derive(Clone)]
+struct Expanded {
+    uses: Vec<AttributeUse>,
+    wildcard: Option<Wildcard>,
 }
 
 fn expand_group(
     l: &mut Loader<'_>,
     id: AttrGroupId,
-    expanded: &mut Vec<Option<Vec<AttributeUse>>>,
+    expanded: &mut Vec<Option<Expanded>>,
     in_progress: &mut FxHashSet<AttrGroupId>,
-) -> Vec<AttributeUse> {
+) -> Expanded {
     if let Some(done) = &expanded[id.index()] {
         return done.clone();
     }
@@ -514,23 +538,39 @@ fn expand_group(
             )
             .at(span),
         );
-        return Vec::new();
+        return Expanded {
+            uses: Vec::new(),
+            wildcard: None,
+        };
     }
 
     let mut out = l.attribute_groups.get(id.0).attribute_uses.clone();
+    let mut wildcard = l.attribute_groups.get(id.0).attribute_wildcard.clone();
     let refs = l.attribute_groups.get(id.0).attribute_group_refs.clone();
     for r in refs {
-        for u in expand_group(l, r, expanded, in_progress) {
+        let inner = expand_group(l, r, expanded, in_progress);
+        for u in inner.uses {
             if !out.iter().any(|e| e.attribute == u.attribute) {
                 out.push(u);
             }
+        }
+        if let Some(w) = inner.wildcard {
+            wildcard = Some(match wildcard {
+                Some(acc) => acc.intersect(&w),
+                None => w,
+            });
         }
     }
 
     in_progress.remove(&id);
     l.attribute_groups.get_mut(id.0).attribute_uses = out.clone();
-    expanded[id.index()] = Some(out.clone());
-    out
+    l.attribute_groups.get_mut(id.0).attribute_wildcard = wildcard.clone();
+    let done = Expanded {
+        uses: out,
+        wildcard,
+    };
+    expanded[id.index()] = Some(done.clone());
+    done
 }
 
 // ---------------------------------------------------------------------------
@@ -597,6 +637,60 @@ fn effective_attributes(
         }
     }
 
+    in_progress.remove(&id);
+    done[id.index()] = Some(out.clone());
+    out
+}
+
+/// The `{attribute wildcard}` each complex type ends up with, once its base
+/// chain is taken into account.
+///
+/// Extension may only widen, so the wildcard is the **union** of the type's
+/// own complete wildcard and the base's — the opposite direction from the
+/// intersection that combined `xs:attributeGroup` references into the
+/// complete wildcard in the first place. Restriction states its wildcard in
+/// full and keeps only what it declared, which is where the walk stops.
+fn merge_inherited_wildcards(l: &mut Loader<'_>) {
+    let n = l.types.len();
+    let mut done: Vec<Option<Option<Wildcard>>> = vec![None; n];
+    let mut in_progress = FxHashSet::default();
+    for i in 0..n {
+        let w = effective_wildcard(l, TypeId::from_index(i), &mut done, &mut in_progress);
+        if let TypeDefinition::Complex(c) = l.types.get_mut(i as u32) {
+            c.attribute_wildcard = w;
+        }
+    }
+}
+
+fn effective_wildcard(
+    l: &mut Loader<'_>,
+    id: TypeId,
+    done: &mut Vec<Option<Option<Wildcard>>>,
+    in_progress: &mut FxHashSet<TypeId>,
+) -> Option<Wildcard> {
+    if let Some(cached) = &done[id.index()] {
+        return cached.clone();
+    }
+    let TypeDefinition::Complex(c) = l.types.get(id.0) else {
+        done[id.index()] = Some(None);
+        return None;
+    };
+    let own = c.attribute_wildcard.clone();
+    let base = c.base;
+    let extends = c.derivation == DerivationMethod::Extension;
+
+    // A derivation cycle is reported by `check_cycles`; here it must simply
+    // not recurse forever.
+    if !extends || base == id || base.is_placeholder() || !in_progress.insert(id) {
+        done[id.index()] = Some(own.clone());
+        return own;
+    }
+
+    let inherited = effective_wildcard(l, base, done, in_progress);
+    let out = match (own, inherited) {
+        (Some(a), Some(b)) => Some(a.union(&b)),
+        (a, b) => a.or(b),
+    };
     in_progress.remove(&id);
     done[id.index()] = Some(out.clone());
     out

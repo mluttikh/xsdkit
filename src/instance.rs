@@ -664,7 +664,13 @@ impl<'a, S: FnMut(PsviEvent)> Run<'a, '_, S> {
             }
 
             let Some(q) = self.v.schemas.qname(a.namespace.as_deref(), &a.local) else {
-                self.report_unknown_attribute(&a.local, &wildcard, line);
+                self.report_unknown_attribute(
+                    a.namespace.as_deref(),
+                    None,
+                    &a.local,
+                    &wildcard,
+                    line,
+                );
                 continue;
             };
 
@@ -704,22 +710,31 @@ impl<'a, S: FnMut(PsviEvent)> Run<'a, '_, S> {
                         };
                     // A `fixed` value is a constraint, not a default: the
                     // document may repeat it but may not differ from it.
-                    if let Some(vc) = u
+                    // Compared in the value space, as for an element, so
+                    // `1.0` satisfies a decimal fixed at `1.00`.
+                    let constraint = u
                         .value_constraint
-                        .as_ref()
-                        .or(self.v.schemas[u.attribute].value_constraint.as_ref())
-                    {
-                        if vc.is_fixed() && vc.value() != a.value {
-                            let shown = self.show(q);
-                            self.error(
-                                DiagCode::InvalidValue,
-                                line,
-                                format!(
-                                    "attribute `{shown}` is fixed at `{}`, not `{}`",
-                                    vc.value(),
-                                    a.value
-                                ),
-                            );
+                        .clone()
+                        .or_else(|| self.v.schemas[u.attribute].value_constraint.clone());
+                    if let (Some(vc), Some(v)) = (&constraint, &value) {
+                        if vc.is_fixed() {
+                            let want = self
+                                .v
+                                .values
+                                .validate_in(ty, vc.value(), &Scopes(&self.namespaces))
+                                .ok();
+                            if want.as_ref() != Some(v) {
+                                let shown = self.show(q);
+                                self.error(
+                                    DiagCode::InvalidValue,
+                                    line,
+                                    format!(
+                                        "attribute `{shown}` is fixed at `{}`, not `{}`",
+                                        vc.value(),
+                                        a.value
+                                    ),
+                                );
+                            }
                         }
                     }
                     out.push(AttributePsvi {
@@ -732,7 +747,13 @@ impl<'a, S: FnMut(PsviEvent)> Run<'a, '_, S> {
                 }
                 None => {
                     let shown = self.show(q);
-                    self.report_unknown_attribute(&shown, &wildcard, line);
+                    self.report_unknown_attribute(
+                        a.namespace.as_deref(),
+                        Some(q),
+                        &shown,
+                        &wildcard,
+                        line,
+                    );
                     out.push(AttributePsvi {
                         name: q,
                         declaration: None,
@@ -791,11 +812,32 @@ impl<'a, S: FnMut(PsviEvent)> Run<'a, '_, S> {
         out
     }
 
-    fn report_unknown_attribute(&mut self, shown: &str, wildcard: &Option<Wildcard>, line: u32) {
-        if wildcard.is_some() {
-            // An `anyAttribute` admits it; `strict` processing of attribute
-            // wildcards is not implemented, so it is accepted unchecked.
-            return;
+    /// Reports an attribute no declaration matched, unless the type's
+    /// wildcard admits it.
+    ///
+    /// `name` is absent when the schema never interned this name — the usual
+    /// case for a wildcard, which exists precisely to admit what the schema
+    /// does not declare, so the namespace is matched by URI rather than by id.
+    fn report_unknown_attribute(
+        &mut self,
+        ns: Option<&str>,
+        name: Option<QName>,
+        shown: &str,
+        wildcard: &Option<Wildcard>,
+        line: u32,
+    ) {
+        if let Some(w) = wildcard {
+            // The namespace decides. `processContents` does not: `strict`
+            // would additionally require a global declaration, and that is
+            // not implemented, so an admitted attribute is accepted
+            // unchecked.
+            let admitted = w.namespace.admits_uri(self.v.schemas.names(), ns)
+                && !name.is_some_and(|q| w.not_qname.contains(&q))
+                && !(w.not_defined
+                    && name.is_some_and(|q| self.v.schemas.globals().attributes.contains_key(&q)));
+            if admitted {
+                return;
+            }
         }
         self.error(
             DiagCode::AttributeNotAllowed,

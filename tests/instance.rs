@@ -250,6 +250,117 @@ fn boolean_schema_attributes_accept_the_numeric_spelling() {
 }
 
 // ---------------------------------------------------------------------------
+// Attribute wildcards
+// ---------------------------------------------------------------------------
+
+/// Wildcards reaching one type from two attribute groups are *intersected* —
+/// an attribute has to satisfy both, not either.
+#[test]
+fn attribute_group_wildcards_intersect() {
+    let s = schema(
+        r#"<xs:complexType name="T"><xs:sequence/>
+             <xs:attributeGroup ref="tns:a"/>
+             <xs:attributeGroup ref="tns:b"/>
+           </xs:complexType>
+           <xs:attributeGroup name="a">
+             <xs:anyAttribute namespace="urn:one urn:two" processContents="lax"/>
+           </xs:attributeGroup>
+           <xs:attributeGroup name="b">
+             <xs:anyAttribute namespace="urn:two urn:three" processContents="lax"/>
+           </xs:attributeGroup>
+           <xs:element name="e" type="tns:T"/>"#,
+    );
+    // In both.
+    valid(&s, r#"<e xmlns="urn:example" xmlns:t="urn:two" t:x="1"/>"#);
+    // In one only — the intersection excludes it.
+    invalid(
+        &s,
+        r#"<e xmlns="urn:example" xmlns:o="urn:one" o:x="1"/>"#,
+        DiagCode::AttributeNotAllowed,
+    );
+    invalid(
+        &s,
+        r#"<e xmlns="urn:example" xmlns:h="urn:three" h:x="1"/>"#,
+        DiagCode::AttributeNotAllowed,
+    );
+}
+
+/// An extension may only widen, so its wildcard is the *union* of its own and
+/// the base's — and a type that adds no wildcard still inherits one.
+#[test]
+fn an_extension_unions_its_wildcard_with_the_bases() {
+    let s = schema(
+        r#"<xs:complexType name="Base"><xs:sequence/>
+             <xs:anyAttribute namespace="urn:a" processContents="lax"/>
+           </xs:complexType>
+           <xs:complexType name="Wider">
+             <xs:complexContent><xs:extension base="tns:Base">
+               <xs:anyAttribute namespace="urn:b" processContents="lax"/>
+             </xs:extension></xs:complexContent>
+           </xs:complexType>
+           <xs:complexType name="Same">
+             <xs:complexContent><xs:extension base="tns:Base">
+               <xs:attribute name="k" type="xs:string"/>
+             </xs:extension></xs:complexContent>
+           </xs:complexType>
+           <xs:element name="w" type="tns:Wider"/>
+           <xs:element name="s" type="tns:Same"/>"#,
+    );
+    valid(&s, r#"<w xmlns="urn:example" xmlns:a="urn:a" a:x="1"/>"#);
+    valid(&s, r#"<w xmlns="urn:example" xmlns:b="urn:b" b:y="1"/>"#);
+    // Adding only an attribute keeps the wildcard it inherited.
+    valid(&s, r#"<s xmlns="urn:example" xmlns:a="urn:a" a:x="1"/>"#);
+    invalid(
+        &s,
+        r#"<w xmlns="urn:example" xmlns:c="urn:c" c:z="1"/>"#,
+        DiagCode::AttributeNotAllowed,
+    );
+}
+
+/// A wildcard's namespace decides; its mere presence does not admit
+/// everything.
+#[test]
+fn a_wildcards_namespace_constraint_is_enforced() {
+    // `r###` because the schema text itself contains `"##`.
+    let s = schema(
+        r###"<xs:complexType name="T"><xs:sequence/>
+             <xs:anyAttribute namespace="##other" processContents="lax"/>
+           </xs:complexType>
+           <xs:element name="e" type="tns:T"/>"###,
+    );
+    valid(
+        &s,
+        r#"<e xmlns="urn:example" xmlns:o="urn:other" o:x="1"/>"#,
+    );
+    // `##other` excludes the target namespace.
+    invalid(
+        &s,
+        r#"<e xmlns="urn:example" xmlns:t="urn:example" t:x="1"/>"#,
+        DiagCode::AttributeNotAllowed,
+    );
+}
+
+/// An attribute `fixed` value is compared in the value space, as an element's
+/// is — `1.0` and `1.00` are one decimal.
+#[test]
+fn an_attribute_fixed_value_compares_values_not_strings() {
+    let s = schema(
+        r#"<xs:element name="e">
+             <xs:complexType>
+               <xs:attribute name="n" type="xs:decimal" fixed="1.00"/>
+             </xs:complexType>
+           </xs:element>"#,
+    );
+    valid(&s, r#"<e xmlns="urn:example" n="1.0"/>"#);
+    valid(&s, r#"<e xmlns="urn:example" n="1.00"/>"#);
+    invalid(
+        &s,
+        r#"<e xmlns="urn:example" n="2"/>"#,
+        DiagCode::InvalidValue,
+    );
+}
+
+// ---------------------------------------------------------------------------
 // References, and schema-supplied element content
 // ---------------------------------------------------------------------------
 

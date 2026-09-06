@@ -535,6 +535,53 @@ impl NamespaceConstraint {
         }
     }
 
+    /// The constraint admitting only what both admit.
+    ///
+    /// *Attribute Wildcard Intersection*. Written for the XSD 1.1 form, where
+    /// two negations combine into one — 1.0 could only spell `##other` and
+    /// called that case an error, but the answer here is the same shape.
+    pub fn intersect(&self, other: &Self) -> Self {
+        use NamespaceConstraint::*;
+        match (self, other) {
+            (Any, o) | (o, Any) => o.clone(),
+            (Enumeration(a), Enumeration(b)) => {
+                Enumeration(a.iter().filter(|n| b.contains(n)).cloned().collect())
+            }
+            // What the list names, less what the negation bars.
+            (Not(n), Enumeration(e)) | (Enumeration(e), Not(n)) => {
+                Enumeration(e.iter().filter(|x| !n.contains(x)).cloned().collect())
+            }
+            // Barred by either is barred by both.
+            (Not(a), Not(b)) => {
+                let mut out = a.clone();
+                out.extend(b.iter().filter(|x| !a.contains(x)).cloned());
+                Not(out)
+            }
+        }
+    }
+
+    /// The constraint admitting whatever either admits.
+    ///
+    /// *Attribute Wildcard Union*, which is how an extension combines its own
+    /// wildcard with the one it inherits.
+    pub fn union(&self, other: &Self) -> Self {
+        use NamespaceConstraint::*;
+        match (self, other) {
+            (Any, _) | (_, Any) => Any,
+            (Enumeration(a), Enumeration(b)) => {
+                let mut out = a.clone();
+                out.extend(b.iter().filter(|x| !a.contains(x)).cloned());
+                Enumeration(out)
+            }
+            // A negation stops barring whatever the list admits.
+            (Not(n), Enumeration(e)) | (Enumeration(e), Not(n)) => {
+                Not(n.iter().filter(|x| !e.contains(x)).cloned().collect())
+            }
+            // Only what both bar stays barred.
+            (Not(a), Not(b)) => Not(a.iter().filter(|x| b.contains(x)).cloned().collect()),
+        }
+    }
+
     /// Whether this constraint admits a namespace URI the schema may never
     /// have seen.
     ///
@@ -598,6 +645,49 @@ pub struct Wildcard {
     /// competing with them — which is also why it settles a Unique Particle
     /// Attribution question that would otherwise be ambiguous.
     pub not_defined_sibling: bool,
+}
+
+impl Wildcard {
+    /// The wildcard admitting only what both admit.
+    ///
+    /// Attribute wildcards reaching one complex type from several
+    /// `xs:attributeGroup` references combine this way: an attribute has to
+    /// satisfy every wildcard that reached the type, not just one of them.
+    /// `processContents` and the name exclusions come from `self`, which the
+    /// specification makes the type's own wildcard wherever it has one.
+    pub fn intersect(&self, other: &Wildcard) -> Wildcard {
+        let mut not_qname = self.not_qname.clone();
+        not_qname.extend(
+            other
+                .not_qname
+                .iter()
+                .filter(|q| !self.not_qname.contains(q)),
+        );
+        Wildcard {
+            namespace: self.namespace.intersect(&other.namespace),
+            process_contents: self.process_contents,
+            not_qname,
+            not_defined: self.not_defined || other.not_defined,
+            not_defined_sibling: self.not_defined_sibling || other.not_defined_sibling,
+        }
+    }
+
+    /// The wildcard admitting whatever either admits, which is how an
+    /// extension combines its own with the base's.
+    pub fn union(&self, other: &Wildcard) -> Wildcard {
+        Wildcard {
+            namespace: self.namespace.union(&other.namespace),
+            process_contents: self.process_contents,
+            not_qname: self
+                .not_qname
+                .iter()
+                .filter(|q| other.not_qname.contains(q))
+                .copied()
+                .collect(),
+            not_defined: self.not_defined && other.not_defined,
+            not_defined_sibling: self.not_defined_sibling && other.not_defined_sibling,
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------

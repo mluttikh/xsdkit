@@ -46,28 +46,31 @@ the list is short enough to be worked through.
 
 | | |
 |---|---|
-| valid documents accepted | **98.5%** (11,734 / 11,907) |
-| invalid documents rejected | **94.6%** (9,144 / 9,668) |
-| overall correct | **96.8%** (20,878 / 21,575) |
+| valid documents accepted | **99.4%** (11,841 / 11,907) |
+| invalid documents rejected | **95.1%** (9,192 / 9,668) |
+| overall correct | **97.5%** (21,033 / 21,575) |
 
 Here the two rows are much closer, because validating a document against a
 model you already built is the part that is finished.
 
-The 173 remaining false alarms are not 173 separate bugs. Grouped by the
+The 66 remaining false alarms are not 66 separate bugs. Grouped by the
 diagnostic we wrongly emit:
 
 | Diagnostic | Documents | Cause |
 |---|---|---|
-| `XSD2005` attribute not allowed | 112 | ~91 are `xlink:href`, because the suite's own catalogue schema imports `xlink.xsd` over the network and we refuse to fetch it; 15 are attribute-wildcard **intersection**, where two `xs:anyAttribute`s reaching a type from different attribute groups must be combined |
 | `XSD2002` unexpected element | 35 | Conditional type assignment (a declared gap), `xs:all`, and `openContent` |
-| `XSD2007` unexpected text | 5 | `xs:override` does not replace the component it overrides |
-| five other codes | 21 | A long tail — at most six documents each |
+| `XSD2001` element not declared | 6 | Scattered |
+| `XSD2005` `XSD2006` `XSD2007` `XSD2008` | 20 | At most five each; the `XSD2007` group is `xs:override` failing to replace the component it overrides |
+| `XSD2004` invalid value | 4 | Scattered |
+| `XSD2003` incomplete content | 1 | One case |
 
-The first is not a defect at all: `schemaLocation` is a hint, network fetching
-is off by default (see [Security](security.md)), and a processor is expected
-to have the well-known W3C schemas locally. The harness does not supply one,
-so 91 `introspection` documents and 21 others fail for a reason that has
-nothing to do with validation.
+This table used to be dominated by 112 `xlink:href` documents, written off as
+a harness gap on the grounds that the suite's catalogue schema imports
+`xlink.xsd` over the network and we decline to fetch it. That reading was
+wrong. They were failing because an `xs:anyAttribute` written inside an
+`xs:attributeGroup` never reached the types that referenced the group — a
+plain bug, now fixed, and the documents pass without any schema being
+supplied to the harness.
 
 The false *acceptances* are dominated by the two unimplemented XSD 1.1
 features — assertions and conditional type assignment — and by identity

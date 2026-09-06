@@ -158,6 +158,19 @@ cannot express this.
   one argument.
 - **The `xml:` prefix is bound implicitly**, and `xml:lang`/`space`/`base`/`id`
   are predeclared. A schema must not need to fetch `xml.xsd`.
+- **Attribute wildcards combine two ways, in opposite directions.** Those
+  arriving from `xs:attributeGroup` references are **intersected** into the
+  type's own — an attribute must satisfy every wildcard that reached the type.
+  Extension then **unions** the result with the base's, because an extension
+  may only widen; restriction states its wildcard in full and keeps only what
+  it declared. Both live in `compile.rs`; the operations are
+  `NamespaceConstraint::intersect` / `union`.
+- **A wildcard's presence is not permission.** `report_unknown_attribute` must
+  test the namespace constraint, by URI rather than by interned id — a
+  wildcard exists to admit names the schema never declared, so `admits_uri`
+  is the right question and `admits` is not. Accepting on `wildcard.is_some()`
+  hid the missing attribute-group intersection above for as long as it stood,
+  and made 112 W3C documents look like a harness problem.
 - **A reference is its own parser event.** `quick-xml` reports `&amp;` and
   `&#233;` as `Event::GeneralRef`, *not* as part of the surrounding
   `Event::Text`. A `match` that falls through on them reads `caf&#233;` as
@@ -256,8 +269,8 @@ is fifty cases one rule buys.
 
 The instance half — 21,671 documents — is `#[ignore]`d because it takes
 minutes where the schema half takes seconds (4.5 minutes in `--release`; run
-it that way). Run it with `-- --ignored`. It scores 21,575 of them, 96.8%
-correct: **98.5%** of valid documents accepted, **94.6%** of invalid ones
+it that way). Run it with `-- --ignored`. It scores 21,575 of them, 97.5%
+correct: **99.4%** of valid documents accepted, **95.1%** of invalid ones
 rejected.
 
 That first figure was 88.1% until a one-line bug turned up: an *enumeration on
