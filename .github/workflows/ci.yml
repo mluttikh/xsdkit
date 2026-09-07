@@ -113,6 +113,30 @@ jobs:
       - name: Run the Python snippets in the Markdown docs
         run: python3 scripts/check-doc-snippets-python.py
 
+  semver:
+    name: Semver
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      # Compares the working tree against the newest version on crates.io, so
+      # it had nothing to say until 0.1.0 was published. It catches the
+      # breaking change nobody meant to make — a field added to one of the
+      # component structs, which are public on purpose because this is a model
+      # to be read, and are therefore breaking to construct by literal.
+      #
+      # Deliberate breakage is fine and expected before 1.0: bump the minor
+      # version, which under Cargo's 0.x rules is the major, and this passes.
+      #
+      # Not `all-features`: that would turn on `extension-module`, which links
+      # libpython and is only correct when building a wheel. The published API
+      # surface is the default one plus `serde`, which is what docs.rs builds.
+      - uses: obi1kenobi/cargo-semver-checks-action@v2
+        with:
+          feature-group: only-explicit-features
+          features: serde
+
   msrv:
     name: MSRV
     runs-on: ubuntu-latest
@@ -164,11 +188,8 @@ jobs:
             echo "::endgroup::"
           done
 
-# Three gates are deliberately absent until they would say something:
+# Two gates are deliberately absent until they would say something:
 #
-#   semver     — `cargo-semver-checks` compares against the newest version on
-#                crates.io. Nothing is published yet, so it has no baseline.
-#                Add it with the first release.
 #   public-api — a checked-in API snapshot is the right gate for a stable
 #                crate. This one changes shape every phase through P6, so the
 #                snapshot would be noise that trains people to ignore it.

@@ -381,10 +381,17 @@ matrix has no Python dimension.
 - `cargo login` locally for step 5. No crates.io token belongs in the repo,
   because nothing in CI publishes the crate.
 
-**After the first release,** add `cargo-semver-checks` to CI. It compares
-against the newest version on crates.io, so it has nothing to say until one
-exists — which is why it is not there yet. `public-api` is the same argument
-deferred to 1.0.
+**`cargo-semver-checks` runs in CI** against the newest version on crates.io,
+which is why it could not exist before 0.1.0 was published. It checks the
+default feature set plus `serde` — deliberately not `--all-features`, which
+would turn on `extension-module` and link libpython.
+
+It catches the break nobody meant to make: the component structs have public
+fields on purpose, so adding one is breaking for anyone constructing by
+literal. Deliberate breakage before 1.0 is fine — bump the minor version,
+which is the major under Cargo's 0.x rules, and the check passes.
+
+`public-api` is the same argument, deferred to 1.0.
 
 ## Conformance
 
