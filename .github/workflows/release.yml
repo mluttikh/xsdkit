@@ -54,22 +54,32 @@ jobs:
     name: Wheel (${{ matrix.label }})
     needs: guard
     runs-on: ${{ matrix.os }}
+    # Every row above finishes in under three minutes. This bounds a hung
+    # build, not a queued one — waiting for a runner is not job time, and
+    # GitHub alone decides when to give up on that.
+    timeout-minutes: 30
     strategy:
       fail-fast: false
       # One wheel per platform, not per platform *and* Python version: the
       # extension is built against the stable ABI (`abi3-py39`), so a single
       # wheel serves 3.9 through whatever ships next.
       # `native: true` marks the rows whose wheel the runner can actually
-      # install: the cross-compiled aarch64 builds and the musl ones cannot
-      # run on a glibc x86_64 runner, so they are proven by building, and by
-      # whoever installs them.
+      # install. The cross-compiled and musl rows cannot run where they are
+      # built, so they are proven by building, and by whoever installs them.
+      #
+      # Both macOS wheels are built on the arm64 runner. There is no hosted
+      # free Intel macOS image any more — `macos-13` was retired, and a job
+      # asking for it does not fail, it queues until GitHub gives up, which
+      # is how it cost this release 45 minutes. Cross-compiling to
+      # `x86_64-apple-darwin` needs no second runner: one Xcode SDK carries
+      # both slices.
       matrix:
         include:
           - { label: linux-x86_64, os: ubuntu-latest, target: x86_64, manylinux: auto, native: true }
           - { label: linux-aarch64, os: ubuntu-latest, target: aarch64, manylinux: auto, native: false }
           - { label: musl-x86_64, os: ubuntu-latest, target: x86_64, manylinux: musllinux_1_2, native: false }
           - { label: musl-aarch64, os: ubuntu-latest, target: aarch64, manylinux: musllinux_1_2, native: false }
-          - { label: macos-x86_64, os: macos-13, target: x86_64, manylinux: auto, native: true }
+          - { label: macos-x86_64, os: macos-latest, target: x86_64, manylinux: auto, native: false }
           - { label: macos-aarch64, os: macos-latest, target: aarch64, manylinux: auto, native: true }
           - { label: windows-x64, os: windows-latest, target: x64, manylinux: auto, native: true }
     steps:
