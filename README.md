@@ -1,7 +1,7 @@
 # xsdkit
 
 [![CI](https://github.com/mluttikh/xsdkit/actions/workflows/ci.yml/badge.svg)](https://github.com/mluttikh/xsdkit/actions/workflows/ci.yml)
-[![License](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
+[![License](https://img.shields.io/badge/license-MIT-blue.svg)](https://github.com/mluttikh/xsdkit/blob/main/LICENSE)
 [![Docs](https://img.shields.io/badge/docs-mluttikh.github.io%2Fxsdkit-0f766e.svg)](https://mluttikh.github.io/xsdkit/)
 
 A **generic XSD reader**: parse W3C XML Schema into a queryable schema
@@ -317,7 +317,8 @@ cargo test --release --test w3c_suite -- --ignored --nocapture   # documents
 Schemas arrive from elsewhere as often as documents do.
 
 - **No network by default.** `FileResolver` refuses `http(s)://`; supply your
-  own [`Resolver`] to opt in.
+  own [`Resolver`](https://docs.rs/xsdkit/latest/xsdkit/trait.Resolver.html)
+  to opt in.
 - **No external entities.** Not a setting — `roxmltree` performs no I/O, so
   they cannot be fetched. Internal DTD subsets *are* accepted, because real
   schemas use them (the W3C's own among them), with entity-reference-loop
@@ -330,7 +331,7 @@ Schemas arrive from elsewhere as often as documents do.
 
 ## Design
 
-[DESIGN.md](DESIGN.md) reviews the XSD format and 17 implementations across
+[DESIGN.md](https://github.com/mluttikh/xsdkit/blob/main/DESIGN.md) reviews the XSD format and 17 implementations across
 8 languages, and lays out the staged plan this crate follows.
 
 ## License

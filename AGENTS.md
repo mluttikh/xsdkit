@@ -336,6 +336,56 @@ stable. Component structs have public fields on purpose — this is a model to
 be read. Adding a field is breaking for struct-literal construction; call it
 out in the PR.
 
+## Releasing
+
+**One version number.** It lives in `version` under `[package]` in
+`Cargo.toml`; `pyproject.toml` declares `dynamic = ["version"]` and maturin
+reads it from there. Nothing else needs bumping, and
+`.github/workflows/release.yml` refuses a tag that disagrees with it — a
+mismatch would publish a wheel whose filename contradicts its own metadata,
+and the version is burned either way, since neither registry lets one be
+reused.
+
+**Cutting a release.**
+
+1. Tag a commit CI is green on. The release workflow does not re-run the
+   test matrix; it builds wheels and runs `python/tests` against four of
+   them. `ci.yml` triggers on pushes to `main`, not on tags.
+2. Bump `version` in `Cargo.toml`, and run the gate.
+3. `cargo publish --dry-run` — it packages and builds from the packaged
+   copy, which is the one check that sees what a consumer will get rather
+   than what your working tree holds.
+4. `git tag -a v0.1.0 -m "..." && git push origin v0.1.0`. That builds seven
+   wheels (glibc and musl × x86_64 and aarch64, macOS on both
+   architectures, Windows x64), runs the Python suite against the four the
+   runner can execute, publishes them to PyPI, and cuts a GitHub release
+   with the artifacts attached — `pyproject.toml` advertises that page as
+   the changelog, so it has to exist.
+5. `cargo publish`. This one is deliberately manual: it cannot be undone —
+   a version can be yanked but never deleted, and the name is claimed for
+   good.
+
+**One wheel per platform, not per Python.** The extension is built against
+the stable ABI (`abi3-py39`), so one wheel serves 3.9 upward. That is why the
+matrix has no Python dimension.
+
+**One-time setup, before the first tag.**
+
+- On PyPI, add a *pending* trusted publisher for the project: owner
+  `mluttikh`, repository `xsdkit`, workflow `release.yml`, environment
+  `pypi`. Pending is the right kind — the project does not exist on PyPI
+  until the first upload creates it.
+- In the repository settings, create the `pypi` environment the workflow
+  names. Protection rules on it are worth having: it is the gate between a
+  tag and a permanent upload.
+- `cargo login` locally for step 5. No crates.io token belongs in the repo,
+  because nothing in CI publishes the crate.
+
+**After the first release,** add `cargo-semver-checks` to CI. It compares
+against the newest version on crates.io, so it has nothing to say until one
+exists — which is why it is not there yet. `public-api` is the same argument
+deferred to 1.0.
+
 ## Conformance
 
 `tests/w3c_suite.rs` runs the **W3C XML Schema Test Suite** — 5,737 schema

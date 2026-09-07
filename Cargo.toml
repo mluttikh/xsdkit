@@ -11,6 +11,9 @@ documentation = "https://mluttikh.github.io/xsdkit/"
 keywords = ["xsd", "xml", "schema", "parser", "validation"]
 categories = ["parser-implementations", "data-structures"]
 readme = "README.md"
+# Pointer stubs for AI contributors that redirect to AGENTS.md. They mean
+# nothing outside this repository, and a crates.io publish is permanent.
+exclude = ["/CLAUDE.md", "/GEMINI.md"]
 
 [package.metadata.docs.rs]
 # `extension-module` links libpython, which docs.rs cannot do.
@@ -67,5 +70,10 @@ extension-module = ["python", "pyo3/extension-module"]
 # feature here — it belongs in its own package, so that reading a schema never
 # drags in that reader's dependencies. See DESIGN.md §3.0b.
 
-[profile.release]
+# Debug symbols belong in a profile you opt into, not in the one that ships.
+# maturin strips the cdylib, so this is worth 0.4 MiB on an installed wheel
+# rather than the several MiB it looks like — but `release` is what ships, and
+# it should not carry what only a profiler reads. Use `--profile profiling`.
+[profile.profiling]
+inherits = "release"
 debug = true
