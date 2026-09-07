@@ -219,3 +219,47 @@ fn text_that_was_never_a_document_says_so() {
     assert!(empty.contains("no root element"), "{empty}");
     assert!(!empty.contains("not a path"), "{empty}");
 }
+
+#[test]
+fn a_skipped_wildcard_subtree_does_not_swallow_the_document() {
+    // The validator announces a skipped element with `StartElement` but used
+    // to close it with nothing, so a tree builder leaked a frame: every later
+    // element was attributed to its grandparent and the root was never
+    // popped, which decoded a perfectly valid document to `None`.
+    let s = schema(
+        r###"<xs:element name="root">
+             <xs:complexType><xs:sequence>
+               <xs:element name="a" type="xs:string"/>
+               <xs:any namespace="##other" processContents="skip" minOccurs="0"/>
+             </xs:sequence></xs:complexType>
+           </xs:element>"###,
+    );
+    let d = decode(
+        &s,
+        r#"<root xmlns="urn:example" xmlns:o="urn:other">
+             <a>x</a><o:junk><o:deep/></o:junk>
+           </root>"#,
+    );
+    assert_eq!(d.children().len(), 2, "the wildcard child belongs to root");
+    assert_eq!(d.children()[0].text(), "x");
+}
+
+#[test]
+fn an_empty_complex_element_is_not_a_value() {
+    // `children().is_empty()` is true for an element-only type whose children
+    // are all absent, which is not the same question as "has a value".
+    let s = schema(
+        r#"<xs:element name="e">
+             <xs:complexType>
+               <xs:sequence>
+                 <xs:element name="c" type="xs:string" minOccurs="0"/>
+               </xs:sequence>
+               <xs:attribute name="a" type="xs:string"/>
+             </xs:complexType>
+           </xs:element>"#,
+    );
+    let d = decode(&s, r#"<e xmlns="urn:example" a="x"/>"#);
+    assert_eq!(d.content, DecodedContent::Empty);
+    assert_eq!(d.value(), None, "empty complex content carries no value");
+    assert_eq!(d.attributes.len(), 1);
+}

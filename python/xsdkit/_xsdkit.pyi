@@ -66,7 +66,11 @@ XsdValue = (
 )
 EventKind = Literal["start", "text", "end"]
 
-class XsdError(Exception): ...
+class XsdError(Exception):
+    #: Every diagnostic behind the error — from a failed build, or from a
+    #: document `decode` refused. Empty rather than absent where a path
+    #: raised without any, so reading it is always safe.
+    diagnostics: list[Diagnostic]
 
 class SchemaError(XsdError):
     #: Every diagnostic from the failed build, not just the first.

@@ -103,6 +103,10 @@ struct Frame<'a> {
     /// Inside a `processContents="skip"` wildcard nothing is checked until
     /// the subtree closes.
     skipped: bool,
+    /// Whether a `StartElement` went out for this frame. The element a
+    /// wildcard skipped is announced; the elements *inside* it are not, and
+    /// only an announced element may be closed — a consumer counts the pair.
+    announced: bool,
     line: u32,
 }
 
@@ -777,6 +781,7 @@ impl<'a, S: FnMut(PsviEvent)> Run<'a, '_, S> {
                 text: String::new(),
                 nil: false,
                 skipped: true,
+                announced: false,
                 line,
             });
             return;
@@ -904,6 +909,7 @@ impl<'a, S: FnMut(PsviEvent)> Run<'a, '_, S> {
             text: String::new(),
             nil,
             skipped,
+            announced: true,
             line,
         });
     }
@@ -1376,6 +1382,19 @@ impl<'a, S: FnMut(PsviEvent)> Run<'a, '_, S> {
 
     fn finish(&mut self, frame: Frame<'a>, line: u32) {
         if frame.skipped {
+            // Nothing in a skipped subtree is checked, but what was announced
+            // still has to be closed: a stream whose starts outnumber its ends
+            // cannot be folded into a tree by anyone, and a consumer that
+            // tries attributes the following elements to the wrong parent.
+            // The elements *within* the skipped subtree were never announced,
+            // so closing them would unbalance it the other way.
+            if frame.announced {
+                (self.sink)(PsviEvent::EndElement {
+                    name: frame.name,
+                    declaration: frame.declaration,
+                    line,
+                });
+            }
             return;
         }
 

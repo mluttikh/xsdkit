@@ -63,6 +63,20 @@ fn schema_error(py: Python<'_>, diags: Diagnostics) -> PyErr {
     err
 }
 
+/// Builds an `XsdError` for a document, carrying the whole diagnostic list.
+///
+/// The same contract as [`schema_error`], for the same reason: a caller that
+/// wants to show what was wrong with a document — filter by code, point at a
+/// line — cannot do it with a formatted string.
+fn document_error(py: Python<'_>, diags: &Diagnostics) -> PyErr {
+    let err = XsdError::new_err(format!("{diags}"));
+    let wrapped: Vec<PyDiagnostic> = diags.iter().cloned().map(PyDiagnostic).collect();
+    if let Ok(list) = wrapped.into_py_any(py) {
+        let _ = err.value(py).setattr("diagnostics", list);
+    }
+    err
+}
+
 /// Bridges a Python callable into the [`Resolver`] trait.
 ///
 /// The contract is deliberately small, because the caller already has a
@@ -745,7 +759,7 @@ impl PySchemaSet {
         let decoding = py.detach(|| schemas.decode_named(&xml, uri));
 
         if !lax && !decoding.is_valid() {
-            return Err(XsdError::new_err(format!("{}", decoding.diagnostics)));
+            return Err(document_error(py, &decoding.diagnostics));
         }
         match &decoding.decoded {
             Some(d) => Ok(decoded_to_py(py, &self.inner, d)?.unbind()),
@@ -2729,16 +2743,6 @@ impl PyDiagnostic {
 // Values, as native Python objects
 // ---------------------------------------------------------------------------
 
-/// Converts an XSD value into the closest native Python type.
-///
-/// This is most of what a binding is *for*: `<count>42</count>` should reach
-/// Python as `42`, and a `dateTime` as a timezone-aware `datetime`, not as a
-/// string the caller has to re-parse.
-///
-/// Durations and the gregorian fragments stay as their canonical lexical
-/// forms — `xs:duration` has no lossless Python counterpart, since months and
-/// seconds are not commensurable. `xs:dayTimeDuration` alone becomes a
-/// `timedelta`, because there it is.
 /// The key a name takes in a decoded dictionary.
 ///
 /// Local name where that is unambiguous, Clark notation where it is not.
@@ -2786,7 +2790,18 @@ fn decoded_to_py<'py>(
         return Ok(py.None().into_bound(py));
     }
 
-    let attr_clark = ambiguous_names(d.attributes.iter().map(|a| a.name), schemas);
+    // Declared *and* present, exactly as for children below: deciding this
+    // from the document alone would let an attribute's key change shape
+    // because some other document left its ambiguous sibling out, which is
+    // the defect this whole rule exists to avoid.
+    let declared_attrs = schemas
+        .attribute_uses(d.type_id)
+        .iter()
+        .map(|u| schemas[u.attribute].name);
+    let attr_clark = ambiguous_names(
+        declared_attrs.chain(d.attributes.iter().map(|a| a.name)),
+        schemas,
+    );
     let mut attrs: Vec<(String, Bound<'py, PyAny>)> = Vec::with_capacity(d.attributes.len());
     for a in &d.attributes {
         let value = match &a.value {
@@ -2809,9 +2824,14 @@ fn decoded_to_py<'py>(
         }
     };
 
+    // Whether this element *has* a value, not whether this document happened
+    // to give it children: an element-only type whose children are all absent
+    // has no children either, and is still not a value.
+    let simple = matches!(d.content, DecodedContent::Simple { .. });
+
     // A simple value with nothing else to say is the value itself, not a
     // dictionary wrapping one.
-    if attrs.is_empty() && d.children().is_empty() {
+    if simple && attrs.is_empty() {
         return scalar(py);
     }
 
@@ -2820,7 +2840,7 @@ fn decoded_to_py<'py>(
         out.set_item(k, v)?;
     }
 
-    if d.children().is_empty() {
+    if simple {
         // Simple content that also carries attributes: the value needs a key
         // of its own to sit beside them.
         out.set_item("$", scalar(py)?)?;
@@ -2855,20 +2875,20 @@ fn decoded_to_py<'py>(
         let repeating = repeats.get(&child.name).copied().unwrap_or(false);
         match out.get_item(&key)? {
             Some(existing) if repeating => existing.cast::<PyList>()?.append(value)?,
-            Some(existing) => {
+            Some(existing) => match existing.cast::<PyList>() {
+                // Already promoted by an earlier repeat: append in place.
+                // Rebuilding it each time would make a wildcard carrying n
+                // children of one name cost n² appends.
+                Ok(list) => list.append(value)?,
                 // Seen twice under a wildcard: promote to a list rather than
                 // dropping the first one.
-                let list = PyList::empty(py);
-                if let Ok(l) = existing.cast::<PyList>() {
-                    for item in l.iter() {
-                        list.append(item)?;
-                    }
-                } else {
+                Err(_) => {
+                    let list = PyList::empty(py);
                     list.append(existing)?;
+                    list.append(value)?;
+                    out.set_item(key, list)?;
                 }
-                list.append(value)?;
-                out.set_item(key, list)?;
-            }
+            },
             None if repeating => {
                 let list = PyList::empty(py);
                 list.append(value)?;
@@ -2888,6 +2908,16 @@ fn decoded_to_py<'py>(
     Ok(out.into_any())
 }
 
+/// Converts an XSD value into the closest native Python type.
+///
+/// This is most of what a binding is *for*: `<count>42</count>` should reach
+/// Python as `42`, and a `dateTime` as a timezone-aware `datetime`, not as a
+/// string the caller has to re-parse.
+///
+/// Durations and the gregorian fragments stay as their canonical lexical
+/// forms — `xs:duration` has no lossless Python counterpart, since months and
+/// seconds are not commensurable. `xs:dayTimeDuration` alone becomes a
+/// `timedelta`, because there it is.
 fn value_to_py<'py>(py: Python<'py>, v: &Value) -> PyResult<Bound<'py, PyAny>> {
     match v {
         Value::String(s) | Value::AnyUri(s) => s.into_bound_py_any(py),
@@ -3323,7 +3353,12 @@ fn load_string(
 #[pyo3(name = "_xsdkit")]
 fn xsdkit_module(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add("__version__", env!("CARGO_PKG_VERSION"))?;
-    m.add("XsdError", m.py().get_type::<XsdError>())?;
+    let xsd_error = m.py().get_type::<XsdError>();
+    // The same class-level default as `SchemaError` below, so
+    // `except XsdError as e: e.diagnostics` is safe whichever of them was
+    // raised, and on paths that attach none.
+    xsd_error.setattr("diagnostics", PyList::empty(m.py()))?;
+    m.add("XsdError", xsd_error)?;
     let schema_error = m.py().get_type::<SchemaError>();
     // A class-level default so `except SchemaError as e: e.diagnostics` is
     // always safe, even for an error raised on a path that set none.

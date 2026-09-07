@@ -157,3 +157,59 @@ def test_bytes_still_decode(tmp_path):
     p = tmp_path / "r.xml"
     p.write_text(doc("<title>bytes</title>"))
     assert s.decode(p.read_bytes())["title"] == "bytes"
+
+
+def test_an_empty_complex_element_keeps_its_schema_shape():
+    """`children()` being empty is not the same question as "has a value"."""
+    s = build(
+        """<xs:element name="e">
+             <xs:complexType>
+               <xs:sequence>
+                 <xs:element name="item" minOccurs="0" maxOccurs="unbounded"
+                             type="xs:string"/>
+               </xs:sequence>
+               <xs:attribute name="a" type="xs:string"/>
+             </xs:complexType>
+           </xs:element>"""
+    )
+    d = s.decode(f'<e xmlns="{NS}" a="x"/>')
+    # Not {"@a": "x", "$": None}: there is no value here to put under "$".
+    assert d == {"@a": "x", "item": []}
+
+
+def test_an_empty_complex_element_without_attributes_is_a_dict():
+    s = build(
+        """<xs:element name="e">
+             <xs:complexType><xs:sequence>
+               <xs:element name="item" minOccurs="0" maxOccurs="unbounded"
+                           type="xs:string"/>
+             </xs:sequence></xs:complexType>
+           </xs:element>"""
+    )
+    assert s.decode(f'<e xmlns="{NS}"/>') == {"item": []}
+
+
+def test_a_skipped_wildcard_does_not_swallow_the_document():
+    s = build(
+        """<xs:element name="root">
+             <xs:complexType><xs:sequence>
+               <xs:element name="a" type="xs:string"/>
+               <xs:any namespace="##other" processContents="skip" minOccurs="0"/>
+             </xs:sequence></xs:complexType>
+           </xs:element>"""
+    )
+    d = s.decode(
+        f'<root xmlns="{NS}" xmlns:o="urn:other"><a>x</a><o:junk><o:deep/></o:junk></root>'
+    )
+    assert d is not None, "a valid document must not decode to None"
+    assert d["a"] == "x"
+
+
+def test_decode_errors_carry_their_diagnostics():
+    s = build(REPORT)
+    with pytest.raises(xsdkit.XsdError) as excinfo:
+        s.decode(doc("<title>t</title><item>nope</item>"))
+    # A formatted string cannot be filtered by code or pointed at a line.
+    diagnostics = excinfo.value.diagnostics
+    assert len(diagnostics) >= 1
+    assert any(d.code.startswith("XSD") for d in diagnostics)
