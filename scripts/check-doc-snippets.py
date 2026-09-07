@@ -55,7 +55,7 @@ def blocks(path: Path) -> list[tuple[int, str]]:
     Indentation is stripped because MkDocs' content tabs indent a fence by
     four spaces, which is exactly the shape a naive extractor mangles.
     """
-    lines = path.read_text().split("\n")
+    lines = path.read_text(encoding="utf-8").split("\n")
     found: list[tuple[int, str]] = []
     i = 0
     while i < len(lines):

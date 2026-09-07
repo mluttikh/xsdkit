@@ -467,6 +467,14 @@ Python: `maturin develop`, then `pytest python/tests -q` and
 conda active, maturin refuses to run while both `VIRTUAL_ENV` and
 `CONDA_PREFIX` are set — `env -u CONDA_PREFIX` in front of the command.
 
+Both import the installed package, never `python/` — that directory holds the
+Python source *without* the compiled extension, so putting it on `sys.path`
+shadows a real install with one that cannot import. A working copy hides this,
+because `maturin develop` installs the source tree as editable and drops the
+extension into it; CI installs a wheel and does not. The snippet checker
+prints which xsdkit it ran against for that reason. If a Python job passes
+locally and fails in CI with `No module named 'xsdkit._xsdkit'`, this is it.
+
 Adding a schema feature? Add: a synthetic test for the feature alone, a
 failure test for its malformed form, and a check that it survives the real
 fixture.

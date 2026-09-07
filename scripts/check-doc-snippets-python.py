@@ -21,6 +21,11 @@ Conventions:
   expected to raise it, and failing to raise is then the error. That is the
   notation the docs already used.
 
+The snippets run against the *installed* xsdkit — what the docs describe and
+what CI installs — never against `python/`, which holds the Python source
+without the compiled extension. The run says which one it checked, because a
+working copy and a wheel resolve that import differently.
+
 Run it directly, or let CI do it:
 
     python3 scripts/check-doc-snippets-python.py
@@ -46,6 +51,30 @@ FENCE = re.compile(r"^(?P<indent>[ \t]*)```python(?P<info>[^\n]*)$")
 RAISES = re.compile(r"#\s*(?:raises:\s*)?([A-Z]\w*(?:Error|Exception))\b")
 
 
+def installed_xsdkit() -> str:
+    """The installed xsdkit — never the source tree.
+
+    `python/xsdkit` holds the package's Python source but not the compiled
+    extension, so putting it on `sys.path` shadows the installed wheel with a
+    package that cannot import itself. A local `maturin develop` hides that:
+    it installs the source tree as editable *and* drops the extension module
+    into it, so the shadow resolves. CI installs a wheel, and every snippet
+    then fails with `No module named 'xsdkit._xsdkit'`.
+
+    The docs describe what `pip install xsdkit` gives a reader, so checking
+    them against the installed package is also the honest thing to check.
+    """
+    try:
+        import xsdkit
+    except ImportError as exc:
+        sys.exit(
+            f"cannot import xsdkit: {exc}\n"
+            "the snippets run against the installed package — "
+            "`pip install .`, or `maturin develop` for a working copy"
+        )
+    return f"{xsdkit.__version__} from {Path(xsdkit.__file__).parent}"
+
+
 def sources() -> list[Path]:
     files = [p for p in sorted(ROOT.joinpath("docs").rglob("*.md")) if "rust" not in p.parts]
     return [ROOT / "README.md", *files]
@@ -53,7 +82,7 @@ def sources() -> list[Path]:
 
 def blocks(path: Path) -> list[tuple[int, str, str]]:
     """Every ```python block: line number, info string, source."""
-    lines = path.read_text().split("\n")
+    lines = path.read_text(encoding="utf-8").split("\n")
     found = []
     i = 0
     while i < len(lines):
@@ -73,7 +102,7 @@ def blocks(path: Path) -> list[tuple[int, str, str]]:
 
 
 def main() -> int:
-    sys.path.insert(0, str(ROOT / "python"))
+    print(f"checking against xsdkit {installed_xsdkit()}")
     failures: list[str] = []
     ran = skipped = 0
 
