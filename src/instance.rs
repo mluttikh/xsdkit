@@ -714,11 +714,20 @@ impl<'a, S: FnMut(PsviEvent)> Run<'a, '_, S> {
         // that turned out to be empty — validated clean against every schema,
         // which is the one answer that cannot be right.
         if self.elements_seen == 0 {
-            self.error(
-                DiagCode::MalformedXml,
-                line,
-                "document has no root element".to_string(),
-            );
+            let span = Span::new(&self.uri, line);
+            let mut d =
+                Diagnostic::error(DiagCode::MalformedXml, "document has no root element").at(span);
+            // Text with no `<` anywhere is not a document that went wrong, it
+            // is something that was never a document. Overwhelmingly that is
+            // a file *name* passed where the file's *contents* belong, and
+            // saying so costs one line and saves the reader the guess.
+            if !xml.is_empty() && !xml.contains('<') {
+                d = d.with_help(
+                    "a document is XML text, not a path — if this was a file name, \
+                     pass what the file contains",
+                );
+            }
+            self.diags.push(d);
         }
 
         // Only now: an `xs:IDREF` may name an `xs:ID` that appears later.

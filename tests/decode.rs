@@ -203,3 +203,19 @@ fn an_empty_document_decodes_to_nothing() {
     assert!(decoding.decoded.is_none());
     assert!(!decoding.is_valid());
 }
+
+#[test]
+fn text_that_was_never_a_document_says_so() {
+    // A file *name* where the file's *contents* belong is the overwhelmingly
+    // common way to get here, so the diagnostic names it.
+    let s = reports();
+    let d = s.decode("report.xml").diagnostics;
+    let rendered = format!("{d}");
+    assert!(rendered.contains("no root element"), "{rendered}");
+    assert!(rendered.contains("not a path"), "{rendered}");
+
+    // Genuinely empty input is a different mistake and gets no such guess.
+    let empty = format!("{}", s.decode("").diagnostics);
+    assert!(empty.contains("no root element"), "{empty}");
+    assert!(!empty.contains("not a path"), "{empty}");
+}

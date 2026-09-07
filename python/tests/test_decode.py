@@ -132,3 +132,28 @@ def test_mixed_content_keeps_its_text():
     d = s.decode(f'<p xmlns="{NS}">before<b>bold</b>after</p>')
     assert d["b"] == "bold"
     assert d["$"] == "beforeafter"
+
+
+def test_a_document_may_be_given_as_a_path(tmp_path):
+    s = build(REPORT)
+    p = tmp_path / "r.xml"
+    p.write_text(doc("<title>from a file</title>"))
+    assert s.decode(p)["title"] == "from a file"
+
+
+def test_a_path_as_a_string_says_what_went_wrong():
+    """The trap: a path is a `str`, and so is a document."""
+    s = build(REPORT)
+    with pytest.raises(xsdkit.XsdError) as excinfo:
+        s.decode("report.xml")
+    message = str(excinfo.value)
+    assert "no root element" in message
+    # Naming the likely mistake is the whole point.
+    assert "not a path" in message
+
+
+def test_bytes_still_decode(tmp_path):
+    s = build(REPORT)
+    p = tmp_path / "r.xml"
+    p.write_text(doc("<title>bytes</title>"))
+    assert s.decode(p.read_bytes())["title"] == "bytes"

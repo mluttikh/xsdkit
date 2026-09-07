@@ -37,7 +37,10 @@ Name = str | tuple[str | None, str]
 Resolver = Callable[[str, str | None], bytes | str | tuple[str, bytes | str]]
 
 #: A document to validate: text, or bytes whose encoding xsdkit detects.
-Instance = str | bytes
+Instance = str | bytes | os.PathLike[str]
+"""A document: XML as text, as bytes whose encoding is detected, or a path to
+read it from. A ``str`` is always content — a path and a document cannot be
+told apart once both are strings — so pass ``pathlib.Path`` for a file."""
 
 #: An XSD value as its closest native Python type.
 #:

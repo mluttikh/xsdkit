@@ -113,13 +113,25 @@ impl crate::load::Resolver for PyResolver {
 /// no guess about its encoding, which is exactly the guess a caller is most
 /// likely to get wrong.
 fn instance_text(obj: &Bound<'_, PyAny>) -> PyResult<String> {
+    // `str` first, and always as content: a path is a `str` too, so the two
+    // cannot be told apart here. What a bare name *does* produce is a clear
+    // diagnostic — "document has no root element", with help saying so.
     if let Ok(s) = obj.extract::<String>() {
         return Ok(s);
     }
-    let bytes: Vec<u8> = obj
-        .extract()
-        .map_err(|_| PyValueError::new_err("a document must be str or bytes"))?;
-    crate::encoding::decode_document(&bytes, "<instance>")
+    if let Ok(bytes) = obj.extract::<Vec<u8>>() {
+        return crate::encoding::decode_document(&bytes, "<instance>")
+            .map(|d| d.text)
+            .map_err(|d| PyValueError::new_err(d.message));
+    }
+    // A `pathlib.Path`, on the other hand, is never ambiguous: nobody holds
+    // one meaning "this is my XML". Read it, with the encoding detected from
+    // the bytes exactly as for a document handed over directly.
+    let path = path_from(obj)
+        .map_err(|_| PyValueError::new_err("a document must be str, bytes, or a path"))?;
+    let bytes = std::fs::read(&path)
+        .map_err(|e| PyValueError::new_err(format!("cannot read {path}: {e}")))?;
+    crate::encoding::decode_document(&bytes, &path)
         .map(|d| d.text)
         .map_err(|d| PyValueError::new_err(d.message))
 }

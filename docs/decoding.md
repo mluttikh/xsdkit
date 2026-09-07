@@ -31,6 +31,18 @@ say?* — and hands back data rather than an event stream.
     }
     ```
 
+A document is XML text, bytes whose encoding is detected, or a `pathlib.Path`
+to read it from. A `str` is always content — a path and a document cannot be
+told apart once both are strings — so pass a `Path` for a file:
+
+```python
+from pathlib import Path
+
+schemas.decode(Path("report.xml"))          # read the file
+schemas.decode(Path("report.xml").read_bytes())
+schemas.decode("report.xml")                # XsdError: this is not a document
+```
+
 Values arrive in their **value space**, not as strings to re-parse: a
 `xs:decimal` is a `Decimal`, a `xs:date` is a `datetime.date`, a
 `xs:positiveInteger` is an `int`. That falls out of decoding a typed PSVI
