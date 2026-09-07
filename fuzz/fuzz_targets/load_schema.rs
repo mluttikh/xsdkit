@@ -13,18 +13,18 @@
 #![no_main]
 
 use libfuzzer_sys::fuzz_target;
-use xsdkit::{Conformance, SchemaSetBuilder, Version};
+use xsdkit::{Compilation, Conformance, SchemaSetBuilder, Version};
 
 fuzz_target!(|data: &[u8]| {
     for version in [Version::Xsd10, Version::Xsd11] {
-        let (schemas, _diags) = SchemaSetBuilder::new()
+        let Compilation { schemas, .. } = SchemaSetBuilder::new()
             .version(version)
             .conformance(Conformance::Lax)
             // Bound the work: a fuzzer will happily find the deepest legal
             // nesting and sit there.
             .nodes_limit(20_000)
             .bytes(data.to_vec(), "fuzz://input.xsd")
-            .build_with_warnings();
+            .compile();
 
         walk_everything(&schemas);
     }
@@ -60,9 +60,28 @@ fn walk_everything(schemas: &xsdkit::Schemas) {
         }
         let _ = schemas.attribute_uses(id);
         let _ = schemas.content(id);
-        for child in schemas.possible_children(id) {
-            let _ = schemas.child_repeats(id, child);
-            let _ = schemas.child_is_optional(id, child);
+        // `children()` answers for the whole type what the three singular
+        // predicates answer one child at a time, and by a different
+        // algorithm: one SCC pass and a dataflow over bitsets, rather than an
+        // automaton walk per child. Two implementations of one question make
+        // a differential oracle — the only thing in this target that can
+        // catch a wrong *answer* rather than a panic. The same assertion runs
+        // over the W3C suite; here it runs over schemas nobody wrote.
+        let batched = schemas.children(id);
+        assert_eq!(
+            batched.iter().map(|c| c.element).collect::<Vec<_>>(),
+            schemas.possible_children(id),
+            "children() and possible_children() disagree on the children of a type",
+        );
+        for c in &batched {
+            assert_eq!(
+                (c.repeats, c.optional),
+                (
+                    schemas.child_repeats(id, c.element),
+                    schemas.child_is_optional(id, c.element),
+                ),
+                "children() and the singular predicates disagree on an occurrence",
+            );
         }
         if let Some(mut m) = schemas.match_content(id) {
             // A step with a name the schema knows, then end — enough to walk
@@ -75,7 +94,11 @@ fn walk_everything(schemas: &xsdkit::Schemas) {
     }
     for (id, e) in schemas.iter_elements() {
         let _ = schemas.display_name(e.name);
-        let _ = schemas.substitution_closure(id);
+        // Membership and what may *actually* substitute are two walks:
+        // `permitted_substitutes` applies `block` on top of the closure, and
+        // it is the one the content model agrees with.
+        let _ = schemas.substitution_group(id);
+        let _ = schemas.permitted_substitutes(id);
         let _ = schemas[e.type_id].name();
     }
     for (_, a) in schemas.iter_attributes() {
@@ -93,7 +116,7 @@ fn walk_everything(schemas: &xsdkit::Schemas) {
     let _ = schemas.component_counts();
 
     // The value layer, over every simple type the schema declares.
-    let v = schemas.validator();
+    let v = schemas.value_validator();
     let _ = v.pattern_errors();
     for (id, def) in schemas.iter_types() {
         if def.is_simple() {

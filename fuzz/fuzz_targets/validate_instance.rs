@@ -46,7 +46,8 @@ fn schema() -> &'static Schemas {
                    </xs:schema>"###,
                 "fuzz://schema.xsd",
             )
-            .build()
+            .compile()
+            .into_result()
             .expect("the fuzz schema must compile")
     })
 }
@@ -60,7 +61,7 @@ fuzz_target!(|data: &str| {
     // The document chooses the path through the automaton — a `skip` wildcard,
     // an `xsi:type` override, a schema-supplied default — so the ids reaching
     // a consumer are attacker-influenced in a way the loader's are not.
-    let report = s.instance_validator().validate_with(data, |e| match e {
+    let report = s.document_validator().validate_with(data, |e| match e {
         PsviEvent::StartElement {
             name,
             declaration,

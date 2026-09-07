@@ -428,14 +428,16 @@ off `ComplexType::content` with nothing to be pruned from.
 CI (`.github/workflows/ci.yml`) gates on four things: `cargo fmt --check`,
 `cargo clippy --all-targets -D warnings`, tests on Linux/macOS/Windows, and
 `cargo doc` with `RUSTDOCFLAGS=-D warnings` — broken intra-doc links are only
-warnings otherwise, and two had already crept in. A fourth job compiles on the
-declared `rust-version`, because nothing enforces that claim at publish time.
+warnings otherwise, and two had already crept in. The lint job also
+`cargo check`s the fuzz crate, which is a separate workspace nothing else
+compiles. A fourth job builds on the declared `rust-version`, because nothing
+enforces that claim at publish time.
 The docs job also compiles every Rust snippet in `docs/` and `README.md`
 (`scripts/check-doc-snippets.py`) — `cargo test --doc` only reaches the ones
 inside `src/`, and the website's went stale after a rename with nothing to say
 so. The Python job runs the Python ones the same way
 (`scripts/check-doc-snippets-python.py`), which it can do literally, since they
-all work against `docs/examples/report.xsd`. Run all five locally before
+all work against `docs/examples/report.xsd`. Run them all locally before
 pushing; they take seconds.
 
 **Check them by exit code, never by grepping output.** `cargo clippy` caches:
@@ -447,7 +449,7 @@ so a chain of gates joined by `&&` prints OK while one of them failed. Pipe to
 `/dev/null` and read `$?`. Use what CI uses:
 
 ```bash
-cargo fmt --check \
+cargo fmt --check && cargo fmt --check --manifest-path fuzz/Cargo.toml \
   && cargo clippy --all-targets -- -D warnings \
   && cargo clippy --all-targets --features python -- -D warnings \
   && cargo clippy --all-targets --features serde -- -D warnings \
@@ -455,8 +457,17 @@ cargo fmt --check \
   && cargo test --all-targets --features serde && cargo test --doc --features serde \
   && RUSTDOCFLAGS="-D warnings" cargo doc --no-deps --features serde \
   && python3 scripts/check-doc-snippets.py \
+  && cargo check --manifest-path fuzz/Cargo.toml --bins \
   && cargo +1.87 check --all-targets  # the rust-version in Cargo.toml
 ```
+
+The fuzz crate is in that list because it is a *separate* workspace that
+calls the public API directly, so it rots the instant the API changes shape —
+and `cargo check --all-targets` in the root does not reach it. A rename pass
+broke two of the four targets and nothing said so until the fuzz job ran,
+minutes into CI, after installing cargo-fuzz and building with sanitizers.
+Plain `cargo check` on the crate costs a fraction of a second, needs neither
+nightly nor cargo-fuzz, and catches exactly that.
 
 CI uses `dtolnay/rust-toolchain@stable`, which tracks the newest stable. A
 local toolchain even one release behind will miss lints CI enforces, so

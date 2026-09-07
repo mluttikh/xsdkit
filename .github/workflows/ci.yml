@@ -19,8 +19,10 @@ jobs:
         with:
           components: clippy, rustfmt
       - uses: Swatinem/rust-cache@v2
+      # Both workspaces: the fuzz crate has its own manifest, so the root
+      # `cargo fmt` does not see it.
       - name: Format check
-        run: cargo fmt --check
+        run: cargo fmt --check && cargo fmt --check --manifest-path fuzz/Cargo.toml
       - name: Clippy
         run: cargo clippy --all-targets -- -D warnings
       # The bindings are behind a feature, so the default lint run never sees
@@ -29,6 +31,13 @@ jobs:
         run: cargo clippy --all-targets --features python -- -D warnings
       - name: Clippy (serde feature)
         run: cargo clippy --all-targets --features serde -- -D warnings
+      # The fuzz crate is a separate workspace calling the public API
+      # directly, so it rots on any rename — and `--all-targets` above does
+      # not reach it. The fuzz job does compile it, but only after installing
+      # cargo-fuzz and building with sanitizers, minutes in. This is the same
+      # failure in about a second.
+      - name: Check the fuzz targets still build against the API
+        run: cargo check --manifest-path fuzz/Cargo.toml --bins
 
   test:
     name: Test (${{ matrix.os }})
@@ -140,9 +149,9 @@ jobs:
             fuzz -> fuzz/target
       - name: Install cargo-fuzz
         run: cargo install cargo-fuzz --locked
-      # The targets call the public API directly, so they rot the moment it
-      # changes shape — and nothing else in CI compiles them. Building is the
-      # gate that matters; the short run is a bonus, and finds nothing subtle
+      # The check job compiles these too, and faster; this builds them with
+      # sanitizers, which is a different thing and can fail on its own. The
+      # short run is a bonus, and finds nothing subtle
       # because the corpus is not vendored (it is derived from the W3C suite,
       # which is 231 MB). Real campaigns are run locally for minutes to hours.
       - name: Build the fuzz targets
