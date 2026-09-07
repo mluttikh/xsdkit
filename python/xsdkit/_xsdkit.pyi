@@ -600,6 +600,29 @@ class SchemaSet:
     def validate(self, xml: Instance, *, uri: str = ...) -> ValidationReport:
         """Validates a document. Never raises for an invalid one — that is an
         answer, not an error."""
+    def decode(self, xml: Instance, *, uri: str = ..., lax: bool = ...) -> Any:
+        """Decodes a document into Python data.
+
+        Elements become dictionaries and values arrive in their value space::
+
+            {"@id": "r-1",
+             "title": "November orders",
+             "issued": datetime.date(2024, 12, 1),
+             "item": [{"@sku": "AB-1042",
+                       "price": {"@currency": "EUR", "$": Decimal("19.95")}}]}
+
+        A child the schema allows more than once is *always* a list — with two
+        entries, one, or none — because the shape comes from the schema rather
+        than from the document in front of you.
+
+        Keys are local names, in Clark notation only where two names under one
+        parent would collide. Attributes carry an ``@``; where an element has
+        both a value and attributes the value sits under ``$``; ``xsi:nil``
+        decodes to ``None``.
+
+        Raises ``XsdError`` if the document is invalid. Pass ``lax=True`` to
+        take the data anyway.
+        """
     def iter_typed(self, xml: Instance, *, uri: str = ...) -> PsviEvents:
         """Reads a document into typed PSVI events, one at a time.
 

@@ -709,6 +709,18 @@ impl<'a, S: FnMut(PsviEvent)> Run<'a, '_, S> {
             );
         }
 
+        // XML requires exactly one root element, so input carrying none is
+        // not a document at all. Without this, an empty string — or a file
+        // that turned out to be empty — validated clean against every schema,
+        // which is the one answer that cannot be right.
+        if self.elements_seen == 0 {
+            self.error(
+                DiagCode::MalformedXml,
+                line,
+                "document has no root element".to_string(),
+            );
+        }
+
         // Only now: an `xs:IDREF` may name an `xs:ID` that appears later.
         for (reference, line) in std::mem::take(&mut self.idrefs) {
             if !self.ids.contains_key(&reference) {
@@ -1453,6 +1465,19 @@ impl<'a, S: FnMut(PsviEvent)> Run<'a, '_, S> {
                     line,
                     format!("`{shown}` has element-only content, but contains character data"),
                 );
+            } else if mixed && !frame.text.is_empty() {
+                // Character data in a mixed type is content, and until now no
+                // PSVI consumer could see it: this branch only checked that it
+                // was allowed. It carries no `value` because a mixed type has
+                // no value space to parse it into, and it is not trimmed
+                // because in mixed content whitespace is content.
+                (self.sink)(PsviEvent::Text {
+                    value: None,
+                    type_id: ty,
+                    lexical: frame.text.clone(),
+                    from_schema: false,
+                    line,
+                });
             }
         }
 
