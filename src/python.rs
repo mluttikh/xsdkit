@@ -762,7 +762,10 @@ impl PySchemaSet {
             return Err(document_error(py, &decoding.diagnostics));
         }
         match &decoding.decoded {
-            Some(d) => Ok(decoded_to_py(py, &self.inner, d)?.unbind()),
+            Some(d) => {
+                let mut shapes = Shapes::default();
+                Ok(decoded_to_py(py, &self.inner, d, &mut shapes)?.unbind())
+            }
             None => Ok(py.None()),
         }
     }
@@ -2779,10 +2782,71 @@ fn ambiguous_names(names: impl Iterator<Item = QName>, schemas: &Schemas) -> FxH
 /// Lossy on purpose, and in exactly two ways: names lose their namespace
 /// where nothing is ambiguous, and the type in force is not carried over.
 /// `Decoded` on the Rust side keeps both for anyone who needs them.
+/// What the schema says about one type, worked out once per decode instead of
+/// once per element.
+///
+/// The old shape of this was computed inside the recursion, so a document
+/// with twenty thousand `item`s walked `item`'s content model twenty thousand
+/// times to be told the same thing.
+struct TypeShape {
+    /// Names that must be spelled out in Clark notation.
+    clark: FxHashSet<QName>,
+    /// Declared children, and whether each may appear more than once.
+    repeats: FxHashMap<QName, bool>,
+    /// The repeating ones, which start as empty lists whether or not the
+    /// document carries any.
+    repeating: Vec<QName>,
+    /// The same question for attributes.
+    attr_clark: FxHashSet<QName>,
+}
+
+/// The shapes of every type reached so far in one decode.
+type Shapes = FxHashMap<TypeId, std::rc::Rc<TypeShape>>;
+
+fn shape_of(schemas: &Schemas, ty: TypeId, shapes: &mut Shapes) -> std::rc::Rc<TypeShape> {
+    if let Some(s) = shapes.get(&ty) {
+        return s.clone();
+    }
+    let declared: Vec<QName> = schemas
+        .children(ty)
+        .iter()
+        .map(|c| schemas[c.element].name)
+        .collect();
+    let repeats: FxHashMap<QName, bool> = schemas
+        .children(ty)
+        .iter()
+        .map(|c| (schemas[c.element].name, c.repeats))
+        .collect();
+    let shape = std::rc::Rc::new(TypeShape {
+        clark: ambiguous_names(declared.iter().copied(), schemas),
+        repeating: declared
+            .iter()
+            .copied()
+            .filter(|n| repeats.get(n).copied().unwrap_or(false))
+            .collect(),
+        repeats,
+        attr_clark: ambiguous_names(
+            schemas
+                .attribute_uses(ty)
+                .iter()
+                .map(|u| schemas[u.attribute].name),
+            schemas,
+        ),
+    });
+    shapes.insert(ty, shape.clone());
+    shape
+}
+
+/// Projects a decoded element onto Python data.
+///
+/// Lossy on purpose, and in exactly two ways: names lose their namespace
+/// where nothing is ambiguous, and the type in force is not carried over.
+/// `Decoded` on the Rust side keeps both for anyone who needs them.
 fn decoded_to_py<'py>(
     py: Python<'py>,
     schemas: &Schemas,
     d: &Decoded,
+    shapes: &mut Shapes,
 ) -> PyResult<Bound<'py, PyAny>> {
     // `xsi:nil` is the document saying there is no value, which is not the
     // same as an empty one.
@@ -2790,18 +2854,8 @@ fn decoded_to_py<'py>(
         return Ok(py.None().into_bound(py));
     }
 
-    // Declared *and* present, exactly as for children below: deciding this
-    // from the document alone would let an attribute's key change shape
-    // because some other document left its ambiguous sibling out, which is
-    // the defect this whole rule exists to avoid.
-    let declared_attrs = schemas
-        .attribute_uses(d.type_id)
-        .iter()
-        .map(|u| schemas[u.attribute].name);
-    let attr_clark = ambiguous_names(
-        declared_attrs.chain(d.attributes.iter().map(|a| a.name)),
-        schemas,
-    );
+    let shape = shape_of(schemas, d.type_id, shapes);
+
     let mut attrs: Vec<(String, Bound<'py, PyAny>)> = Vec::with_capacity(d.attributes.len());
     for a in &d.attributes {
         let value = match &a.value {
@@ -2809,7 +2863,7 @@ fn decoded_to_py<'py>(
             None => a.lexical.clone().into_bound_py_any(py)?,
         };
         attrs.push((
-            format!("@{}", decoded_key(schemas, a.name, &attr_clark)),
+            format!("@{}", decoded_key(schemas, a.name, &shape.attr_clark)),
             value,
         ));
     }
@@ -2851,28 +2905,23 @@ fn decoded_to_py<'py>(
     // schema rather than from this document — so a list is a list whether it
     // holds two entries, one, or none. Code written against the shape never
     // has to ask `isinstance(x, list)`.
-    let declared = schemas.children(d.type_id);
-    let declared_names: Vec<QName> = declared.iter().map(|c| schemas[c.element].name).collect();
-    let seen: Vec<QName> = d.children().iter().map(|c| c.name).collect();
-    let clark = ambiguous_names(declared_names.iter().copied().chain(seen), schemas);
-
-    let mut repeats: FxHashMap<QName, bool> = FxHashMap::default();
-    for (c, name) in declared.iter().zip(&declared_names) {
-        repeats.insert(*name, c.repeats);
-        if c.repeats {
-            // Declared, repeating, absent from this document: an empty list,
-            // not a missing key.
-            out.set_item(decoded_key(schemas, *name, &clark), PyList::empty(py))?;
-        }
+    for name in &shape.repeating {
+        out.set_item(decoded_key(schemas, *name, &shape.clark), PyList::empty(py))?;
     }
 
     for child in d.children() {
-        let key = decoded_key(schemas, child.name, &clark);
-        let value = decoded_to_py(py, schemas, child)?;
-        // A name the schema did not declare here arrived through a wildcard,
-        // so there is nothing to ask about its occurrence: fall back to what
-        // the document shows.
-        let repeating = repeats.get(&child.name).copied().unwrap_or(false);
+        // A name the schema did not declare here arrived through a wildcard.
+        // Nothing about it is schema-determined, so it keeps its full name
+        // rather than borrowing a short one that a declared sibling might
+        // want, and its occurrence follows what the document shows.
+        let declared = shape.repeats.contains_key(&child.name);
+        let key = if declared {
+            decoded_key(schemas, child.name, &shape.clark)
+        } else {
+            schemas.display_name(child.name)
+        };
+        let value = decoded_to_py(py, schemas, child, shapes)?;
+        let repeating = shape.repeats.get(&child.name).copied().unwrap_or(false);
         match out.get_item(&key)? {
             Some(existing) if repeating => existing.cast::<PyList>()?.append(value)?,
             Some(existing) => match existing.cast::<PyList>() {

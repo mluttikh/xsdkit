@@ -588,6 +588,12 @@ impl<'a, S: FnMut(PsviEvent)> Run<'a, '_, S> {
         // there is no entity expansion to bound in the first place.
 
         let mut line = 1u32;
+        // How much of the document the line counter has already walked.
+        // `buffer_position` only moves forward, so each event's line is the
+        // previous line plus the newlines since the previous event — where
+        // rescanning from the start of the document, once per event, made
+        // validating an n-byte document cost O(n²).
+        let mut counted = 0usize;
         loop {
             let event = match reader.read_resolved_event() {
                 Ok((ns, event)) => {
@@ -616,7 +622,16 @@ impl<'a, S: FnMut(PsviEvent)> Run<'a, '_, S> {
                 }
             };
             let (name, event) = event;
-            line = count_lines(xml, reader.buffer_position() as usize);
+            let position = (reader.buffer_position() as usize).min(xml.len());
+            if position > counted {
+                // Bytes, not chars: a UTF-8 continuation byte is never
+                // `\n`, so counting them cannot land mid-character.
+                line += xml.as_bytes()[counted..position]
+                    .iter()
+                    .filter(|b| **b == b'\n')
+                    .count() as u32;
+                counted = position;
+            }
 
             match event {
                 Event::Start(ref e) | Event::Empty(ref e) => {
@@ -1645,15 +1660,6 @@ fn unparsed_entities(doctype: &str) -> Vec<String> {
         }
     }
     out
-}
-
-fn count_lines(xml: &str, upto: usize) -> u32 {
-    let upto = upto.min(xml.len());
-    (xml.as_bytes()[..upto]
-        .iter()
-        .filter(|b| **b == b'\n')
-        .count()
-        + 1) as u32
 }
 
 impl Schemas {
