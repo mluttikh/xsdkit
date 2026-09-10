@@ -213,3 +213,34 @@ def test_decode_errors_carry_their_diagnostics():
     diagnostics = excinfo.value.diagnostics
     assert len(diagnostics) >= 1
     assert any(d.code.startswith("XSD") for d in diagnostics)
+
+
+ORDERED = """
+<xs:element name="order">
+  <xs:complexType>
+    <xs:sequence>
+      <xs:element name="id" type="xs:int"/>
+      <xs:element name="line" type="xs:string" minOccurs="0" maxOccurs="unbounded"/>
+      <xs:element name="total" type="xs:int"/>
+    </xs:sequence>
+    <xs:attribute name="ref" type="xs:string"/>
+  </xs:complexType>
+</xs:element>
+"""
+
+
+def test_keys_keep_document_order():
+    """`==` on dicts ignores order, which is how the old order slipped through
+    every other test here: repeating children used to be seeded first, so a
+    `line` printed ahead of the `id` that precedes it."""
+    s = build(ORDERED)
+    d = s.decode(f'<order xmlns="{NS}" ref="r"><id>1</id><line>a</line><total>2</total></order>')
+    assert list(d) == ["@ref", "id", "line", "total"]
+
+
+def test_an_absent_repeating_child_comes_after_what_was_present():
+    s = build(ORDERED)
+    d = s.decode(f'<order xmlns="{NS}"><id>1</id><total>2</total></order>')
+    # It had no position in the document, so it takes none among its siblings.
+    assert list(d) == ["id", "total", "line"]
+    assert d["line"] == []

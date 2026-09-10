@@ -2901,14 +2901,9 @@ fn decoded_to_py<'py>(
         return Ok(out.into_any());
     }
 
-    // Which children may appear, and which of them repeat, comes from the
-    // schema rather than from this document — so a list is a list whether it
-    // holds two entries, one, or none. Code written against the shape never
-    // has to ask `isinstance(x, list)`.
-    for name in &shape.repeating {
-        out.set_item(decoded_key(schemas, *name, &shape.clark), PyList::empty(py))?;
-    }
-
+    // Keys go in document order: a dictionary is printed, compared by eye
+    // and serialised in the order its keys were inserted, and the document's
+    // order is the one its reader already has in mind.
     for child in d.children() {
         // A name the schema did not declare here arrived through a wildcard.
         // Nothing about it is schema-determined, so it keeps its full name
@@ -2944,6 +2939,19 @@ fn decoded_to_py<'py>(
                 out.set_item(key, list)?;
             }
             None => out.set_item(key, value)?,
+        }
+    }
+
+    // Which children may repeat comes from the schema rather than from this
+    // document, so a list is a list whether it holds two entries, one, or
+    // none — code written against the shape never asks `isinstance(x, list)`.
+    // The ones the document did not carry are added *after* the ones it did:
+    // seeding them first used to put every repeating child ahead of its
+    // siblings, which is not an order anyone wrote.
+    for name in &shape.repeating {
+        let key = decoded_key(schemas, *name, &shape.clark);
+        if !out.contains(&key)? {
+            out.set_item(key, PyList::empty(py))?;
         }
     }
 

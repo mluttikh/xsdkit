@@ -72,11 +72,10 @@ len(data["item"])                # 2
 type(data["item"]).__name__      # 'list'
 ```
 
-The shape comes from the schema, not from the document in front of you. This
-is the difference knowing the schema makes, and it removes the defect every
-schema-less XML-to-dict converter has: with `xmltodict` or `xmlschema`'s
-default, a `<report>` with one `<item>` decodes to a dict where a report with
-two decodes to a list, so every consumer writes
+The shape comes from the schema, not from the document in front of you. That
+removes the defect every schema-less XML-to-dict converter has: with
+`xmltodict`, a `<report>` with one `<item>` decodes to a dict where a report
+with two decodes to a list, so every consumer writes
 
 ```python,ignore
 items = data["item"]
@@ -84,8 +83,16 @@ items = items if isinstance(items, list) else [items]   # not needed here
 ```
 
 and the ones that forget break the first time a document has exactly one of
-something. Here `data["item"]` is a list in all three cases, including when
-the document has none — an absent repeating child is `[]`, not a missing key.
+something. Here `data["item"]` is a list in all three cases.
+
+`xmlschema` is schema-aware too, and its default converter gets the one-item
+case right as well. Where the two differ is the empty case: an absent
+repeating child is `[]` here, where `xmlschema` leaves the key out, so
+`data["item"]` needs no `.get("item", [])` even when the document has none.
+
+Keys keep document order, the way a reader of the document expects to see
+them. A repeating child the document did not carry has no position in it, so
+its empty list comes after the keys that were present.
 
 A child that may appear **at most once** and does not appear has no key at
 all, which is how `note` behaves above:
