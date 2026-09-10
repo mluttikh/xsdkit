@@ -20,6 +20,7 @@
 
 use crate::content::ContentModel;
 use crate::datatypes::Variety;
+use crate::decode::{Decoded, DecodedContent};
 use crate::diagnostics::{Diagnostic, Diagnostics, Severity, Span};
 use crate::instance::PsviEvent as RustPsvi;
 use crate::model::*;
@@ -27,6 +28,7 @@ use crate::names::QName;
 use crate::refs::{AttributeRef, ElementRef, TypeRef};
 use crate::values::Value;
 use crate::{Compilation, Conformance, FileResolver, SchemaSetBuilder, Version};
+use fxhash::{FxHashMap, FxHashSet};
 use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
 use pyo3::types::{PyBytes, PyDict, PyList, PyTuple, PyType};
@@ -55,6 +57,20 @@ fn schema_error(py: Python<'_>, diags: Diagnostics) -> PyErr {
     let n = diags.errors().count();
     let err = SchemaError::new_err(format!("{n} error(s) building the schema:\n{diags}"));
     let wrapped: Vec<PyDiagnostic> = diags.into_iter().map(PyDiagnostic).collect();
+    if let Ok(list) = wrapped.into_py_any(py) {
+        let _ = err.value(py).setattr("diagnostics", list);
+    }
+    err
+}
+
+/// Builds an `XsdError` for a document, carrying the whole diagnostic list.
+///
+/// The same contract as [`schema_error`], for the same reason: a caller that
+/// wants to show what was wrong with a document — filter by code, point at a
+/// line — cannot do it with a formatted string.
+fn document_error(py: Python<'_>, diags: &Diagnostics) -> PyErr {
+    let err = XsdError::new_err(format!("{diags}"));
+    let wrapped: Vec<PyDiagnostic> = diags.iter().cloned().map(PyDiagnostic).collect();
     if let Ok(list) = wrapped.into_py_any(py) {
         let _ = err.value(py).setattr("diagnostics", list);
     }
@@ -111,13 +127,25 @@ impl crate::load::Resolver for PyResolver {
 /// no guess about its encoding, which is exactly the guess a caller is most
 /// likely to get wrong.
 fn instance_text(obj: &Bound<'_, PyAny>) -> PyResult<String> {
+    // `str` first, and always as content: a path is a `str` too, so the two
+    // cannot be told apart here. What a bare name *does* produce is a clear
+    // diagnostic — "document has no root element", with help saying so.
     if let Ok(s) = obj.extract::<String>() {
         return Ok(s);
     }
-    let bytes: Vec<u8> = obj
-        .extract()
-        .map_err(|_| PyValueError::new_err("a document must be str or bytes"))?;
-    crate::encoding::decode_document(&bytes, "<instance>")
+    if let Ok(bytes) = obj.extract::<Vec<u8>>() {
+        return crate::encoding::decode_document(&bytes, "<instance>")
+            .map(|d| d.text)
+            .map_err(|d| PyValueError::new_err(d.message));
+    }
+    // A `pathlib.Path`, on the other hand, is never ambiguous: nobody holds
+    // one meaning "this is my XML". Read it, with the encoding detected from
+    // the bytes exactly as for a document handed over directly.
+    let path = path_from(obj)
+        .map_err(|_| PyValueError::new_err("a document must be str, bytes, or a path"))?;
+    let bytes = std::fs::read(&path)
+        .map_err(|e| PyValueError::new_err(format!("cannot read {path}: {e}")))?;
+    crate::encoding::decode_document(&bytes, &path)
         .map(|d| d.text)
         .map_err(|d| PyValueError::new_err(d.message))
 }
@@ -697,6 +725,49 @@ impl PySchemaSet {
             valid,
             diagnostics: report.diagnostics.into_iter().map(PyDiagnostic).collect(),
         })
+    }
+
+    /// Decodes a document into Python data.
+    ///
+    /// Elements become dictionaries, values arrive in their value space —
+    /// `Decimal`, `datetime`, `int` — and a child the schema allows more than
+    /// once is always a list, whether the document carries two of them, one,
+    /// or none. That shape comes from the schema, so it does not change under
+    /// you when a document leaves something out.
+    ///
+    /// Keys are local names, spelled out in Clark notation only where two
+    /// names under one parent would otherwise collide. Attributes are
+    /// prefixed with `@`, and where an element has both a value and
+    /// attributes the value sits under `$`. `xsi:nil` decodes to `None`.
+    ///
+    /// Raises `XsdError` if the document is invalid; pass `lax=True` to take
+    /// the data anyway. Unlike `validate`, this one raises, because a caller
+    /// asking for data has said what it wants and silently handing back data
+    /// from a document that does not fit its schema is the trap this is meant
+    /// to remove.
+    #[pyo3(signature = (xml, *, uri="<instance>", lax=false))]
+    fn decode(
+        &self,
+        py: Python<'_>,
+        xml: &Bound<'_, PyAny>,
+        uri: &str,
+        lax: bool,
+    ) -> PyResult<Py<PyAny>> {
+        let xml = instance_text(xml)?;
+        let schemas = self.inner.clone();
+        // Nothing calls back into Python while the document is read.
+        let decoding = py.detach(|| schemas.decode_named(&xml, uri));
+
+        if !lax && !decoding.is_valid() {
+            return Err(document_error(py, &decoding.diagnostics));
+        }
+        match &decoding.decoded {
+            Some(d) => {
+                let mut shapes = Shapes::default();
+                Ok(decoded_to_py(py, &self.inner, d, &mut shapes)?.unbind())
+            }
+            None => Ok(py.None()),
+        }
     }
 
     /// Reads a document into typed PSVI events.
@@ -2675,6 +2746,225 @@ impl PyDiagnostic {
 // Values, as native Python objects
 // ---------------------------------------------------------------------------
 
+/// The key a name takes in a decoded dictionary.
+///
+/// Local name where that is unambiguous, Clark notation where it is not.
+/// Which one a name gets is decided by the *schema* — by whether some sibling
+/// under the same parent shares its local part — so it does not change
+/// because a particular document happened to leave a sibling out.
+fn decoded_key(schemas: &Schemas, name: QName, clark: &FxHashSet<QName>) -> String {
+    if clark.contains(&name) {
+        schemas.display_name(name)
+    } else {
+        schemas.local_of(name).to_string()
+    }
+}
+
+/// The names under one parent type that have to be spelled out in full.
+fn ambiguous_names(names: impl Iterator<Item = QName>, schemas: &Schemas) -> FxHashSet<QName> {
+    // By identity first: the same name reaches this both as something the
+    // schema declares and as something the document carries, and a name is
+    // not ambiguous with itself.
+    let unique: FxHashSet<QName> = names.collect();
+    let mut by_local: FxHashMap<&str, Vec<QName>> = FxHashMap::default();
+    for n in unique {
+        by_local.entry(schemas.local_of(n)).or_default().push(n);
+    }
+    by_local
+        .into_values()
+        .filter(|group| group.len() > 1)
+        .flatten()
+        .collect()
+}
+
+/// Projects a decoded element onto Python data.
+///
+/// Lossy on purpose, and in exactly two ways: names lose their namespace
+/// where nothing is ambiguous, and the type in force is not carried over.
+/// `Decoded` on the Rust side keeps both for anyone who needs them.
+/// What the schema says about one type, worked out once per decode instead of
+/// once per element.
+///
+/// The old shape of this was computed inside the recursion, so a document
+/// with twenty thousand `item`s walked `item`'s content model twenty thousand
+/// times to be told the same thing.
+struct TypeShape {
+    /// Names that must be spelled out in Clark notation.
+    clark: FxHashSet<QName>,
+    /// Declared children, and whether each may appear more than once.
+    repeats: FxHashMap<QName, bool>,
+    /// The repeating ones, which start as empty lists whether or not the
+    /// document carries any.
+    repeating: Vec<QName>,
+    /// The same question for attributes.
+    attr_clark: FxHashSet<QName>,
+}
+
+/// The shapes of every type reached so far in one decode.
+type Shapes = FxHashMap<TypeId, std::rc::Rc<TypeShape>>;
+
+fn shape_of(schemas: &Schemas, ty: TypeId, shapes: &mut Shapes) -> std::rc::Rc<TypeShape> {
+    if let Some(s) = shapes.get(&ty) {
+        return s.clone();
+    }
+    let declared: Vec<QName> = schemas
+        .children(ty)
+        .iter()
+        .map(|c| schemas[c.element].name)
+        .collect();
+    let repeats: FxHashMap<QName, bool> = schemas
+        .children(ty)
+        .iter()
+        .map(|c| (schemas[c.element].name, c.repeats))
+        .collect();
+    let shape = std::rc::Rc::new(TypeShape {
+        clark: ambiguous_names(declared.iter().copied(), schemas),
+        repeating: declared
+            .iter()
+            .copied()
+            .filter(|n| repeats.get(n).copied().unwrap_or(false))
+            .collect(),
+        repeats,
+        attr_clark: ambiguous_names(
+            schemas
+                .attribute_uses(ty)
+                .iter()
+                .map(|u| schemas[u.attribute].name),
+            schemas,
+        ),
+    });
+    shapes.insert(ty, shape.clone());
+    shape
+}
+
+/// Projects a decoded element onto Python data.
+///
+/// Lossy on purpose, and in exactly two ways: names lose their namespace
+/// where nothing is ambiguous, and the type in force is not carried over.
+/// `Decoded` on the Rust side keeps both for anyone who needs them.
+fn decoded_to_py<'py>(
+    py: Python<'py>,
+    schemas: &Schemas,
+    d: &Decoded,
+    shapes: &mut Shapes,
+) -> PyResult<Bound<'py, PyAny>> {
+    // `xsi:nil` is the document saying there is no value, which is not the
+    // same as an empty one.
+    if d.nil {
+        return Ok(py.None().into_bound(py));
+    }
+
+    let shape = shape_of(schemas, d.type_id, shapes);
+
+    let mut attrs: Vec<(String, Bound<'py, PyAny>)> = Vec::with_capacity(d.attributes.len());
+    for a in &d.attributes {
+        let value = match &a.value {
+            Some(v) => value_to_py(py, v)?,
+            None => a.lexical.clone().into_bound_py_any(py)?,
+        };
+        attrs.push((
+            format!("@{}", decoded_key(schemas, a.name, &shape.attr_clark)),
+            value,
+        ));
+    }
+
+    let scalar = |py: Python<'py>| -> PyResult<Bound<'py, PyAny>> {
+        match &d.content {
+            DecodedContent::Simple { value, lexical, .. } => match value {
+                Some(v) => value_to_py(py, v),
+                None => Ok(lexical.clone().into_bound_py_any(py)?),
+            },
+            _ => Ok(py.None().into_bound(py)),
+        }
+    };
+
+    // Whether this element *has* a value, not whether this document happened
+    // to give it children: an element-only type whose children are all absent
+    // has no children either, and is still not a value.
+    let simple = matches!(d.content, DecodedContent::Simple { .. });
+
+    // A simple value with nothing else to say is the value itself, not a
+    // dictionary wrapping one.
+    if simple && attrs.is_empty() {
+        return scalar(py);
+    }
+
+    let out = PyDict::new(py);
+    for (k, v) in attrs {
+        out.set_item(k, v)?;
+    }
+
+    if simple {
+        // Simple content that also carries attributes: the value needs a key
+        // of its own to sit beside them.
+        out.set_item("$", scalar(py)?)?;
+        return Ok(out.into_any());
+    }
+
+    // Keys go in document order: a dictionary is printed, compared by eye
+    // and serialised in the order its keys were inserted, and the document's
+    // order is the one its reader already has in mind.
+    for child in d.children() {
+        // A name the schema did not declare here arrived through a wildcard.
+        // Nothing about it is schema-determined, so it keeps its full name
+        // rather than borrowing a short one that a declared sibling might
+        // want, and its occurrence follows what the document shows.
+        let declared = shape.repeats.contains_key(&child.name);
+        let key = if declared {
+            decoded_key(schemas, child.name, &shape.clark)
+        } else {
+            schemas.display_name(child.name)
+        };
+        let value = decoded_to_py(py, schemas, child, shapes)?;
+        let repeating = shape.repeats.get(&child.name).copied().unwrap_or(false);
+        match out.get_item(&key)? {
+            Some(existing) if repeating => existing.cast::<PyList>()?.append(value)?,
+            Some(existing) => match existing.cast::<PyList>() {
+                // Already promoted by an earlier repeat: append in place.
+                // Rebuilding it each time would make a wildcard carrying n
+                // children of one name cost n² appends.
+                Ok(list) => list.append(value)?,
+                // Seen twice under a wildcard: promote to a list rather than
+                // dropping the first one.
+                Err(_) => {
+                    let list = PyList::empty(py);
+                    list.append(existing)?;
+                    list.append(value)?;
+                    out.set_item(key, list)?;
+                }
+            },
+            None if repeating => {
+                let list = PyList::empty(py);
+                list.append(value)?;
+                out.set_item(key, list)?;
+            }
+            None => out.set_item(key, value)?,
+        }
+    }
+
+    // Which children may repeat comes from the schema rather than from this
+    // document, so a list is a list whether it holds two entries, one, or
+    // none — code written against the shape never asks `isinstance(x, list)`.
+    // The ones the document did not carry are added *after* the ones it did:
+    // seeding them first used to put every repeating child ahead of its
+    // siblings, which is not an order anyone wrote.
+    for name in &shape.repeating {
+        let key = decoded_key(schemas, *name, &shape.clark);
+        if !out.contains(&key)? {
+            out.set_item(key, PyList::empty(py))?;
+        }
+    }
+
+    // Mixed content: the character data around the children.
+    if let DecodedContent::Elements { text, .. } = &d.content {
+        if !text.trim().is_empty() {
+            out.set_item("$", text.clone())?;
+        }
+    }
+
+    Ok(out.into_any())
+}
+
 /// Converts an XSD value into the closest native Python type.
 ///
 /// This is most of what a binding is *for*: `<count>42</count>` should reach
@@ -3120,7 +3410,12 @@ fn load_string(
 #[pyo3(name = "_xsdkit")]
 fn xsdkit_module(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add("__version__", env!("CARGO_PKG_VERSION"))?;
-    m.add("XsdError", m.py().get_type::<XsdError>())?;
+    let xsd_error = m.py().get_type::<XsdError>();
+    // The same class-level default as `SchemaError` below, so
+    // `except XsdError as e: e.diagnostics` is safe whichever of them was
+    // raised, and on paths that attach none.
+    xsd_error.setattr("diagnostics", PyList::empty(m.py()))?;
+    m.add("XsdError", xsd_error)?;
     let schema_error = m.py().get_type::<SchemaError>();
     // A class-level default so `except SchemaError as e: e.diagnostics` is
     // always safe, even for an error raised on a path that set none.

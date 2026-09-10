@@ -103,6 +103,10 @@ struct Frame<'a> {
     /// Inside a `processContents="skip"` wildcard nothing is checked until
     /// the subtree closes.
     skipped: bool,
+    /// Whether a `StartElement` went out for this frame. The element a
+    /// wildcard skipped is announced; the elements *inside* it are not, and
+    /// only an announced element may be closed — a consumer counts the pair.
+    announced: bool,
     line: u32,
 }
 
@@ -584,6 +588,12 @@ impl<'a, S: FnMut(PsviEvent)> Run<'a, '_, S> {
         // there is no entity expansion to bound in the first place.
 
         let mut line = 1u32;
+        // How much of the document the line counter has already walked.
+        // `buffer_position` only moves forward, so each event's line is the
+        // previous line plus the newlines since the previous event — where
+        // rescanning from the start of the document, once per event, made
+        // validating an n-byte document cost O(n²).
+        let mut counted = 0usize;
         loop {
             let event = match reader.read_resolved_event() {
                 Ok((ns, event)) => {
@@ -612,7 +622,16 @@ impl<'a, S: FnMut(PsviEvent)> Run<'a, '_, S> {
                 }
             };
             let (name, event) = event;
-            line = count_lines(xml, reader.buffer_position() as usize);
+            let position = (reader.buffer_position() as usize).min(xml.len());
+            if position > counted {
+                // Bytes, not chars: a UTF-8 continuation byte is never
+                // `\n`, so counting them cannot land mid-character.
+                line += xml.as_bytes()[counted..position]
+                    .iter()
+                    .filter(|b| **b == b'\n')
+                    .count() as u32;
+                counted = position;
+            }
 
             match event {
                 Event::Start(ref e) | Event::Empty(ref e) => {
@@ -709,6 +728,27 @@ impl<'a, S: FnMut(PsviEvent)> Run<'a, '_, S> {
             );
         }
 
+        // XML requires exactly one root element, so input carrying none is
+        // not a document at all. Without this, an empty string — or a file
+        // that turned out to be empty — validated clean against every schema,
+        // which is the one answer that cannot be right.
+        if self.elements_seen == 0 {
+            let span = Span::new(&self.uri, line);
+            let mut d =
+                Diagnostic::error(DiagCode::MalformedXml, "document has no root element").at(span);
+            // Text with no `<` anywhere is not a document that went wrong, it
+            // is something that was never a document. Overwhelmingly that is
+            // a file *name* passed where the file's *contents* belong, and
+            // saying so costs one line and saves the reader the guess.
+            if !xml.is_empty() && !xml.contains('<') {
+                d = d.with_help(
+                    "a document is XML text, not a path — if this was a file name, \
+                     pass what the file contains",
+                );
+            }
+            self.diags.push(d);
+        }
+
         // Only now: an `xs:IDREF` may name an `xs:ID` that appears later.
         for (reference, line) in std::mem::take(&mut self.idrefs) {
             if !self.ids.contains_key(&reference) {
@@ -756,6 +796,7 @@ impl<'a, S: FnMut(PsviEvent)> Run<'a, '_, S> {
                 text: String::new(),
                 nil: false,
                 skipped: true,
+                announced: false,
                 line,
             });
             return;
@@ -883,6 +924,7 @@ impl<'a, S: FnMut(PsviEvent)> Run<'a, '_, S> {
             text: String::new(),
             nil,
             skipped,
+            announced: true,
             line,
         });
     }
@@ -1355,6 +1397,19 @@ impl<'a, S: FnMut(PsviEvent)> Run<'a, '_, S> {
 
     fn finish(&mut self, frame: Frame<'a>, line: u32) {
         if frame.skipped {
+            // Nothing in a skipped subtree is checked, but what was announced
+            // still has to be closed: a stream whose starts outnumber its ends
+            // cannot be folded into a tree by anyone, and a consumer that
+            // tries attributes the following elements to the wrong parent.
+            // The elements *within* the skipped subtree were never announced,
+            // so closing them would unbalance it the other way.
+            if frame.announced {
+                (self.sink)(PsviEvent::EndElement {
+                    name: frame.name,
+                    declaration: frame.declaration,
+                    line,
+                });
+            }
             return;
         }
 
@@ -1453,6 +1508,19 @@ impl<'a, S: FnMut(PsviEvent)> Run<'a, '_, S> {
                     line,
                     format!("`{shown}` has element-only content, but contains character data"),
                 );
+            } else if mixed && !frame.text.is_empty() {
+                // Character data in a mixed type is content, and until now no
+                // PSVI consumer could see it: this branch only checked that it
+                // was allowed. It carries no `value` because a mixed type has
+                // no value space to parse it into, and it is not trimmed
+                // because in mixed content whitespace is content.
+                (self.sink)(PsviEvent::Text {
+                    value: None,
+                    type_id: ty,
+                    lexical: frame.text.clone(),
+                    from_schema: false,
+                    line,
+                });
             }
         }
 
@@ -1592,15 +1660,6 @@ fn unparsed_entities(doctype: &str) -> Vec<String> {
         }
     }
     out
-}
-
-fn count_lines(xml: &str, upto: usize) -> u32 {
-    let upto = upto.min(xml.len());
-    (xml.as_bytes()[..upto]
-        .iter()
-        .filter(|b| **b == b'\n')
-        .count()
-        + 1) as u32
 }
 
 impl Schemas {

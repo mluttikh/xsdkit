@@ -134,6 +134,7 @@ nav:
       - Loading schemas: loading.md
       - Querying the model: querying.md
       - Validating documents: validation.md
+      - Decoding documents: decoding.md
       - Diagnostics: diagnostics.md
       - XSD 1.1: xsd11.md
       - In a notebook: notebooks.md

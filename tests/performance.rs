@@ -80,3 +80,66 @@ fn loading_a_large_schema_does_not_scale_quadratically() {
         "3000 declarations took {large:?}, which is far past anything reasonable"
     );
 }
+
+/// A document with `n` items, each on its own line so line numbers matter.
+fn document_with(n: usize) -> String {
+    let mut s = String::from("<report xmlns=\"urn:scale\">\n");
+    for i in 0..n {
+        s.push_str(&format!("  <item k=\"{i}\"><v>{i}</v></item>\n"));
+    }
+    s.push_str("</report>\n");
+    s
+}
+
+#[test]
+fn validating_a_large_document_does_not_scale_quadratically() {
+    // The same mistake as the loader's, one layer down: every parse event
+    // needs a line number for its span, and counting newlines from the start
+    // of the document each time is quadratic in the document. A 1.8 MB
+    // instance took over two minutes before the counter became a cursor, and
+    // 60 ms after.
+    let xsd = format!(
+        r#"<xs:schema xmlns:xs="{XS}" xmlns:tns="urn:scale" targetNamespace="urn:scale"
+                      elementFormDefault="qualified">
+             <xs:element name="report">
+               <xs:complexType><xs:sequence>
+                 <xs:element name="item" maxOccurs="unbounded">
+                   <xs:complexType>
+                     <xs:sequence><xs:element name="v" type="xs:int"/></xs:sequence>
+                     <xs:attribute name="k" type="xs:int"/>
+                   </xs:complexType>
+                 </xs:element>
+               </xs:sequence></xs:complexType>
+             </xs:element>
+           </xs:schema>"#
+    );
+    let schemas = SchemaSetBuilder::new()
+        .text(xsd, "urn:scale")
+        .compile()
+        .into_result()
+        .expect("the generated schema must compile");
+
+    let time = |doc: &str| {
+        let start = Instant::now();
+        let report = schemas.document_validator().validate(doc);
+        let elapsed = start.elapsed();
+        assert!(report.is_valid(), "{}", report.diagnostics);
+        elapsed
+    };
+
+    let small = document_with(1_000);
+    let large = document_with(4_000);
+    time(&small); // warm up
+
+    let best = |doc: &str| (0..3).map(|_| time(doc)).min().unwrap();
+    let small = best(&small);
+    let large = best(&large);
+
+    // Four times the input. Linear says four; quadratic says sixteen.
+    let ratio = large.as_secs_f64() / small.as_secs_f64().max(1e-6);
+    assert!(
+        ratio < 8.0,
+        "validating grew {ratio:.1}x for 4x the document ({small:?} -> {large:?}); \
+         a per-event line scan is the usual cause"
+    );
+}

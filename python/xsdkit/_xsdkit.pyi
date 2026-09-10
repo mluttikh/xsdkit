@@ -37,7 +37,10 @@ Name = str | tuple[str | None, str]
 Resolver = Callable[[str, str | None], bytes | str | tuple[str, bytes | str]]
 
 #: A document to validate: text, or bytes whose encoding xsdkit detects.
-Instance = str | bytes
+Instance = str | bytes | os.PathLike[str]
+"""A document: XML as text, as bytes whose encoding is detected, or a path to
+read it from. A ``str`` is always content — a path and a document cannot be
+told apart once both are strings — so pass ``pathlib.Path`` for a file."""
 
 #: An XSD value as its closest native Python type.
 #:
@@ -63,7 +66,11 @@ XsdValue = (
 )
 EventKind = Literal["start", "text", "end"]
 
-class XsdError(Exception): ...
+class XsdError(Exception):
+    #: Every diagnostic behind the error — from a failed build, or from a
+    #: document `decode` refused. Empty rather than absent where a path
+    #: raised without any, so reading it is always safe.
+    diagnostics: list[Diagnostic]
 
 class SchemaError(XsdError):
     #: Every diagnostic from the failed build, not just the first.
@@ -600,6 +607,29 @@ class SchemaSet:
     def validate(self, xml: Instance, *, uri: str = ...) -> ValidationReport:
         """Validates a document. Never raises for an invalid one — that is an
         answer, not an error."""
+    def decode(self, xml: Instance, *, uri: str = ..., lax: bool = ...) -> Any:
+        """Decodes a document into Python data.
+
+        Elements become dictionaries and values arrive in their value space::
+
+            {"@id": "r-1",
+             "title": "November orders",
+             "issued": datetime.date(2024, 12, 1),
+             "item": [{"@sku": "AB-1042",
+                       "price": {"@currency": "EUR", "$": Decimal("19.95")}}]}
+
+        A child the schema allows more than once is *always* a list — with two
+        entries, one, or none — because the shape comes from the schema rather
+        than from the document in front of you.
+
+        Keys are local names, in Clark notation only where two names under one
+        parent would collide. Attributes carry an ``@``; where an element has
+        both a value and attributes the value sits under ``$``; ``xsi:nil``
+        decodes to ``None``.
+
+        Raises ``XsdError`` if the document is invalid. Pass ``lax=True`` to
+        take the data anyway.
+        """
     def iter_typed(self, xml: Instance, *, uri: str = ...) -> PsviEvents:
         """Reads a document into typed PSVI events, one at a time.
 

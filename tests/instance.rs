@@ -2241,3 +2241,39 @@ fn a_qname_attribute_resolves_against_the_element_it_is_on() {
         DiagCode::InvalidValue,
     );
 }
+
+#[test]
+fn every_element_announced_is_also_closed() {
+    // The PSVI is a stream a consumer folds into a tree, so its starts and
+    // ends have to balance. A `skip` wildcard used to produce a start with no
+    // end, which no consumer can recover from: it silently attributes the
+    // following elements to the wrong parent.
+    let s = schema(
+        r###"<xs:element name="root">
+               <xs:complexType><xs:sequence>
+                 <xs:element name="a" type="xs:string"/>
+                 <xs:any namespace="##other" processContents="skip" minOccurs="0"/>
+               </xs:sequence></xs:complexType>
+             </xs:element>"###,
+    );
+    let mut depth = 0i32;
+    let mut lowest = 0i32;
+    let report = s.document_validator().validate_with(
+        r#"<root xmlns="urn:example" xmlns:o="urn:other">
+             <a>x</a><o:junk><o:deep/></o:junk>
+           </root>"#,
+        |ev| match ev {
+            PsviEvent::StartElement { .. } => depth += 1,
+            PsviEvent::EndElement { .. } => {
+                depth -= 1;
+                lowest = lowest.min(depth);
+            }
+            // `PsviEvent` is `#[non_exhaustive]`; anything else is neither
+            // a start nor an end and cannot unbalance the stream.
+            _ => {}
+        },
+    );
+    assert!(report.is_valid(), "{}", report.diagnostics);
+    assert_eq!(depth, 0, "every start needs its end");
+    assert_eq!(lowest, 0, "and no end may arrive before its start");
+}

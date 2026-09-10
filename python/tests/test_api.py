@@ -381,7 +381,7 @@ def test_documents_may_be_bytes():
     # And the encoding is detected rather than assumed.
     latin = f'<?xml version="1.0" encoding="ISO-8859-1"?><a xmlns="{NS}">1</a>'
     assert s.validate(latin.encode("iso-8859-1")).is_valid
-    with pytest.raises(ValueError, match="str or bytes"):
+    with pytest.raises(ValueError, match="str, bytes, or a path"):
         s.validate(42)
 
 

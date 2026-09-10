@@ -108,6 +108,7 @@ pub(crate) mod compile;
 pub mod content;
 pub mod datatypes;
 pub(crate) mod declarations;
+pub mod decode;
 pub(crate) mod derivation;
 pub mod diagnostics;
 pub mod encoding;
@@ -133,6 +134,7 @@ mod python;
 pub use content::{
     AllGroup, AllMember, Child, Content, ContentMatcher, ContentModel, ContentStats,
 };
+pub use decode::{Decoded, DecodedAttribute, DecodedContent, Decoding};
 pub use diagnostics::{DiagCode, Diagnostic, Diagnostics, Severity, Span};
 pub use instance::{DocumentValidator, ValidationReport};
 pub use load::{Conformance, DEFAULT_NODES_LIMIT, FileResolver, Resolver, Version};

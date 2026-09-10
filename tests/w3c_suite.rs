@@ -64,8 +64,20 @@ fn version_of(v: &str) -> Version {
 
 /// Where the suite lives, if it is available.
 fn suite() -> Option<PathBuf> {
-    let p = PathBuf::from(std::env::var("XSDTESTS").ok()?);
-    p.join("suite.xml").is_file().then_some(p)
+    // Unset means "not asked to run this", which is a legitimate skip.
+    let Ok(var) = std::env::var("XSDTESTS") else {
+        return None;
+    };
+    // Set but wrong is a different thing entirely, and used to skip in the
+    // same silence — so a conformance run against a directory that had been
+    // cleaned up reported success having measured nothing.
+    let p = PathBuf::from(&var);
+    assert!(
+        p.join("suite.xml").is_file(),
+        "XSDTESTS is set to `{var}`, which contains no suite.xml. Refusing to \
+         skip: a run that measures nothing must not look like a run that passed."
+    );
+    Some(p)
 }
 
 /// One instance case: a document, the schema it belongs to, and whether the
