@@ -15,9 +15,14 @@
 //! - **A value with no timezone names a 28-hour window**, not an instant, so
 //!   it is ordered against a value that has one only when the whole window
 //!   falls to one side. Being incomparable is a real answer.
-//! - **Range is refused and precision is dropped.** A number too large to
-//!   represent is an error; digits below 10^-18 are not, because the document
-//!   is still valid and the specification only asks for eighteen.
+//! - **A decimal is exact or it is refused.** `xs:decimal` holds 38
+//!   significant digits exactly, at any magnitude, and refuses a literal with
+//!   more — saying the limit is ours. It used to drop digits past the
+//!   eighteenth instead, on the grounds that the document was still valid;
+//!   but a facet then compared a value the document did not contain, and got
+//!   the answer wrong. Seconds in the time types still count in units of
+//!   10^-18 and drop anything finer, the same trade, still made there because
+//!   no timestamp carries such digits.
 //!
 //! What each type offers is what a consumer actually does with a parsed value:
 //! render it canonically ([`std::fmt::Display`]), order it, and take it apart
@@ -41,37 +46,123 @@ impl TimezoneOffset {
     }
 }
 
+/// The unit the time types count seconds in: 10^18 of them to the second.
+///
+/// `xs:dateTime`, `xs:time` and `xs:duration` hold seconds as a whole number
+/// of these and still drop anything finer — a timestamp carrying nineteen
+/// fractional digits of a second is not something anyone sends. This was
+/// `Decimal::SCALE` while `Decimal` was fixed point at the same scale, which
+/// is why the time types reached for it.
+pub(crate) const ATTOS_PER_SECOND: i128 = 1_000_000_000_000_000_000;
+
 /// `xs:decimal` and the types derived from it that are not integers.
 ///
-/// Exact, not floating point: fixed point in an `i128` scaled by 10^18, which
-/// is about 20 digits either side of the point. The specification's value space
-/// is unbounded, so a literal whose *integer* part does not fit is rejected —
-/// that is range. Fractional digits below 10^-18 are dropped instead, because
-/// that is precision, and the specification only requires eighteen digits of
-/// it.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub struct Decimal(i128);
+/// Exact, and in the form it was written: a coefficient and a power of ten, so
+/// `4.50` is 450 × 10⁻². `4.5` and `4.50` are one value — equal, ordered and
+/// hashed as one — and each still renders the way it was written through
+/// [`Decimal::as_written`], while [`Display`](fmt::Display) gives the
+/// canonical form.
+///
+/// Any [`MAX_DIGITS`](Self::MAX_DIGITS) significant digits are held exactly,
+/// at any magnitude; the specification asks for eighteen. A literal with more
+/// is refused, with a message that says the limit is this implementation's.
+/// Dropping the extra digits instead — which this type used to do past the
+/// eighteenth — let a facet compare a value the document did not contain, so a
+/// `maxInclusive` admitted a number above it and an `enumeration` admitted one
+/// it did not list.
+#[derive(Clone, Copy, Debug)]
+pub struct Decimal {
+    negative: bool,
+    coefficient: u128,
+    exponent: i32,
+}
 
 impl Decimal {
-    /// The scale the fixed-point representation uses: 10^18.
-    pub const SCALE: i128 = 1_000_000_000_000_000_000;
+    /// The significant digits held exactly. Every 38-digit coefficient fits a
+    /// `u128`; not every 39-digit one does.
+    pub const MAX_DIGITS: u32 = 38;
 
-    /// The nearest decimal to an integer, absent when it does not fit.
-    pub(crate) fn from_integer(n: i128) -> Option<Self> {
-        n.checked_mul(Self::SCALE).map(Self)
+    /// An integer, exactly. Cannot fail: an `i128` has at most 39 digits and
+    /// every one of them fits.
+    pub(crate) fn from_integer(n: i128) -> Self {
+        Self::new(n < 0, n.unsigned_abs(), 0)
     }
 
-    /// Builds one from a value already scaled by [`Self::SCALE`].
-    pub(crate) fn from_scaled(scaled: i128) -> Self {
-        Self(scaled)
+    /// A count of attoseconds, as the time types hold seconds, with the zeroes
+    /// that scale adds taken back off: 6.5 seconds reads `6.5`, not
+    /// `6.500000000000000000`.
+    pub(crate) fn from_attoseconds(n: i128) -> Self {
+        let (mut coefficient, mut exponent) = (n.unsigned_abs(), -18);
+        while exponent < 0 && coefficient != 0 && coefficient % 10 == 0 {
+            coefficient /= 10;
+            exponent += 1;
+        }
+        Self::new(
+            n < 0,
+            coefficient,
+            if coefficient == 0 { 0 } else { exponent },
+        )
     }
 
-    /// The value scaled by 10^18, which is how it is held.
+    /// `xs:decimal` has one zero however it is written, so zero is never
+    /// negative: `-0.00` and `0` are the same value.
+    fn new(negative: bool, coefficient: u128, exponent: i32) -> Self {
+        Self {
+            negative: negative && coefficient != 0,
+            coefficient,
+            exponent,
+        }
+    }
+
+    /// Whether the value is below zero.
+    pub fn is_negative(self) -> bool {
+        self.negative
+    }
+
+    /// The digits as written, without the point: 450 for `4.50`.
     ///
-    /// Exact, and the way to convert into a decimal type of your own without
-    /// going through a string.
-    pub fn to_i128_scaled(self) -> i128 {
-        self.0
+    /// With [`Self::exponent`] this converts exactly into a decimal type of
+    /// your own — the value is `coefficient × 10^exponent` — without going
+    /// through a string.
+    pub fn coefficient(self) -> u128 {
+        self.coefficient
+    }
+
+    /// The power of ten the coefficient is scaled by: −2 for `4.50`, 0 for
+    /// `12`. When negative it is the count of digits written after the point,
+    /// the convention Python's `Decimal.as_tuple().exponent` uses as well.
+    pub fn exponent(self) -> i32 {
+        self.exponent
+    }
+
+    /// The value with the scale it was written with — `4.50` stays `4.50`,
+    /// where [`Display`](fmt::Display) gives the canonical `4.5`.
+    ///
+    /// Only trailing zeroes survive: a leading `+`, leading zeroes and the
+    /// sign of a zero never carried anything, and are not kept.
+    pub fn as_written(self) -> impl fmt::Display {
+        struct Written(Decimal);
+        impl fmt::Display for Written {
+            fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+                let d = self.0;
+                write_decimal(f, d.negative, d.coefficient, i64::from(d.exponent))
+            }
+        }
+        Written(self)
+    }
+
+    /// The form equality, ordering and hashing are decided on: no trailing
+    /// zeroes in the coefficient, so `4.5` and `4.50` come out identical.
+    fn normalized(self) -> (bool, u128, i64) {
+        if self.coefficient == 0 {
+            return (false, 0, 0);
+        }
+        let (mut c, mut e) = (self.coefficient, i64::from(self.exponent));
+        while c % 10 == 0 {
+            c /= 10;
+            e += 1;
+        }
+        (self.negative, c, e)
     }
 
     pub(crate) fn parse_lexical(s: &str) -> Result<Self, String> {
@@ -93,33 +184,135 @@ impl Decimal {
             return Err("a decimal is digits, with at most one point".into());
         }
 
-        let too_big = || "the value has more digits than an xs:decimal can hold".to_string();
-        let mut scaled: i128 = 0;
-        for b in int.bytes() {
-            scaled = scaled
-                .checked_mul(10)
-                .and_then(|v| v.checked_add(i128::from(b - b'0')))
-                .ok_or_else(too_big)?;
+        let too_long = || {
+            format!(
+                "more than {} significant digits, which is a limit of xsdkit and \
+                 not of the document: xs:decimal is unbounded, and this \
+                 implementation holds a decimal exactly or not at all",
+                Self::MAX_DIGITS
+            )
+        };
+        let exponent = -i64::try_from(frac.len()).map_err(|_| too_long())?;
+        // Leading zeroes cost nothing: they add no magnitude to the coefficient.
+        let digits = || int.bytes().chain(frac.bytes());
+        if let Some(c) = accumulate(digits()) {
+            let e = i32::try_from(exponent).map_err(|_| too_long())?;
+            return Ok(Self::new(negative, c, e));
         }
-        scaled = scaled.checked_mul(Self::SCALE).ok_or_else(too_big)?;
+        // Too many digits to hold as written. Trailing zeroes are the only ones
+        // that can go without changing the value, so the written scale gives
+        // way before the value does — and an integer's zeroes come back when it
+        // is written out, since they are held in the exponent.
+        let all: Vec<u8> = digits().collect();
+        let kept = all.iter().rposition(|&b| b != b'0').map_or(0, |i| i + 1);
+        let c = accumulate(all[..kept].iter().copied()).ok_or_else(too_long)?;
+        let e = exponent + (all.len() - kept) as i64;
+        let e = i32::try_from(e).map_err(|_| too_long())?;
+        Ok(Self::new(negative, c, e))
+    }
+}
 
-        // Digits below 10^-18 are dropped rather than refused. The value space
-        // is unbounded, so a literal with thirty fractional digits *is* a
-        // decimal and a document carrying one is valid — refusing it would be
-        // a conformance failure, where losing precision the specification only
-        // requires 18 digits of is a documented limit. Overflow of the integer
-        // part above is different: that is range, not precision.
-        let mut unit = Self::SCALE;
-        for b in frac.bytes() {
-            if unit == 1 {
-                break;
-            }
-            unit /= 10;
-            scaled = scaled
-                .checked_add(i128::from(b - b'0') * unit)
-                .ok_or_else(too_big)?;
+/// The digits as one number, if it fits.
+fn accumulate(mut digits: impl Iterator<Item = u8>) -> Option<u128> {
+    digits.try_fold(0u128, |n, b| {
+        n.checked_mul(10)?.checked_add(u128::from(b - b'0'))
+    })
+}
+
+/// Writes `± coefficient × 10^exponent` in positional notation.
+fn write_decimal(
+    f: &mut fmt::Formatter<'_>,
+    negative: bool,
+    coefficient: u128,
+    exponent: i64,
+) -> fmt::Result {
+    if coefficient == 0 && exponent >= 0 {
+        return f.write_str("0");
+    }
+    if negative {
+        f.write_str("-")?;
+    }
+    let digits = coefficient.to_string();
+    if exponent >= 0 {
+        f.write_str(&digits)?;
+        for _ in 0..exponent {
+            f.write_str("0")?;
         }
-        Ok(Self(if negative { -scaled } else { scaled }))
+        return Ok(());
+    }
+    let scale = exponent.unsigned_abs() as usize;
+    if digits.len() > scale {
+        let (int, frac) = digits.split_at(digits.len() - scale);
+        write!(f, "{int}.{frac}")
+    } else {
+        write!(f, "0.{}{digits}", "0".repeat(scale - digits.len()))
+    }
+}
+
+impl PartialEq for Decimal {
+    fn eq(&self, other: &Self) -> bool {
+        self.normalized() == other.normalized()
+    }
+}
+
+impl Eq for Decimal {}
+
+impl std::hash::Hash for Decimal {
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        self.normalized().hash(state);
+    }
+}
+
+impl PartialOrd for Decimal {
+    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+impl Ord for Decimal {
+    /// Numerically, whatever the scale: `4.5` and `4.50` are equal.
+    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
+        use std::cmp::Ordering::Equal;
+        let (an, ac, ae) = self.normalized();
+        let (bn, bc, be) = other.normalized();
+        let sign = |negative: bool, c: u128| match (c, negative) {
+            (0, _) => 0i8,
+            (_, true) => -1,
+            _ => 1,
+        };
+        match sign(an, ac).cmp(&sign(bn, bc)) {
+            Equal if ac == 0 => Equal,
+            Equal => {
+                let magnitude = magnitude_cmp(ac, ae, bc, be);
+                if an { magnitude.reverse() } else { magnitude }
+            }
+            other => other,
+        }
+    }
+}
+
+/// Orders `a × 10^ae` against `b × 10^be`, both non-zero, without overflow.
+///
+/// Where the leading digit falls decides it, unless the two share a position;
+/// then the shorter coefficient is scaled up to the longer one's length, which
+/// can only overflow a `u128` when it is the larger of the two.
+fn magnitude_cmp(a: u128, ae: i64, b: u128, be: i64) -> std::cmp::Ordering {
+    use std::cmp::Ordering::{Equal, Greater, Less};
+    let (ad, bd) = (i64::from(a.ilog10()) + 1, i64::from(b.ilog10()) + 1);
+    match (ad + ae).cmp(&(bd + be)) {
+        Equal => {}
+        other => return other,
+    }
+    let widen = |x: u128, by: i64| {
+        u32::try_from(by)
+            .ok()
+            .and_then(|by| 10u128.checked_pow(by))
+            .and_then(|p| x.checked_mul(p))
+    };
+    match ad.cmp(&bd) {
+        Equal => a.cmp(&b),
+        Less => widen(a, bd - ad).map_or(Greater, |a| a.cmp(&b)),
+        Greater => widen(b, ad - bd).map_or(Less, |b| a.cmp(&b)),
     }
 }
 
@@ -127,24 +320,8 @@ impl fmt::Display for Decimal {
     /// The canonical form: no leading `+`, no insignificant zeroes, and no
     /// decimal point at all when the value is integral.
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        if self.0 < 0 {
-            f.write_str("-")?;
-        }
-        let magnitude = self.0.unsigned_abs();
-        let scale = Self::SCALE as u128;
-        write!(f, "{}", magnitude / scale)?;
-        let mut frac = magnitude % scale;
-        if frac == 0 {
-            return Ok(());
-        }
-        let mut digits = String::new();
-        let mut unit = scale;
-        while frac != 0 {
-            unit /= 10;
-            digits.push((b'0' + (frac / unit) as u8) as char);
-            frac %= unit;
-        }
-        write!(f, ".{digits}")
+        let (negative, c, e) = self.normalized();
+        write_decimal(f, negative, c, e)
     }
 }
 
@@ -681,7 +858,7 @@ fn take_seconds(s: &str) -> Result<(Subsecond, &str), String> {
         // XSD has no leap seconds: the value space stops at 59.
         return Err(format!("{whole} is not a number of seconds"));
     }
-    let mut scaled = Subsecond::from(whole) * Decimal::SCALE;
+    let mut scaled = Subsecond::from(whole) * ATTOS_PER_SECOND;
     let rest = match rest.strip_prefix('.') {
         None => rest,
         Some(frac) => {
@@ -689,7 +866,7 @@ fn take_seconds(s: &str) -> Result<(Subsecond, &str), String> {
             if digits == 0 {
                 return Err("the fractional seconds need at least one digit".into());
             }
-            let mut unit = Decimal::SCALE;
+            let mut unit = ATTOS_PER_SECOND;
             for b in frac[..digits].bytes() {
                 unit /= 10;
                 scaled += Subsecond::from(b - b'0') * unit;
@@ -706,13 +883,13 @@ fn take_seconds(s: &str) -> Result<(Subsecond, &str), String> {
 /// Writes seconds in the canonical form: two digits, and a fractional part
 /// only when there is one, with no trailing zeroes.
 fn write_seconds(f: &mut fmt::Formatter<'_>, scaled: Subsecond) -> fmt::Result {
-    write!(f, "{:02}", scaled / Decimal::SCALE)?;
-    let mut frac = scaled % Decimal::SCALE;
+    write!(f, "{:02}", scaled / ATTOS_PER_SECOND)?;
+    let mut frac = scaled % ATTOS_PER_SECOND;
     if frac == 0 {
         return Ok(());
     }
     let mut digits = String::new();
-    let mut unit = Decimal::SCALE;
+    let mut unit = ATTOS_PER_SECOND;
     while frac != 0 {
         unit /= 10;
         digits.push((b'0' + (frac / unit) as u8) as char);
@@ -763,7 +940,7 @@ impl Time {
 
     /// Seconds within the minute, which XSD allows a fractional part.
     pub fn second(self) -> Decimal {
-        Decimal::from_scaled(self.second)
+        Decimal::from_attoseconds(self.second)
     }
 
     pub fn timezone_offset(self) -> Option<TimezoneOffset> {
@@ -914,7 +1091,7 @@ impl DateTime {
 
     /// Seconds within the minute, which XSD allows a fractional part.
     pub fn second(self) -> Decimal {
-        Decimal::from_scaled(self.time.second)
+        Decimal::from_attoseconds(self.time.second)
     }
 
     pub fn timezone_offset(self) -> Option<TimezoneOffset> {
@@ -1145,12 +1322,12 @@ fn take_duration(s: &str, allow: &str) -> Result<DurationParts, String> {
         match at {
             0 => months += scale(12)?,
             1 => months += value,
-            2 => seconds += scale(86_400 * Decimal::SCALE)?,
-            4 => seconds += scale(3_600 * Decimal::SCALE)?,
-            5 => seconds += scale(60 * Decimal::SCALE)?,
+            2 => seconds += scale(86_400 * ATTOS_PER_SECOND)?,
+            4 => seconds += scale(3_600 * ATTOS_PER_SECOND)?,
+            5 => seconds += scale(60 * ATTOS_PER_SECOND)?,
             6 => {
-                seconds += scale(Decimal::SCALE)?;
-                let mut unit = Decimal::SCALE;
+                seconds += scale(ATTOS_PER_SECOND)?;
+                let mut unit = ATTOS_PER_SECOND;
                 for b in frac.bytes() {
                     if unit == 1 {
                         break;
@@ -1200,7 +1377,7 @@ fn write_duration(f: &mut fmt::Formatter<'_>, p: DurationParts) -> fmt::Result {
     }
 
     let total = p.seconds.unsigned_abs();
-    let scale = Decimal::SCALE as u128;
+    let scale = ATTOS_PER_SECOND as u128;
     let whole = total / scale;
     let days = whole / 86_400;
     if days > 0 {
@@ -1230,11 +1407,11 @@ fn write_duration(f: &mut fmt::Formatter<'_>, p: DurationParts) -> fmt::Result {
 /// The seconds of a duration: no leading zero, and a fraction only when there
 /// is one.
 fn write_seconds_field(f: &mut fmt::Formatter<'_>, scaled: i128) -> fmt::Result {
-    write!(f, "{}", scaled / Decimal::SCALE)?;
-    let mut frac = scaled % Decimal::SCALE;
+    write!(f, "{}", scaled / ATTOS_PER_SECOND)?;
+    let mut frac = scaled % ATTOS_PER_SECOND;
     if frac != 0 {
         let mut digits = String::new();
-        let mut unit = Decimal::SCALE;
+        let mut unit = ATTOS_PER_SECOND;
         while frac != 0 {
             unit /= 10;
             digits.push((b'0' + (frac / unit) as u8) as char);
@@ -1264,21 +1441,21 @@ macro_rules! duration {
             }
 
             pub fn days(self) -> i64 {
-                (self.0.seconds / Decimal::SCALE / 86_400) as i64
+                (self.0.seconds / ATTOS_PER_SECOND / 86_400) as i64
             }
 
             pub fn hours(self) -> i64 {
-                (self.0.seconds / Decimal::SCALE % 86_400 / 3_600) as i64
+                (self.0.seconds / ATTOS_PER_SECOND % 86_400 / 3_600) as i64
             }
 
             pub fn minutes(self) -> i64 {
-                (self.0.seconds / Decimal::SCALE % 3_600 / 60) as i64
+                (self.0.seconds / ATTOS_PER_SECOND % 3_600 / 60) as i64
             }
 
             /// Seconds beyond the whole minutes, with the fraction XSD allows.
             pub fn seconds(self) -> Decimal {
-                Decimal::from_scaled(
-                    self.0.seconds % (60 * Decimal::SCALE),
+                Decimal::from_attoseconds(
+                    self.0.seconds % (60 * ATTOS_PER_SECOND),
                 )
             }
 

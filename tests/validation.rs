@@ -1,6 +1,5 @@
 //! Validating values against a schema's own simple types.
 
-use xsdkit::atomic::Decimal;
 use xsdkit::validate::ValidationError;
 use xsdkit::*;
 
@@ -500,11 +499,15 @@ fn a_parsed_value_can_be_taken_apart_without_another_dependency() {
     assert_eq!((dur.days(), dur.hours(), dur.minutes()), (3, 4, 5));
     assert_eq!(dur.seconds().to_string(), "6.5");
 
-    // A decimal converts exactly, without going through a string.
-    let Value::Decimal(dec) = parse(Builtin::Decimal, "1.5").unwrap() else {
+    // A decimal converts exactly, without going through a string: the
+    // coefficient and exponent are the digits and the point, as written.
+    let Value::Decimal(dec) = parse(Builtin::Decimal, "1.50").unwrap() else {
         panic!("expected a decimal")
     };
-    assert_eq!(dec.to_i128_scaled(), 15 * (Decimal::SCALE / 10));
+    assert_eq!(
+        (dec.is_negative(), dec.coefficient(), dec.exponent()),
+        (false, 150, -2)
+    );
 
     let Value::Double(x) = parse(Builtin::Double, "-1.5E3").unwrap() else {
         panic!("expected a double")

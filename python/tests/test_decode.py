@@ -244,3 +244,30 @@ def test_an_absent_repeating_child_comes_after_what_was_present():
     # It had no position in the document, so it takes none among its siblings.
     assert list(d) == ["id", "total", "line"]
     assert d["line"] == []
+
+
+def test_a_decimal_keeps_the_scale_it_was_written_with():
+    s = build('<xs:element name="p" type="xs:decimal"/>')
+    d = s.decode(f'<p xmlns="{NS}">4.50</p>')
+    assert str(d) == "4.50"
+    assert d == Decimal("4.5")  # one value, however it was written
+    assert str(d * 2) == "9.00"  # and arithmetic keeps the precision
+
+
+def test_every_path_to_a_decimal_agrees():
+    xs = "http://www.w3.org/2001/XMLSchema"
+    s = build('<xs:element name="p" type="xs:decimal"/>')
+    doc = f'<p xmlns="{NS}">4.50</p>'
+    via_decode = s.decode(doc)
+    via_events = next(e.value for e in s.iter_typed(doc) if e.kind == "text")
+    via_type = s.type(xs, "decimal").validate("4.50")
+    assert str(via_decode) == str(via_events) == str(via_type) == "4.50"
+
+
+def test_a_list_of_decimals_keeps_each_scale():
+    s = build(
+        '<xs:simpleType name="L"><xs:list itemType="xs:decimal"/></xs:simpleType>'
+        '<xs:element name="p" type="tns:L"/>'
+    )
+    d = s.decode(f'<p xmlns="{NS}">1.0 2.50 3</p>')
+    assert [str(x) for x in d] == ["1.0", "2.50", "3"]

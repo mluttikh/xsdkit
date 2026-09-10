@@ -47,6 +47,9 @@ Values arrive in their **value space**, not as strings to re-parse: a
 `xs:decimal` is a `Decimal`, a `xs:date` is a `datetime.date`, a
 `xs:positiveInteger` is an `int`. That falls out of decoding a typed PSVI
 rather than a parse tree — the conversion already happened during validation.
+A decimal keeps the scale it was written with: `4.50` decodes to
+`Decimal('4.50')`, which equals `Decimal('4.5')` as the schema says it must,
+and still prints — and multiplies — the way the document wrote it.
 
 ## The mapping
 
