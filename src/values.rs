@@ -92,8 +92,8 @@ impl Value {
             (Decimal(a), Decimal(b)) => a.partial_cmp(b),
             (PrecisionDecimal(a), PrecisionDecimal(b)) => a.partial_cmp(b),
             (Integer(a), Integer(b)) => a.partial_cmp(b),
-            (Decimal(a), Integer(b)) => a.partial_cmp(&crate::atomic::Decimal::from_integer(*b)?),
-            (Integer(a), Decimal(b)) => crate::atomic::Decimal::from_integer(*a)?.partial_cmp(b),
+            (Decimal(a), Integer(b)) => a.partial_cmp(&crate::atomic::Decimal::from_integer(*b)),
+            (Integer(a), Decimal(b)) => crate::atomic::Decimal::from_integer(*a).partial_cmp(b),
             (Float(a), Float(b)) => a.partial_cmp(b),
             (Double(a), Double(b)) => a.partial_cmp(b),
             (DateTime(a), DateTime(b)) => a.partial_cmp(b),
@@ -170,7 +170,7 @@ fn instant(reference: (i128, i128), d: &crate::atomic::Duration) -> Option<(i128
     // The seconds are fixed point scaled by 10^18. Splitting at the second
     // with `div_euclid` keeps the remainder non-negative, which is what makes
     // comparing the pair lexicographically the same as comparing the instants.
-    const SCALE: i128 = crate::atomic::Decimal::SCALE;
+    const SCALE: i128 = crate::atomic::ATTOS_PER_SECOND;
     let scaled = d.total_seconds();
 
     let seconds = day

@@ -94,7 +94,7 @@ instead of discarding it, as a **PSVI**: a post-schema-validation infoset.
     issued   date      datetime.date(2024, 12, 1)
     price    Decimal   Decimal('19.95')
     note     str       'backordered'
-    price    Decimal   Decimal('4.5')
+    price    Decimal   Decimal('4.50')
     ```
 
 === "Rust"
@@ -129,7 +129,7 @@ said and `datetime.strptime` does not implement `xs:date`.
 | `xs:string` and its derivatives | `str` |
 | `xs:boolean` | `bool` |
 | `xs:int`, `xs:integer`, `xs:long`, … | `int` |
-| `xs:decimal` | `decimal.Decimal` |
+| `xs:decimal` | `decimal.Decimal`, in the scale it was written: `4.50` stays `4.50` |
 | `xs:float`, `xs:double` | `float` |
 | `xs:hexBinary`, `xs:base64Binary` | `bytes` |
 | `xs:dateTime` | `datetime.datetime` |

@@ -2982,10 +2982,14 @@ fn value_to_py<'py>(py: Python<'py>, v: &Value) -> PyResult<Bound<'py, PyAny>> {
         Value::Integer(n) => n.into_bound_py_any(py),
         Value::Float(f) => f32::from(*f).into_bound_py_any(py),
         Value::Double(d) => f64::from(*d).into_bound_py_any(py),
+        // The scale it was written with, not the canonical form. `4.50` and
+        // `4.5` are one `xs:decimal` and compare equal as Python `Decimal`s
+        // too, but a price written `4.50` is meant to be shown that way, and
+        // arithmetic on it keeps the precision: `4.50 * 2` is `9.00`.
         Value::Decimal(d) => py
             .import("decimal")?
             .getattr("Decimal")?
-            .call1((d.to_string(),)),
+            .call1((d.as_written().to_string(),)),
         Value::HexBinary(b) | Value::Base64Binary(b) => PyBytes::new(py, b).into_bound_py_any(py),
         Value::DateTime(dt) => {
             let (sec, micro) = split_seconds(&dt.second().to_string());
