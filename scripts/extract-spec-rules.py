@@ -15,7 +15,7 @@ and says nothing about the rest.
     scripts/extract-spec-rules.py --check     # diff it against the committed file
 
 The RECs are frozen, so this is not wired into CI: it is what you run when you
-suspect an erratum, or when adding a spec version. `tests/spec_rules.rs` is the
+suspect an erratum, or when adding a spec version. `tests/spec_rules/main.rs` is the
 gate, and it needs no network.
 """
 

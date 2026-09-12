@@ -23,6 +23,17 @@
 //! a named rule — in which case the table says which, and the rule's status
 //! probably just changed — or it does not, in which case saying why is the
 //! useful part.
+//!
+//! # The corpus
+//!
+//! [`fixtures`] is the other half: per rule, the smallest schema that violates
+//! it and a near-miss that must still load. The W3C suite cannot supply this —
+//! about 220 negative schema cases per version, shared among 66 Schema
+//! Component Constraints — so a rule can be enforced by a check nobody has
+//! ever seen fire. The `fixtures` column of the table says which rules have
+//! one, and the tests here keep the column and the corpus in step.
+
+mod fixtures;
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
@@ -37,6 +48,9 @@ struct Rule {
     status: String,
     site: String,
     note: String,
+    /// Whether this crate has its own fixtures for the rule, kept in step with
+    /// [`fixtures::COVERED`].
+    fixtures: bool,
 }
 
 impl Rule {
@@ -58,7 +72,7 @@ fn rules() -> Vec<Rule> {
         .filter(|l| !l.is_empty() && !l.starts_with('#'))
         .map(|l| {
             let f: Vec<&str> = l.split('\t').collect();
-            assert_eq!(f.len(), 7, "expected 7 columns, got {}: {l}", f.len());
+            assert_eq!(f.len(), 8, "expected 8 columns, got {}: {l}", f.len());
             Rule {
                 spec: f[0].to_string(),
                 anchor: f[1].to_string(),
@@ -67,6 +81,11 @@ fn rules() -> Vec<Rule> {
                 status: f[4].to_string(),
                 site: f[5].to_string(),
                 note: f[6].to_string(),
+                fixtures: match f[7] {
+                    "fixtures" => true,
+                    "-" => false,
+                    other => panic!("column 8 is `fixtures` or `-`, got `{other}`"),
+                },
             }
         })
         .collect()
@@ -74,21 +93,15 @@ fn rules() -> Vec<Rule> {
 
 /// Codes that exist and nothing emits.
 ///
-/// Found by the test below rather than by reading: `XSD1102` and `XSD1103`
-/// have never been emitted. The chameleon-include machinery in `src/load.rs`
-/// is there and works; what is missing is the *error* half — an include whose
-/// target namespace conflicts with the including document, and an import whose
-/// document does not define the namespace it named. Both are Schema
-/// Representation Constraints, both are cheap, and the code to report them is
-/// already declared, which is the most anyone can say for an unimplemented
-/// rule.
+/// Empty, and worth keeping empty. It was found non-empty by the test below on
+/// its first run: `XSD1102` and `XSD1103` had been declared since the loader
+/// was written and were never emitted — the chameleon-include machinery was
+/// there and the error half was not. Both are now implemented, with fixtures
+/// in [`fixtures`], and the suite gained three cases for it.
 ///
-/// Listed rather than tolerated: an entry here is a promise in the enum that
-/// the implementation does not keep, so the list should only ever shrink.
-const DEFINED_BUT_UNREACHABLE: &[(DiagCode, &str)] = &[
-    (DiagCode::IncludeNamespaceMismatch, "structures#src-include"),
-    (DiagCode::ImportNamespaceMismatch, "structures#src-import"),
-];
+/// An entry here is a promise in the enum that the implementation does not
+/// keep, so the list should only ever shrink.
+const DEFINED_BUT_UNREACHABLE: &[(DiagCode, &str)] = &[];
 
 /// The codes that are not an XSD rule, and what they answer to instead.
 ///
@@ -294,6 +307,51 @@ fn every_diagnostic_code_is_attributable() {
          answers to instead.",
         orphans.join("\n")
     );
+}
+
+/// The fixture corpus and the table's `fixtures` column say the same thing.
+///
+/// Two directions, and both matter. A rule with fixtures that the column does
+/// not mark makes the published page understate the corpus; a rule the column
+/// marks with no fixtures behind it overstates it, which is worse.
+#[test]
+fn the_fixture_corpus_matches_the_table() {
+    let rules = rules();
+    let covered: BTreeSet<&str> = fixtures::COVERED.iter().copied().collect();
+    assert_eq!(
+        covered.len(),
+        fixtures::COVERED.len(),
+        "a rule is listed twice in fixtures::COVERED"
+    );
+    let marked: BTreeSet<String> = rules
+        .iter()
+        .filter(|r| r.fixtures)
+        .map(|r| r.id())
+        .collect();
+
+    for id in &covered {
+        let r = rules
+            .iter()
+            .find(|r| r.id() == **id)
+            .unwrap_or_else(|| panic!("fixtures::COVERED names {id}, which is not a rule"));
+        // A passing negative fixture for a rule nothing enforces is a
+        // contradiction: either the fixture does not assert what it claims, or
+        // the status is stale.
+        assert_ne!(
+            r.status, "no",
+            "{id} has fixtures but the table says nothing enforces it"
+        );
+        assert!(
+            r.fixtures,
+            "{id} has fixtures; set its `fixtures` column in spec-rules.tsv"
+        );
+    }
+    for id in &marked {
+        assert!(
+            covered.contains(id.as_str()),
+            "{id} is marked as having fixtures, but fixtures::COVERED does not list it"
+        );
+    }
 }
 
 /// The counts in the file's own header have to be the counts in the file.

@@ -310,8 +310,12 @@ impl SchemaSetBuilder {
         for s in &self.sources {
             match s {
                 Source::Uri(u) => loader.load_uri(u, None),
-                Source::Text { text, uri } => loader.load_text(text, uri, None),
-                Source::Bytes { bytes, uri } => loader.load_bytes(bytes, uri, None),
+                Source::Text { text, uri } => {
+                    loader.load_text(text, uri, crate::load::Expected::Anything)
+                }
+                Source::Bytes { bytes, uri } => {
+                    loader.load_bytes(bytes, uri, crate::load::Expected::Anything)
+                }
             }
         }
         let (schemas, diagnostics) = compile::compile(loader, self.mode);

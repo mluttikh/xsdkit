@@ -502,7 +502,7 @@ impl<'r> Loader<'r> {
 
     pub(crate) fn load_uri(&mut self, location: &str, base: Option<&str>) {
         match self.resolver.resolve(location, base) {
-            Ok((uri, bytes)) => self.load_bytes(&bytes, &uri, None),
+            Ok((uri, bytes)) => self.load_bytes(&bytes, &uri, Expected::Anything),
             Err(e) => self.diags.push(
                 Diagnostic::error(DiagCode::UnresolvedSchemaLocation, e)
                     .with_help("add a search path, or supply a custom Resolver"),
@@ -514,14 +514,14 @@ impl<'r> Loader<'r> {
     ///
     /// An encoding failure is reported as an encoding failure, not as a
     /// missing file — the file was found and read perfectly well.
-    pub(crate) fn load_bytes(&mut self, bytes: &[u8], uri: &str, coerce_ns: Option<Namespace>) {
+    pub(crate) fn load_bytes(&mut self, bytes: &[u8], uri: &str, expected: Expected<'_>) {
         match crate::encoding::decode_document(bytes, uri) {
-            Ok(d) => self.load_text(&d.text, uri, coerce_ns),
+            Ok(d) => self.load_text(&d.text, uri, expected),
             Err(diag) => self.diags.push(diag),
         }
     }
 
-    pub(crate) fn load_text(&mut self, text: &str, uri: &str, coerce_ns: Option<Namespace>) {
+    pub(crate) fn load_text(&mut self, text: &str, uri: &str, expected: Expected<'_>) {
         if self.depth > MAX_DEPTH {
             self.diags.push(Diagnostic::error(
                 DiagCode::CircularDefinition,
@@ -576,6 +576,8 @@ impl<'r> Loader<'r> {
         }
 
         let declared_ns = root.attribute("targetNamespace");
+        self.check_expected_namespace(&expected, declared_ns, uri);
+        let coerce_ns = expected.coerced_namespace();
         let target_ns = match (declared_ns, coerce_ns) {
             // Chameleon include: no targetNamespace of its own, so the
             // includer's namespace is adopted for every component here.
@@ -682,7 +684,14 @@ impl<'r> Loader<'r> {
         match self.resolver.resolve(loc, Some(&ctx.uri)) {
             // The includer's namespace is passed down so a document with no
             // targetNamespace of its own is absorbed into it.
-            Ok((uri, bytes)) => self.load_bytes(&bytes, &uri, ctx.target_ns),
+            Ok((uri, bytes)) => self.load_bytes(
+                &bytes,
+                &uri,
+                Expected::Including {
+                    ns: ctx.target_ns,
+                    at: Span::new(&ctx.uri, line_of(ctx, node)),
+                },
+            ),
             Err(e) => self.push_resolution_failure(e, node, ctx),
         }
     }
@@ -792,7 +801,14 @@ impl<'r> Loader<'r> {
         };
         match self.resolver.resolve(loc, Some(&ctx.uri)) {
             Ok((uri, bytes)) => {
-                self.load_bytes(&bytes, &uri, ctx.target_ns);
+                self.load_bytes(
+                    &bytes,
+                    &uri,
+                    Expected::Including {
+                        ns: ctx.target_ns,
+                        at: Span::new(&ctx.uri, line_of(ctx, node)),
+                    },
+                );
                 true
             }
             Err(e) => {
@@ -1030,9 +1046,83 @@ impl<'r> Loader<'r> {
             return;
         };
         match self.resolver.resolve(loc, Some(&ctx.uri)) {
-            Ok((uri, bytes)) => self.load_bytes(&bytes, &uri, None),
+            Ok((uri, bytes)) => self.load_bytes(
+                &bytes,
+                &uri,
+                Expected::Imported {
+                    ns: node.attribute("namespace"),
+                    at: Span::new(&ctx.uri, line_of(ctx, node)),
+                },
+            ),
             Err(e) => self.push_resolution_failure(e, node, ctx),
         }
+    }
+
+    /// The two composition rules about what a referenced document may declare.
+    ///
+    /// Both codes for this have existed since the loader did and neither was
+    /// ever emitted: the chameleon machinery below was written and the error
+    /// half was not. A schema that includes a document belonging to somebody
+    /// else's namespace is not a schema with a surprising component in it, it
+    /// is a mistake — and silently adopting the other namespace's components
+    /// is the worst of the available answers.
+    fn check_expected_namespace(
+        &mut self,
+        expected: &Expected<'_>,
+        declared: Option<&str>,
+        uri: &str,
+    ) {
+        // Intern first, format second: the display helper borrows the interner
+        // and `opt_namespace` needs it mutably.
+        let (wanted, at) = match expected {
+            Expected::Anything => return,
+            Expected::Including { ns, at } => (*ns, at),
+            Expected::Imported { ns, at } => (ns.map(|n| self.names.namespace(n)), at),
+        };
+        let declared_ns = declared.and_then(|d| self.names.opt_namespace(d));
+
+        // Include clause 2: the same namespace (2.1), neither has one (2.2),
+        // or the included document has none and is absorbed (2.3). Only a
+        // document declaring a namespace of its own can disagree.
+        let including = matches!(expected, Expected::Including { .. });
+        if including && declared.is_none() {
+            return;
+        }
+        if declared_ns == wanted {
+            return;
+        }
+
+        let name = |ns: Option<Namespace>| match ns {
+            Some(n) => format!("`{}`", self.names.resolve_ns(n)),
+            None => "no namespace".to_string(),
+        };
+        let (code, what, help) = if including {
+            (
+                DiagCode::IncludeNamespaceMismatch,
+                "including schema has",
+                "`xs:include` is for a document of the same namespace, or of none at \
+                 all; use `xs:import` for another namespace",
+            )
+        } else {
+            (
+                DiagCode::ImportNamespaceMismatch,
+                "import named",
+                "the `namespace` on `xs:import` has to be the one the document declares",
+            )
+        };
+        self.diags.push(
+            Diagnostic::error(
+                code,
+                format!(
+                    "the document declares {}, but the {what} {}",
+                    name(declared_ns),
+                    name(wanted)
+                ),
+            )
+            .at(at.clone())
+            .at(Span::labelled(uri, 0, "declared here"))
+            .with_help(help),
+        );
     }
 
     fn push_resolution_failure(&mut self, e: String, node: roxmltree::Node, ctx: &DocCtx) {
@@ -2387,6 +2477,43 @@ impl<'r> Loader<'r> {
 // ---------------------------------------------------------------------------
 // Free helpers
 // ---------------------------------------------------------------------------
+
+/// What the document that named this one requires of its target namespace.
+///
+/// `xs:include` and `xs:import` both pull in another document, and both
+/// constrain what that document may declare — differently, and in rules that
+/// can only be checked once the referenced document's root has been read.
+/// Carrying the expectation into the load is what puts both checks in one
+/// place instead of at four call sites.
+pub(crate) enum Expected<'a> {
+    /// A document the caller supplied directly. It may declare anything.
+    Anything,
+    /// Named by `xs:include`, `xs:redefine` or `xs:override`, from a document
+    /// whose target namespace is `ns`.
+    ///
+    /// *Inclusion Constraints and Semantics* clause 2: the included document
+    /// must declare the same namespace, or none at all — the second being a
+    /// chameleon include, where it is absorbed into the includer's namespace.
+    Including { ns: Option<Namespace>, at: Span },
+    /// Named by `xs:import`, which said `namespace="ns"` or said nothing.
+    ///
+    /// *Import Constraints and Semantics* clause 3: the imported document
+    /// must declare exactly that namespace, and none if the import named
+    /// none.
+    Imported { ns: Option<&'a str>, at: Span },
+}
+
+impl Expected<'_> {
+    /// The namespace an unqualified document is absorbed into, if any. Only an
+    /// include does that; an import of a no-namespace document leaves it in no
+    /// namespace.
+    fn coerced_namespace(&self) -> Option<Namespace> {
+        match self {
+            Expected::Including { ns, .. } => *ns,
+            Expected::Anything | Expected::Imported { .. } => None,
+        }
+    }
+}
 
 /// Schema Representation Constraints: the rules answerable from the document
 /// alone, with nothing resolved and no other document consulted.

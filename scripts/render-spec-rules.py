@@ -43,9 +43,16 @@ def rows():
         if not line.strip() or line.startswith("#"):
             continue
         f = line.split("\t")
-        if len(f) != 7:
-            sys.exit(f"expected 7 columns: {line}")
-        out.append(dict(zip(["spec", "anchor", "kind", "name", "status", "site", "note"], f)))
+        if len(f) != 8:
+            sys.exit(f"expected 8 columns: {line}")
+        out.append(
+            dict(
+                zip(
+                    ["spec", "anchor", "kind", "name", "status", "site", "note", "fixtures"],
+                    f,
+                )
+            )
+        )
     return out
 
 
@@ -92,8 +99,18 @@ def render(rs) -> str:
     L.append(
         "The rule columns are generated from the Recommendations\n"
         "(`scripts/extract-spec-rules.py`); the judgement columns are maintained by\n"
-        "hand and gated by `tests/spec_rules.rs`, which requires every claim to name\n"
-        "a site and every diagnostic code to be attributable to a row here."
+        "hand and gated by `tests/spec_rules/main.rs`, which requires every claim to\n"
+        "name a site and every diagnostic code to be attributable to a row here."
+    )
+    L.append("")
+    L.append(
+        "A ✓ in the last column means this crate has its **own** fixtures for the\n"
+        "rule — the smallest schema that violates it, and a near-miss that must still\n"
+        "load — in `tests/spec_rules/fixtures.rs`. %d of %d rules so far. The W3C\n"
+        "suite cannot supply those: it offers about 220 negative schema cases per\n"
+        "version to share among 66 Schema Component Constraints, so a rule can be\n"
+        "enforced by a check nobody has ever seen fire." % (
+            sum(1 for r in rs if r["fixtures"] == "fixtures"), n)
     )
 
     for spec in ("structures", "datatypes"):
@@ -110,8 +127,8 @@ def render(rs) -> str:
             L.append("")
             L.append("### %s%s" % (kind, "" if kind.endswith("s") else "s"))
             L.append("")
-            L.append("| Rule | Enforced | Where, and what is missing |")
-            L.append("|---|---|---|")
+            L.append("| Rule | Enforced | Where, and what is missing | Fixtures |")
+            L.append("|---|---|---|---|")
             for r in sorted(here, key=lambda r: r["name"].lower()):
                 link = "[%s](%s#%s)" % (r["name"], REC[r["spec"]], r["anchor"])
                 where = ""
@@ -119,7 +136,15 @@ def render(rs) -> str:
                     where = "`%s`" % r["site"]
                 if r["note"]:
                     where = ("%s — %s" % (where, r["note"])) if where else r["note"]
-                L.append("| %s | %s | %s |" % (link, MARK[r["status"]], where or "—"))
+                L.append(
+                    "| %s | %s | %s | %s |"
+                    % (
+                        link,
+                        MARK[r["status"]],
+                        where or "—",
+                        "✓" if r["fixtures"] == "fixtures" else "",
+                    )
+                )
     L.append("")
     return "\n".join(L)
 

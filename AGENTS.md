@@ -438,7 +438,7 @@ over both would be an average of two different languages:
 | | XSD 1.0 | XSD 1.1 |
 |---|---|---|
 | valid schemas accepted | **99.8%** (4,563/4,573) | **99.8%** (5,238/5,248) |
-| invalid schemas rejected | **77.4%** (171/221) | **67.2%** (315/469) |
+| invalid schemas rejected | **77.4%** (171/221) | **67.8%** (318/469) |
 
 The single figure this replaced was 66.5%, and the difference is not a change
 in the code: it was an average over a mix of 1.0 and 1.1 runs, which is a
@@ -481,8 +481,21 @@ implement next:
 Which *rules* are enforced is a separate question from either percentage, and
 `docs/project/spec-rules.md` is the answer: all 143 named rules in the two
 RECs, generated from Appendix B of each, with what this crate does about them.
-`tests/spec_rules.rs` gates it — every claim names a site, and every
-`DiagCode` has to be attributable to a rule.
+`tests/spec_rules/main.rs` gates it — every claim names a site, and every
+`DiagCode` has to be attributable to a rule. That join is not decoration: it
+found `XSD1102` and `XSD1103` declared and never emitted, which is how
+*Inclusion Constraints and Semantics* and *Import Constraints and Semantics*
+came to be implemented.
+
+**Our own negative corpus lives beside it.** `tests/spec_rules/fixtures.rs`
+holds, per rule, the smallest schema that violates it and a near-miss that must
+still load — the second being the half that catches a check written too
+broadly. The W3C suite cannot supply this: about 220 negative schema cases per
+version, shared among 66 Schema Component Constraints, so a rule can be
+enforced by a check nobody has ever seen fire. Adding a pair means adding the
+rule id to `fixtures::COVERED` and setting the `fixtures` column in the table;
+the gate requires the two to agree, and requires the rule not to be one the
+table says is unenforced.
 
 The instance half — 21,671 documents, 41,994 runs across the two versions —
 splits the same way:
