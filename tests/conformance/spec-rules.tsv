@@ -30,7 +30,7 @@
 # same thing as coverage of the code: 88.9% of regions says nothing about a
 # rule nobody wrote. The counts below are what it says instead.
 #
-# 143 rules: 93 yes, 29 partial, 17 no, 4 by-construction
+# 143 rules: 94 yes, 28 partial, 17 no, 4 by-construction
 #
 datatypes	con-date-day	Constraint	Day-of-month Representations	yes	src/atomic.rs	as above for xs:date	-
 datatypes	con-date-dayValue	Constraint	Day-of-month Values	yes	src/atomic.rs	as above for xs:date	-
@@ -101,7 +101,7 @@ structures	cos-ct-extends	Schema Component Constraint	Derivation Valid (Extensio
 structures	cos-element-consistent	Schema Component Constraint	Element Declarations Consistent	partial	src/instance.rs	the 1.1 dynamic form, reported when a document walks into the clash; the 1.0 static form is not checked	-
 structures	cos-equiv-derived-ok-rec	Schema Component Constraint	Substitution Group OK (Transitive)	partial	src/compile.rs	the closure honours abstract heads; the type-derivation and disallowed-substitutions clauses are not checked	-
 structures	cos-group-emptiable	Schema Component Constraint	Particle Emptiable	yes	src/restriction.rs	a definition rather than a constraint, used by the derivation rules	-
-structures	cos-nonambig	Schema Component Constraint	Unique Particle Attribution	partial	src/content.rs	automaton determinism, so every sequence and choice model; an xs:all gets per-member counters rather than an automaton and is not checked (saxonData/All all240-all243)	-
+structures	cos-nonambig	Schema Component Constraint	Unique Particle Attribution	yes	src/content.rs	automaton determinism for sequence and choice, and pairwise member overlap for xs:all, which has counters rather than an automaton; a model widened past the position budget reports a warning rather than an error, which only ever over-reports	fixtures
 structures	cos-ns-subset	Schema Component Constraint	Wildcard Subset	yes	src/restriction.rs	Any:Any NSSubset	-
 structures	cos-particle-extend	Schema Component Constraint	Particle Valid (Extension)	partial	src/restriction.rs	a definition used by Derivation Valid (Extension), which is itself unimplemented	-
 structures	cos-seq-range	Schema Component Constraint	Effective Total Range (all and sequence)	yes	src/restriction.rs	the effective total range, as the helper Particle Emptiable and the occurrence rules need	-

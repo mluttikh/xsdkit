@@ -11,8 +11,8 @@ for what `xsdkit` does about each entry.
 
 | enforced | rules |
 |---|---|
-| yes | 93 |
-| in part | 29 |
+| yes | 94 |
+| in part | 28 |
 | no | 17 |
 | nothing to enforce | 4 |
 
@@ -36,14 +36,14 @@ name a site and every diagnostic code to be attributable to a row here.
 
 A ✓ in the last column means this crate has its **own** fixtures for the
 rule — the smallest schema that violates it, and a near-miss that must still
-load — in `tests/spec_rules/fixtures.rs`. 3 of 143 rules so far. The W3C
+load — in `tests/spec_rules/fixtures.rs`. 4 of 143 rules so far. The W3C
 suite cannot supply those: it offers about 220 negative schema cases per
 version to share among 66 Schema Component Constraints, so a rule can be
 enforced by a check nobody has ever seen fire.
 
 ## Part 1: Structures
 
-92 rules, of which 49 enforced.
+92 rules, of which 50 enforced.
 
 ### Schema Component Constraints
 
@@ -84,7 +84,7 @@ enforced by a check nobody has ever seen fire.
 | [Type Alternative Properties Correct](https://www.w3.org/TR/xmlschema11-1/#ta-props-correct) | **no** | conditional type assignment is stored and never evaluated; needs XPath Valid |  |
 | [Type Derivation OK (Complex)](https://www.w3.org/TR/xmlschema11-1/#cos-ct-derived-ok) | partial | `src/derivation.rs` — the final clause; used by xsi:type in src/instance.rs |  |
 | [Type Derivation OK (Simple)](https://www.w3.org/TR/xmlschema11-1/#cos-st-derived-ok) | partial | `src/derivation.rs` — the final clause |  |
-| [Unique Particle Attribution](https://www.w3.org/TR/xmlschema11-1/#cos-nonambig) | partial | `src/content.rs` — automaton determinism, so every sequence and choice model; an xs:all gets per-member counters rather than an automaton and is not checked (saxonData/All all240-all243) |  |
+| [Unique Particle Attribution](https://www.w3.org/TR/xmlschema11-1/#cos-nonambig) | yes | `src/content.rs` — automaton determinism for sequence and choice, and pairwise member overlap for xs:all, which has counters rather than an automaton; a model widened past the position budget reports a warning rather than an error, which only ever over-reports | ✓ |
 | [Wildcard Properties Correct](https://www.w3.org/TR/xmlschema11-1/#w-props-correct) | partial | `src/load.rs` — namespace beside notNamespace is rejected; the disallowed-names clause is not checked |  |
 | [Wildcard Subset](https://www.w3.org/TR/xmlschema11-1/#cos-ns-subset) | yes | `src/restriction.rs` — Any:Any NSSubset |  |
 | [xmlns Not Allowed](https://www.w3.org/TR/xmlschema11-1/#no-xmlns) | **no** | an attribute declaration named xmlns is accepted |  |
