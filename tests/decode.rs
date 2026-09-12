@@ -92,7 +92,7 @@ fn repeated_children_keep_document_order() {
     let skus: Vec<_> = d
         .children()
         .iter()
-        .filter(|c| c.name == item)
+        .filter(|c| c.name.qname() == Some(item))
         .map(|c| {
             c.attribute(s.qname(None, "sku").unwrap())
                 .unwrap()
@@ -242,6 +242,20 @@ fn a_skipped_wildcard_subtree_does_not_swallow_the_document() {
     );
     assert_eq!(d.children().len(), 2, "the wildcard child belongs to root");
     assert_eq!(d.children()[0].text(), "x");
+
+    // And it is named. This assertion could not be written before
+    // `PsviName`: the wildcard child decoded under the *parent's* name, and
+    // then under no name at all. A document with an extension point decoded
+    // to a child keyed `""`, which the Python bindings handed a user as an
+    // empty dictionary key.
+    assert_eq!(
+        s.display_psvi_name(&d.children()[1].name),
+        "{urn:other}junk"
+    );
+    // The schema never declared it, so it has no `QName` — which is how a
+    // consumer tells the two apart rather than by comparing strings.
+    assert_eq!(d.children()[1].name.qname(), None);
+    assert!(d.children()[0].name.qname().is_some());
 }
 
 #[test]

@@ -14,7 +14,6 @@
 //! contradiction.
 
 use fxhash::FxHashMap;
-use xsdkit::QName;
 use xsdkit::instance::PsviEvent;
 use xsdkit::{Conformance, DiagCode, Diagnostics, Resolver, SchemaSetBuilder, Schemas, Version};
 
@@ -708,12 +707,7 @@ fn sic_elt_decl_hands_over_the_governing_declaration() {
                 name, declaration, ..
             } = ev
             {
-                let shown = if name == QName::UNKNOWN {
-                    "<not in the schema>".to_string()
-                } else {
-                    s.display_name(name)
-                };
-                seen.push((shown, declaration.is_some()));
+                seen.push((s.display_psvi_name(&name), declaration.is_some()));
             }
         },
     );
@@ -722,16 +716,16 @@ fn sic_elt_decl_hands_over_the_governing_declaration() {
     // is not, and says so by having no declaration rather than by being
     // absent from the stream.
     //
-    // Its *name* is `UNKNOWN` rather than `{urn:other}anything`: a name the
-    // schema never interned cannot be spelled as a `QName` after compilation.
-    // Writing this fixture is what found the event reporting the parent's name
-    // there instead — `{urn:t}doc`, confidently wrong.
+    // And it is named, though the schema has no symbols for that name:
+    // `PsviName::Foreign` carries what the document spelled. Writing this
+    // fixture is what found the event reporting the parent's name there
+    // instead — `{urn:t}doc`, confidently wrong.
     assert_eq!(
         seen,
         vec![
             ("{urn:t}doc".to_string(), true),
             ("{urn:t}known".to_string(), true),
-            ("<not in the schema>".to_string(), false),
+            ("{urn:other}anything".to_string(), false),
         ]
     );
 }
@@ -835,7 +829,7 @@ fn sic_elt_type_reports_the_type_in_force_and_where_it_came_from() {
                 ..
             } = ev
             {
-                if s.display_name(name) == "{urn:t}doc" {
+                if s.display_psvi_name(&name) == "{urn:t}doc" {
                     let ty = s[type_id].name().map(|n| s.display_name(n));
                     seen.push((ty, type_from_instance));
                 }

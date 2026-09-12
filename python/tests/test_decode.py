@@ -203,6 +203,10 @@ def test_a_skipped_wildcard_does_not_swallow_the_document():
     )
     assert d is not None, "a valid document must not decode to None"
     assert d["a"] == "x"
+    # The wildcard child keeps its full name. This could not be asserted
+    # before PsviName: the schema never declared `o:junk`, so it had no
+    # QName, and the key came out as the parent's name and then as "".
+    assert "{urn:other}junk" in d, sorted(d)
 
 
 def test_decode_errors_carry_their_diagnostics():

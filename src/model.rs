@@ -1098,6 +1098,19 @@ impl Schemas {
         self.names.display(q)
     }
 
+    /// A [`crate::names::PsviName`] in Clark notation, interned or not.
+    ///
+    /// The counterpart to [`Schemas::display_name`] for a name that came from a
+    /// document rather than from the schema, and the reason a consumer can show
+    /// an element a wildcard admitted without knowing whether the schema has
+    /// ever heard of it.
+    pub fn display_psvi_name(&self, name: &crate::names::PsviName) -> String {
+        match name.namespace(&self.names) {
+            Some(ns) => format!("{{{ns}}}{}", name.local(&self.names)),
+            None => name.local(&self.names).to_string(),
+        }
+    }
+
     /// Every element in `head`'s substitution group, `head` included when it
     /// is not abstract.
     ///

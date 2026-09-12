@@ -69,7 +69,7 @@ fuzz_target!(|data: &str| {
             attributes,
             ..
         } => {
-            let _ = s.display_name(name);
+            let _ = s.display_psvi_name(&name);
             let _ = declaration.map(|d| s[d].name);
             let _ = s[type_id].name();
             for a in attributes {
@@ -94,7 +94,7 @@ fuzz_target!(|data: &str| {
         PsviEvent::EndElement {
             name, declaration, ..
         } => {
-            let _ = s.display_name(name);
+            let _ = s.display_psvi_name(&name);
             let _ = declaration.map(|d| s[d].name);
         }
         // `PsviEvent` is `#[non_exhaustive]`; a new variant should not be a
