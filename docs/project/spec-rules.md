@@ -11,9 +11,9 @@ for what `xsdkit` does about each entry.
 
 | enforced | rules |
 |---|---|
-| yes | 94 |
-| in part | 28 |
-| no | 17 |
+| yes | 89 |
+| in part | 31 |
+| no | 19 |
 | nothing to enforce | 4 |
 
 **This is not code coverage, and the difference is the point.** Region
@@ -36,14 +36,14 @@ name a site and every diagnostic code to be attributable to a row here.
 
 A ✓ in the last column means this crate has its **own** fixtures for the
 rule — the smallest schema that violates it, and a near-miss that must still
-load — in `tests/spec_rules/fixtures.rs`. 4 of 143 rules so far. The W3C
+load — in `tests/spec_rules/fixtures.rs`. 10 of 143 rules so far. The W3C
 suite cannot supply those: it offers about 220 negative schema cases per
 version to share among 66 Schema Component Constraints, so a rule can be
 enforced by a check nobody has ever seen fire.
 
 ## Part 1: Structures
 
-92 rules, of which 50 enforced.
+92 rules, of which 45 enforced.
 
 ### Schema Component Constraints
 
@@ -140,19 +140,19 @@ enforced by a check nobody has ever seen fire.
 
 | Rule | Enforced | Where, and what is missing | Fixtures |
 |---|---|---|---|
-| [Assessment Outcome (Attribute)](https://www.w3.org/TR/xmlschema11-1/#sic-a-outcome) | yes | `src/instance.rs` — as above for attributes |  |
-| [Assessment Outcome (Element)](https://www.w3.org/TR/xmlschema11-1/#sic-e-outcome) | yes | `src/instance.rs` — the ValidationReport says whether each element was assessed and with what result |  |
-| [Attribute Declaration](https://www.w3.org/TR/xmlschema11-1/#sic-attr-decl) | yes | `src/instance.rs` — the governing attribute declaration |  |
-| [Attribute Default Value](https://www.w3.org/TR/xmlschema11-1/#sic-attrDefault) | yes | `src/instance.rs` — a schema-supplied attribute default, flagged from_schema |  |
-| [Attribute Validated by Type](https://www.w3.org/TR/xmlschema11-1/#sic-attrType) | yes | `src/instance.rs` — the type that governed the attribute |  |
-| [Element Declaration](https://www.w3.org/TR/xmlschema11-1/#sic-elt-decl) | yes | `src/instance.rs` — the governing element declaration is handed to the consumer |  |
-| [Element Default Value](https://www.w3.org/TR/xmlschema11-1/#sic-eltDefault) | yes | `src/instance.rs` — a schema-supplied element default, flagged from_schema |  |
-| [Element Validated by Type](https://www.w3.org/TR/xmlschema11-1/#sic-eltType) | yes | `src/instance.rs` — the type that governed the element, xsi:type included |  |
-| [ID/IDREF Table](https://www.w3.org/TR/xmlschema11-1/#sic-id) | yes | `src/instance.rs` — the ID/IDREF table, kept for the validation root |  |
-| [Identity-constraint Table](https://www.w3.org/TR/xmlschema11-1/#sic-key) | yes | `src/identity.rs` — the identity-constraint table, as the tuples a target settles on |  |
+| [Assessment Outcome (Attribute)](https://www.w3.org/TR/xmlschema11-1/#sic-a-outcome) | partial | `src/instance.rs` — as above for attributes |  |
+| [Assessment Outcome (Element)](https://www.w3.org/TR/xmlschema11-1/#sic-e-outcome) | partial | `src/instance.rs` — the stream says whether an element was assessed — no declaration means it was not — but there is no per-element validity property; a consumer correlates the diagnostics by line |  |
+| [Attribute Declaration](https://www.w3.org/TR/xmlschema11-1/#sic-attr-decl) | yes | `src/instance.rs` — the governing attribute declaration | ✓ |
+| [Attribute Default Value](https://www.w3.org/TR/xmlschema11-1/#sic-attrDefault) | yes | `src/instance.rs` — a schema-supplied attribute default, flagged from_schema | ✓ |
+| [Attribute Validated by Type](https://www.w3.org/TR/xmlschema11-1/#sic-attrType) | partial | `src/instance.rs` — reachable through the attribute declaration; AttributePsvi carries no type id of its own, so an attribute a wildcard admitted with no declaration has none |  |
+| [Element Declaration](https://www.w3.org/TR/xmlschema11-1/#sic-elt-decl) | yes | `src/instance.rs` — the governing element declaration is handed to the consumer | ✓ |
+| [Element Default Value](https://www.w3.org/TR/xmlschema11-1/#sic-eltDefault) | yes | `src/instance.rs` — a schema-supplied element default, flagged from_schema | ✓ |
+| [Element Validated by Type](https://www.w3.org/TR/xmlschema11-1/#sic-eltType) | yes | `src/instance.rs` — the type that governed the element, xsi:type included | ✓ |
+| [ID/IDREF Table](https://www.w3.org/TR/xmlschema11-1/#sic-id) | **no** | `src/instance.rs` — the ID/IDREF table is enforced and not contributed |  |
+| [Identity-constraint Table](https://www.w3.org/TR/xmlschema11-1/#sic-key) | **no** | `src/identity.rs` — the constraints are enforced, but the identity-constraint table is pub(crate) in a private module and never reaches a consumer |  |
 | [Inherited Attributes](https://www.w3.org/TR/xmlschema11-1/#sic-inheritedAttrs) | **no** | inheritable attributes are a 1.1 feature CTA needs; not implemented |  |
 | [Match Information](https://www.w3.org/TR/xmlschema11-1/#sic-match-info) | partial | `src/content.rs` — the matcher knows whether a declaration or a wildcard matched; it is not surfaced per item |  |
-| [Schema Information](https://www.w3.org/TR/xmlschema11-1/#sic-schema) | yes | `src/model.rs` — Schemas is the schema information, and outlives any one validation |  |
+| [Schema Information](https://www.w3.org/TR/xmlschema11-1/#sic-schema) | yes | `src/model.rs` — Schemas is the schema information, and outlives any one validation | ✓ |
 | [Validated with Notation](https://www.w3.org/TR/xmlschema11-1/#sic-notation-used) | **no** | a NOTATION value is validated but the notation declaration is not contributed |  |
 | [Validation Failure (Attribute)](https://www.w3.org/TR/xmlschema11-1/#sic-attr-error-code) | partial | `src/diagnostics.rs` — as above |  |
 | [Validation Failure (Element)](https://www.w3.org/TR/xmlschema11-1/#sic-elt-error-code) | partial | `src/diagnostics.rs` — a DiagCode per failure, not yet the Appendix B constraint name |  |

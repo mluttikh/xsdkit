@@ -42,6 +42,12 @@ use quick_xml::name::ResolveResult;
 #[non_exhaustive]
 pub enum PsviEvent {
     StartElement {
+        /// The element's expanded name, or [`QName::UNKNOWN`] when the schema
+        /// never interned it — which happens exactly for an element a wildcard
+        /// admitted whose name appears nowhere in the schema. Interning is
+        /// impossible after compilation, so such a name cannot be spelled as a
+        /// `QName`; the event says so rather than offering a plausible wrong
+        /// one.
         name: QName,
         /// The declaration matched, absent under a `skip` wildcard or a `lax`
         /// one with nothing to match.
@@ -98,7 +104,15 @@ impl ValidationReport {
 struct Frame<'a> {
     /// Which element this is, for attributing an `xs:ID` it carries.
     id_scope: u32,
+    /// The stack key. For a name the schema never interned this is the
+    /// *parent's* name, since interning is impossible after compilation — see
+    /// where the frame is pushed.
     name: QName,
+    /// The name to report to a consumer, which is `UNKNOWN` exactly when the
+    /// schema never interned it. Kept apart from `name` because the stand-in
+    /// above is a key and not an answer, and a `StartElement` that says one
+    /// name must be closed by an `EndElement` that says the same.
+    reported: QName,
     declaration: Option<ElementId>,
     type_id: TypeId,
     matcher: Option<ContentMatcher<'a>>,
@@ -795,6 +809,9 @@ impl<'a, S: FnMut(PsviEvent)> Run<'a, '_, S> {
             self.stack.push(Frame {
                 id_scope: self.elements_seen,
                 name,
+                // Never announced, so never reported; carried for the shape of
+                // the frame rather than for a consumer.
+                reported: qname.unwrap_or(crate::names::QName::UNKNOWN),
                 declaration: None,
                 type_id: self.v.schemas.builtin(crate::datatypes::Builtin::AnyType),
                 matcher: None,
@@ -909,9 +926,16 @@ impl<'a, S: FnMut(PsviEvent)> Run<'a, '_, S> {
                 .map(|f| f.name)
                 .unwrap_or(crate::names::QName::UNKNOWN)
         });
+        // That stand-in is a stack key and nothing more. Reporting it as the
+        // element's *name* told a consumer that `{urn:other}anything` under a
+        // `skip` wildcard was `{urn:t}doc` — the parent's name, confidently
+        // wrong, which is the failure mode this crate exists to avoid. A name
+        // the schema never interned cannot be spelled as a `QName` after
+        // compilation, so the event says `UNKNOWN` and means it.
+        let reported = qname.unwrap_or(crate::names::QName::UNKNOWN);
 
         (self.sink)(PsviEvent::StartElement {
-            name,
+            name: reported,
             declaration,
             type_id,
             type_from_instance,
@@ -923,6 +947,7 @@ impl<'a, S: FnMut(PsviEvent)> Run<'a, '_, S> {
         self.stack.push(Frame {
             id_scope: self.elements_seen,
             name,
+            reported,
             declaration,
             type_id,
             matcher,
@@ -1410,7 +1435,7 @@ impl<'a, S: FnMut(PsviEvent)> Run<'a, '_, S> {
             // so closing them would unbalance it the other way.
             if frame.announced {
                 (self.sink)(PsviEvent::EndElement {
-                    name: frame.name,
+                    name: frame.reported,
                     declaration: frame.declaration,
                     line,
                 });
@@ -1433,7 +1458,7 @@ impl<'a, S: FnMut(PsviEvent)> Run<'a, '_, S> {
         }
 
         (self.sink)(PsviEvent::EndElement {
-            name: frame.name,
+            name: frame.reported,
             declaration: frame.declaration,
             line,
         });

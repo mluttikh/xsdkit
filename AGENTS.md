@@ -937,6 +937,26 @@ has the wrong number of particles.
 
 ## Planned, not present
 
+**The PSVI cannot name an element the schema never interned.** A `QName` is a
+pair of interned symbols and `Schemas` is immutable after compilation, so an
+element a wildcard admitted whose name appears nowhere in the schema has no
+`QName` to report. `PsviEvent::StartElement` says `QName::UNKNOWN` and means
+it. It used to report the *parent's* name — the stand-in the internal stack
+key uses — which told a consumer that `{urn:other}anything` under a `skip`
+wildcard was `{urn:t}doc`. Carrying the name would mean the event holding raw
+strings beside the `QName`, which is a change to a public enum's shape and a
+decision about what the PSVI is for; `tests/spec_rules/fixtures.rs` pins the
+current contract either way.
+
+**Five of the sixteen PSVI contributions are less than they look.** The
+identity-constraint table and the ID/IDREF table are *enforced* and never
+*contributed* — both live behind `pub(crate)` — and there is no per-element
+`[validity]` property, so a consumer correlates diagnostics by line. An
+attribute's type is reachable only through its declaration, which an attribute
+admitted by a wildcard with no declaration does not have.
+`docs/project/spec-rules.md` says which is which; all five rows said `yes`
+until fixtures were written for them.
+
 **`notQName="##defined"` counts our predeclared attributes.** `xml:lang`,
 `xml:space`, `xml:base` and `xml:id` are installed so a schema need not fetch
 `xml.xsd`, which makes them look like declarations the *schema* made — so a
