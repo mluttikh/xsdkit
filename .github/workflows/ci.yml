@@ -120,6 +120,13 @@ jobs:
       # a rename before anything noticed.
       - name: Check the Rust snippets in the Markdown docs
         run: python3 scripts/check-doc-snippets.py
+      # The spec-rule page is a view of tests/conformance/spec-rules.tsv, so a
+      # re-judged row that was not re-rendered would leave the website
+      # disagreeing with the gate. No network: the RECs are frozen, and
+      # extract-spec-rules.py is the thing you run by hand when you suspect an
+      # erratum.
+      - name: Check the generated spec-rule page is in sync
+        run: python3 scripts/render-spec-rules.py --check
 
   python:
     name: Python (${{ matrix.os }})

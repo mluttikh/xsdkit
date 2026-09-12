@@ -17,9 +17,14 @@
 //!
 //! # Not yet
 //!
-//! Identity constraints (`xs:key`/`keyref`) need document-scope state, and
-//! XSD 1.1 assertions need a whole subtree buffered. Both are deliberately
-//! absent rather than half-done — see `DESIGN.md` §3.6.
+//! XSD 1.1 **assertions** need a whole subtree buffered and an XPath engine,
+//! and are deliberately absent rather than half-done — see `DESIGN.md` §3.6.
+//! Conditional type assignment is absent for the same reason.
+//!
+//! Identity constraints used to be listed here too; they are implemented, in
+//! `src/identity.rs`, matched against the stack of open elements rather than
+//! against a tree. `tests/conformance/spec-rules.tsv` is what noticed the
+//! paragraph had outlived them.
 
 use crate::content::ContentMatcher;
 use crate::diagnostics::{DiagCode, Diagnostic, Diagnostics, Span};

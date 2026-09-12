@@ -190,6 +190,64 @@ pub enum DiagCode {
 }
 
 impl DiagCode {
+    /// Every code this crate can emit.
+    ///
+    /// Public because a consumer that groups by code — a linter, a report, a
+    /// translation table — needs to enumerate them, and because
+    /// `tests/spec_rules.rs` uses it to require that every code is
+    /// attributable to a named rule in the specification.
+    ///
+    /// The test below is exhaustive over the enum, so a new variant will not
+    /// compile until it is added here. That matters: the hand-written list
+    /// this replaced had drifted six codes behind the enum — the whole
+    /// XSD13xx family — so nothing was checking them for a duplicate number.
+    pub const ALL: [DiagCode; 44] = [
+        DiagCode::MalformedXml,
+        DiagCode::NotASchemaDocument,
+        DiagCode::UnknownSchemaElement,
+        DiagCode::MissingAttribute,
+        DiagCode::MisplacedAnnotation,
+        DiagCode::MissingElement,
+        DiagCode::InvalidAttributeValue,
+        DiagCode::UnsupportedEncoding,
+        DiagCode::MalformedEncoding,
+        DiagCode::UnresolvedSchemaLocation,
+        DiagCode::IncludeNamespaceMismatch,
+        DiagCode::ImportNamespaceMismatch,
+        DiagCode::Unsupported,
+        DiagCode::UnresolvedReference,
+        DiagCode::DuplicateGlobal,
+        DiagCode::CircularDefinition,
+        DiagCode::ConflictingSimpleTypeVariety,
+        DiagCode::InvalidOccurrence,
+        DiagCode::ConflictingTypeDefinition,
+        DiagCode::AmbiguousContentModel,
+        DiagCode::FacetNotApplicable,
+        DiagCode::InvalidFacetValue,
+        DiagCode::ConflictingFacets,
+        DiagCode::InvalidValueConstraint,
+        DiagCode::DerivationBlocked,
+        DiagCode::InvalidRestriction,
+        DiagCode::ElementNotDeclared,
+        DiagCode::UnexpectedElement,
+        DiagCode::IncompleteContent,
+        DiagCode::InvalidValue,
+        DiagCode::AttributeNotAllowed,
+        DiagCode::MissingRequiredAttribute,
+        DiagCode::UnexpectedText,
+        DiagCode::InvalidXsiType,
+        DiagCode::NilElementNotEmpty,
+        DiagCode::AbstractType,
+        DiagCode::DuplicateId,
+        DiagCode::UnresolvedIdRef,
+        DiagCode::AbstractElement,
+        DiagCode::DuplicateKey,
+        DiagCode::MissingKeyField,
+        DiagCode::UnresolvedKeyRef,
+        DiagCode::UnknownEntity,
+        DiagCode::InconsistentDeclarations,
+    ];
+
     /// The stable printed form, e.g. `XSD1201`.
     pub fn as_str(self) -> &'static str {
         match self {
@@ -385,52 +443,61 @@ mod tests {
     use super::*;
 
     #[test]
-    fn codes_are_unique() {
-        let all = [
-            DiagCode::MalformedXml,
-            DiagCode::NotASchemaDocument,
-            DiagCode::UnknownSchemaElement,
-            DiagCode::MissingAttribute,
-            DiagCode::MisplacedAnnotation,
-            DiagCode::MissingElement,
-            DiagCode::InvalidAttributeValue,
-            DiagCode::UnsupportedEncoding,
-            DiagCode::MalformedEncoding,
-            DiagCode::UnresolvedSchemaLocation,
-            DiagCode::IncludeNamespaceMismatch,
-            DiagCode::ImportNamespaceMismatch,
-            DiagCode::Unsupported,
-            DiagCode::UnresolvedReference,
-            DiagCode::DuplicateGlobal,
-            DiagCode::CircularDefinition,
-            DiagCode::ConflictingSimpleTypeVariety,
-            DiagCode::InvalidOccurrence,
-            DiagCode::ConflictingTypeDefinition,
-            DiagCode::AmbiguousContentModel,
-            DiagCode::ElementNotDeclared,
-            DiagCode::UnexpectedElement,
-            DiagCode::IncompleteContent,
-            DiagCode::InvalidValue,
-            DiagCode::AttributeNotAllowed,
-            DiagCode::MissingRequiredAttribute,
-            DiagCode::UnexpectedText,
-            DiagCode::InvalidXsiType,
-            DiagCode::NilElementNotEmpty,
-            DiagCode::AbstractType,
-            DiagCode::DuplicateId,
-            DiagCode::UnresolvedIdRef,
-            DiagCode::AbstractElement,
-            DiagCode::DuplicateKey,
-            DiagCode::MissingKeyField,
-            DiagCode::UnresolvedKeyRef,
-            DiagCode::UnknownEntity,
-            DiagCode::InconsistentDeclarations,
-        ];
+    fn codes_are_unique_and_all_is_complete() {
         let mut seen = std::collections::HashSet::new();
-        for c in all {
+        for c in DiagCode::ALL {
             assert!(seen.insert(c.as_str()), "duplicate code {}", c.as_str());
             assert!(c.as_str().starts_with("XSD"));
+            // Exhaustive on purpose: a variant missing from `ALL` cannot be
+            // added to the enum without this failing to compile.
+            match c {
+                DiagCode::MalformedXml
+                | DiagCode::NotASchemaDocument
+                | DiagCode::UnknownSchemaElement
+                | DiagCode::MissingAttribute
+                | DiagCode::MisplacedAnnotation
+                | DiagCode::MissingElement
+                | DiagCode::InvalidAttributeValue
+                | DiagCode::UnsupportedEncoding
+                | DiagCode::MalformedEncoding
+                | DiagCode::UnresolvedSchemaLocation
+                | DiagCode::IncludeNamespaceMismatch
+                | DiagCode::ImportNamespaceMismatch
+                | DiagCode::Unsupported
+                | DiagCode::UnresolvedReference
+                | DiagCode::DuplicateGlobal
+                | DiagCode::CircularDefinition
+                | DiagCode::ConflictingSimpleTypeVariety
+                | DiagCode::InvalidOccurrence
+                | DiagCode::ConflictingTypeDefinition
+                | DiagCode::AmbiguousContentModel
+                | DiagCode::FacetNotApplicable
+                | DiagCode::InvalidFacetValue
+                | DiagCode::ConflictingFacets
+                | DiagCode::InvalidValueConstraint
+                | DiagCode::DerivationBlocked
+                | DiagCode::InvalidRestriction
+                | DiagCode::ElementNotDeclared
+                | DiagCode::UnexpectedElement
+                | DiagCode::IncompleteContent
+                | DiagCode::InvalidValue
+                | DiagCode::AttributeNotAllowed
+                | DiagCode::MissingRequiredAttribute
+                | DiagCode::UnexpectedText
+                | DiagCode::InvalidXsiType
+                | DiagCode::NilElementNotEmpty
+                | DiagCode::AbstractType
+                | DiagCode::DuplicateId
+                | DiagCode::UnresolvedIdRef
+                | DiagCode::AbstractElement
+                | DiagCode::DuplicateKey
+                | DiagCode::MissingKeyField
+                | DiagCode::UnresolvedKeyRef
+                | DiagCode::UnknownEntity
+                | DiagCode::InconsistentDeclarations => {}
+            }
         }
+        assert_eq!(seen.len(), DiagCode::ALL.len());
     }
 
     #[test]
