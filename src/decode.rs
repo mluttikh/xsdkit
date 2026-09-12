@@ -17,7 +17,7 @@
 //! fn read(schemas: &Schemas, xml: &str) -> Option<()> {
 //!     let doc = schemas.decode(xml).into_result().ok()?;
 //!     for child in doc.children() {
-//!         println!("{}", schemas.display_name(child.name));
+//!         println!("{}", schemas.display_psvi_name(&child.name));
 //!     }
 //!     Some(())
 //! }
@@ -26,6 +26,7 @@
 use crate::diagnostics::Diagnostics;
 use crate::instance::PsviEvent;
 use crate::model::{ElementId, Schemas, TypeId};
+use crate::names::PsviName;
 use crate::names::QName;
 use crate::values::Value;
 
@@ -37,7 +38,11 @@ use crate::values::Value;
 /// One element of a decoded document.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Decoded {
-    pub name: QName,
+    /// The name the document spelled. [`PsviName::Foreign`] for an element a
+    /// wildcard admitted that the schema never declared — which is the whole
+    /// point of an extension point, and used to decode under the *parent's*
+    /// name.
+    pub name: PsviName,
     /// The type in force, after any `xsi:type` override.
     pub type_id: TypeId,
     /// The declaration matched, absent under a `skip` wildcard or a `lax` one
@@ -120,8 +125,14 @@ impl Decoded {
     }
 
     /// The first child with this name, by qualified name.
+    ///
+    /// Takes a [`QName`], because a caller looking a name up has one: a child
+    /// the schema never declared cannot be named this way and is reached by
+    /// walking [`Decoded::children`].
     pub fn child(&self, name: QName) -> Option<&Decoded> {
-        self.children().iter().find(|c| c.name == name)
+        self.children()
+            .iter()
+            .find(|c| c.name.qname() == Some(name))
     }
 
     /// An attribute by qualified name.

@@ -937,16 +937,13 @@ has the wrong number of particles.
 
 ## Planned, not present
 
-**The PSVI cannot name an element the schema never interned.** A `QName` is a
-pair of interned symbols and `Schemas` is immutable after compilation, so an
-element a wildcard admitted whose name appears nowhere in the schema has no
-`QName` to report. `PsviEvent::StartElement` says `QName::UNKNOWN` and means
-it. It used to report the *parent's* name — the stand-in the internal stack
-key uses — which told a consumer that `{urn:other}anything` under a `skip`
-wildcard was `{urn:t}doc`. Carrying the name would mean the event holding raw
-strings beside the `QName`, which is a change to a public enum's shape and a
-decision about what the PSVI is for; `tests/spec_rules/fixtures.rs` pins the
-current contract either way.
+**A foreign attribute does not reach the PSVI at all.** An attribute whose
+name the schema never interned is dropped before `AttributePsvi` is built — so
+unlike an element, it is absent rather than named. That is why
+`AttributePsvi::name` is still a `QName` while the element events carry a
+[`PsviName`]: the `Foreign` case cannot arise there yet, and making consumers
+match on one that never happens would be noise. Fixing it means deciding what
+an unassessed attribute looks like in the PSVI, which is a separate question.
 
 **Five of the sixteen PSVI contributions are less than they look.** The
 identity-constraint table and the ID/IDREF table are *enforced* and never

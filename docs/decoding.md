@@ -25,7 +25,9 @@ say?* — and hands back data rather than an event stream.
     fn read(schemas: &Schemas, xml: &str) -> Option<()> {
         let doc = schemas.decode(xml).into_result().ok()?;
         for child in doc.children() {
-            println!("{}: {}", schemas.local_of(child.name), child.text());
+            // `display_psvi_name` rather than `local_of`: a child a wildcard
+            // admitted has no interned name to look up.
+            println!("{}: {}", schemas.display_psvi_name(&child.name), child.text());
         }
         Some(())
     }

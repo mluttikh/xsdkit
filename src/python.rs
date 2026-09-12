@@ -961,6 +961,15 @@ impl PySchemaSet {
                 self.inner.local_of(q).to_string(),
             )
         };
+        // A name the schema never interned has no symbols to look up, and
+        // carries its own strings instead. Python sees the same pair either
+        // way; before this it saw `(None, "")`.
+        let psvi_name_of = |n: &crate::names::PsviName| match n {
+            crate::names::PsviName::Known(q) => name_of(*q),
+            crate::names::PsviName::Foreign { namespace, local } => {
+                (namespace.clone(), local.clone())
+            }
+        };
         let wrapped = match ev {
             RustPsvi::StartElement {
                 name,
@@ -990,7 +999,7 @@ impl PySchemaSet {
                 }
                 PyPsviEvent {
                     kind: "start",
-                    name: name_of(name),
+                    name: psvi_name_of(&name),
                     declaration: declaration.map(|id| PyElement {
                         s: self.inner.clone(),
                         id,
@@ -1039,7 +1048,7 @@ impl PySchemaSet {
                 line,
             } => PyPsviEvent {
                 kind: "end",
-                name: name_of(name),
+                name: psvi_name_of(&name),
                 declaration: declaration.map(|id| PyElement {
                     s: self.inner.clone(),
                     id,
@@ -2909,14 +2918,18 @@ fn decoded_to_py<'py>(
         // Nothing about it is schema-determined, so it keeps its full name
         // rather than borrowing a short one that a declared sibling might
         // want, and its occurrence follows what the document shows.
-        let declared = shape.repeats.contains_key(&child.name);
-        let key = if declared {
-            decoded_key(schemas, child.name, &shape.clark)
-        } else {
-            schemas.display_name(child.name)
+        // Only an interned name can be looked up in the shape at all; a
+        // foreign one is by definition not declared here.
+        let qn = child.name.qname();
+        let declared = qn.is_some_and(|q| shape.repeats.contains_key(&q));
+        let key = match qn.filter(|_| declared) {
+            Some(q) => decoded_key(schemas, q, &shape.clark),
+            None => schemas.display_psvi_name(&child.name),
         };
         let value = decoded_to_py(py, schemas, child, shapes)?;
-        let repeating = shape.repeats.get(&child.name).copied().unwrap_or(false);
+        let repeating = qn
+            .and_then(|q| shape.repeats.get(&q).copied())
+            .unwrap_or(false);
         match out.get_item(&key)? {
             Some(existing) if repeating => existing.cast::<PyList>()?.append(value)?,
             Some(existing) => match existing.cast::<PyList>() {

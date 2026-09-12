@@ -29,7 +29,7 @@
 use crate::content::ContentMatcher;
 use crate::diagnostics::{DiagCode, Diagnostic, Diagnostics, Span};
 use crate::model::*;
-use crate::names::{QName, XSI};
+use crate::names::{PsviName, QName, XSI};
 use crate::validate::{ValueValidator, nearest_builtin};
 use crate::values::{Namespaces, Value};
 use fxhash::{FxHashMap, FxHashSet};
@@ -42,13 +42,11 @@ use quick_xml::name::ResolveResult;
 #[non_exhaustive]
 pub enum PsviEvent {
     StartElement {
-        /// The element's expanded name, or [`QName::UNKNOWN`] when the schema
-        /// never interned it — which happens exactly for an element a wildcard
-        /// admitted whose name appears nowhere in the schema. Interning is
-        /// impossible after compilation, so such a name cannot be spelled as a
-        /// `QName`; the event says so rather than offering a plausible wrong
-        /// one.
-        name: QName,
+        /// The element's expanded name. [`PsviName::Foreign`] for an element a
+        /// wildcard admitted whose name appears nowhere in the schema — which
+        /// cannot be a `QName`, because interning is impossible after
+        /// compilation.
+        name: PsviName,
         /// The declaration matched, absent under a `skip` wildcard or a `lax`
         /// one with nothing to match.
         declaration: Option<ElementId>,
@@ -71,7 +69,9 @@ pub enum PsviEvent {
         line: u32,
     },
     EndElement {
-        name: QName,
+        /// The same name the matching [`PsviEvent::StartElement`] carried: a
+        /// consumer folds the stream into a tree by pairing them.
+        name: PsviName,
         declaration: Option<ElementId>,
         line: u32,
     },
@@ -100,6 +100,18 @@ impl ValidationReport {
     }
 }
 
+/// The name to hand a consumer: the interned one where there is one, and the
+/// one the document spelled where there is not.
+fn psvi_name(qname: Option<QName>, ns: &Option<String>, local: &str) -> PsviName {
+    match qname {
+        Some(q) => PsviName::Known(q),
+        None => PsviName::Foreign {
+            namespace: ns.clone(),
+            local: local.to_string(),
+        },
+    }
+}
+
 /// One level of the element stack.
 struct Frame<'a> {
     /// Which element this is, for attributing an `xs:ID` it carries.
@@ -108,11 +120,12 @@ struct Frame<'a> {
     /// *parent's* name, since interning is impossible after compilation — see
     /// where the frame is pushed.
     name: QName,
-    /// The name to report to a consumer, which is `UNKNOWN` exactly when the
-    /// schema never interned it. Kept apart from `name` because the stand-in
-    /// above is a key and not an answer, and a `StartElement` that says one
-    /// name must be closed by an `EndElement` that says the same.
-    reported: QName,
+    /// The name to report to a consumer, which is [`PsviName::Foreign`]
+    /// exactly when the schema never interned it. Kept apart from `name`
+    /// because the stand-in above is a key and not an answer, and a
+    /// `StartElement` that says one name must be closed by an `EndElement`
+    /// that says the same.
+    reported: PsviName,
     declaration: Option<ElementId>,
     type_id: TypeId,
     matcher: Option<ContentMatcher<'a>>,
@@ -811,7 +824,7 @@ impl<'a, S: FnMut(PsviEvent)> Run<'a, '_, S> {
                 name,
                 // Never announced, so never reported; carried for the shape of
                 // the frame rather than for a consumer.
-                reported: qname.unwrap_or(crate::names::QName::UNKNOWN),
+                reported: psvi_name(qname, ns, local),
                 declaration: None,
                 type_id: self.v.schemas.builtin(crate::datatypes::Builtin::AnyType),
                 matcher: None,
@@ -929,13 +942,13 @@ impl<'a, S: FnMut(PsviEvent)> Run<'a, '_, S> {
         // That stand-in is a stack key and nothing more. Reporting it as the
         // element's *name* told a consumer that `{urn:other}anything` under a
         // `skip` wildcard was `{urn:t}doc` — the parent's name, confidently
-        // wrong, which is the failure mode this crate exists to avoid. A name
-        // the schema never interned cannot be spelled as a `QName` after
-        // compilation, so the event says `UNKNOWN` and means it.
-        let reported = qname.unwrap_or(crate::names::QName::UNKNOWN);
+        // wrong, which is the failure mode this crate exists to avoid. The
+        // name the document actually spelled goes out instead, owned when the
+        // schema has no symbols for it.
+        let reported = psvi_name(qname, ns, local);
 
         (self.sink)(PsviEvent::StartElement {
-            name: reported,
+            name: reported.clone(),
             declaration,
             type_id,
             type_from_instance,

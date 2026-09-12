@@ -146,7 +146,7 @@ pub use model::{
     OpenContentMode, Particle, ParticleId, Schemas, Scope, SimpleType, SourceDocument, SymbolSpace,
     Term, TypeDefinition, TypeId, ValueConstraint, Wildcard,
 };
-pub use names::{Interner, QName};
+pub use names::{Interner, PsviName, QName};
 pub use refs::{AttributeRef, AttributeUseRef, ChildRef, Component, ElementRef, TypeRef};
 pub use validate::{ValidationError, ValueValidator};
 pub use values::{

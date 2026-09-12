@@ -68,6 +68,73 @@ impl QName {
     };
 }
 
+/// A name as an instance document spelled it: either one the schema knows, or
+/// one it does not.
+///
+/// A [`QName`] is a pair of interned symbols, and [`crate::Schemas`] is
+/// immutable after compilation — so a name the schema never interned cannot be
+/// spelled as a `QName` at all. That is not a corner case: it is what a
+/// wildcard is *for*, and every element a `skip` or unmatched `lax` wildcard
+/// admits arrives this way.
+///
+/// The two cases are one type rather than a `QName` beside an optional string
+/// pair, so that a consumer cannot read the first and be silently wrong. That
+/// is not hypothetical either: the PSVI used to report the *parent's* name for
+/// a foreign element, and every consumer believed it.
+///
+/// `Foreign` owns its strings. Only foreign names allocate, which keeps the
+/// cost on the rare path — an interned name is still two `u32`s.
+#[derive(Clone, PartialEq, Eq, Debug)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+pub enum PsviName {
+    /// A name the schema interned, and so can be compared and looked up.
+    Known(QName),
+    /// A name appearing nowhere in the schema.
+    Foreign {
+        namespace: Option<String>,
+        local: String,
+    },
+}
+
+impl PsviName {
+    /// The interned name, or `None` for a name the schema never saw.
+    ///
+    /// This is the accessor for anything that has to *match* — a lookup, a
+    /// comparison against a declaration — because only an interned name can
+    /// take part in one.
+    pub fn qname(&self) -> Option<QName> {
+        match self {
+            PsviName::Known(q) => Some(*q),
+            PsviName::Foreign { .. } => None,
+        }
+    }
+
+    /// The local part, which both cases have.
+    ///
+    /// Needs the interner for an interned name, which is why this takes one
+    /// rather than returning `&str` unconditionally.
+    pub fn local<'a>(&'a self, names: &'a Interner) -> &'a str {
+        match self {
+            PsviName::Known(q) => names.resolve(q.local),
+            PsviName::Foreign { local, .. } => local,
+        }
+    }
+
+    /// The namespace, which both cases may have.
+    pub fn namespace<'a>(&'a self, names: &'a Interner) -> Option<&'a str> {
+        match self {
+            PsviName::Known(q) => q.ns.map(|n| names.resolve_ns(n)),
+            PsviName::Foreign { namespace, .. } => namespace.as_deref(),
+        }
+    }
+}
+
+impl From<QName> for PsviName {
+    fn from(q: QName) -> Self {
+        PsviName::Known(q)
+    }
+}
+
 impl Namespace {
     /// Wraps an already-interned symbol as a namespace.
     pub fn from_symbol(s: Symbol) -> Self {
