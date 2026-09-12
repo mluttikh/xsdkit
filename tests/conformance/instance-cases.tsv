@@ -2,9 +2,9 @@
 #
 # set/group/document  version-run  expected  verdict  error-codes
 #
-# cases scored               21575
-# skipped                    48
-# valid documents accepted   11846/11907
+# cases scored               21573
+# not scored                 50
+# valid documents accepted   11844/11905
 # invalid documents rejected 9517/9668
 #
 # Re-bless with XSDKIT_BLESS=1; see tests/w3c_suite.rs.
@@ -293,12 +293,12 @@ CTA/cta0001/cta0001.v02.xml	1.0	valid	accept	-
 CTA/cta0001/cta0001.v03.xml	1.0	valid	accept	-
 CTA/cta0002/cta0002.n01.xml	1.0	invalid	accept	-
 CTA/cta0002/cta0002.v01.xml	1.0	valid	accept	-
-CTA/cta0003/cta0003.n01.xml	1.0	invalid	accept	-
-CTA/cta0003/cta0003.v01.xml	1.0	valid	accept	-
-CTA/cta0004/cta0003.n01.xml	1.0	invalid	accept	-
-CTA/cta0004/cta0003.v01.xml	1.0	valid	accept	-
-CTA/cta0005/cta0003.n01.xml	1.0	invalid	accept	-
-CTA/cta0005/cta0003.v01.xml	1.0	valid	accept	-
+CTA/cta0003/cta0003.n01.xml	1.1	invalid	accept	-
+CTA/cta0003/cta0003.v01.xml	1.1	valid	accept	-
+CTA/cta0004/cta0003.n01.xml	1.1	invalid	accept	-
+CTA/cta0004/cta0003.v01.xml	1.1	valid	accept	-
+CTA/cta0005/cta0003.n01.xml	1.1	invalid	accept	-
+CTA/cta0005/cta0003.v01.xml	1.1	valid	accept	-
 CTA/cta0008/cta0008.n01.xml	1.1	invalid	reject	XSD2002+XSD2003
 CTA/cta0008/cta0008.v01.xml	1.1	valid	reject	XSD2002+XSD2003
 CTA/cta0009/cta0009.n01.xml	1.1	invalid	reject	XSD2002+XSD2003
@@ -327,14 +327,14 @@ CTA/cta0015/cta0014.n01.xml	1.1	invalid	reject	XSD2004
 CTA/cta0015/cta0014.n02.xml	1.1	invalid	reject	XSD2004
 CTA/cta0015/cta0014.v01.xml	1.1	valid	accept	-
 CTA/cta0015/cta0014.v02.xml	1.1	valid	accept	-
-CTA/cta0016/cta0014.n01.xml	1.0	invalid	reject	XSD2004
-CTA/cta0016/cta0014.n02.xml	1.0	invalid	reject	XSD2004
-CTA/cta0016/cta0014.v01.xml	1.0	valid	accept	-
-CTA/cta0016/cta0014.v02.xml	1.0	valid	accept	-
-CTA/cta0020/cta0017.v01.xml	1.0	valid	accept	-
-CTA/cta0023/cta0023.v01.xml	1.0	valid	accept	-
-CTA/cta0025/cta0023.v01.xml	1.0	valid	accept	-
-CTA/cta0026/cta0023.v01.xml	1.0	valid	accept	-
+CTA/cta0016/cta0014.n01.xml	1.1	invalid	reject	XSD2004
+CTA/cta0016/cta0014.n02.xml	1.1	invalid	reject	XSD2004
+CTA/cta0016/cta0014.v01.xml	1.1	valid	accept	-
+CTA/cta0016/cta0014.v02.xml	1.1	valid	accept	-
+CTA/cta0020/cta0017.v01.xml	1.1	valid	accept	-
+CTA/cta0023/cta0023.v01.xml	1.1	valid	accept	-
+CTA/cta0025/cta0023.v01.xml	1.1	valid	accept	-
+CTA/cta0026/cta0023.v01.xml	1.1	valid	accept	-
 CTA/cta0040/cta0040.n01.xml	1.1	invalid	accept	-
 CTA/cta0040/cta0040.v01.xml	1.1	valid	accept	-
 CTA/cta0041/cta0041.n01.xml	1.1	invalid	accept	-
@@ -689,8 +689,8 @@ ElemDecl/valueconstraint00402m4/valueConstraint00402m4_p.xml	1.0	valid	accept	-
 ElemDecl/valueconstraint00402m5/valueConstraint00402m5_p.xml	1.0	valid	accept	-
 ElemDecl/valueconstraint00402m7/valueConstraint00402m7_p.xml	1.0	valid	accept	-
 ElemDecl/valueconstraint00402m9/valueConstraint00402m9_p.xml	1.0	valid	accept	-
-ElemDecl/valueconstraint00501m1/valueConstraint00501m1_p.xml	1.0	valid	accept	-
-ElemDecl/valueconstraint00501m2/valueConstraint00501m2_p.xml	1.0	valid	accept	-
+ElemDecl/valueconstraint00501m1/valueConstraint00501m1_p.xml	1.0	valid	skip	queried
+ElemDecl/valueconstraint00501m2/valueConstraint00501m2_p.xml	1.0	valid	skip	queried
 ElemDecl/valueconstraint00501m3/valueConstraint00501m3_n.xml	1.0	invalid	reject	XSD2004
 ElemDecl/valueconstraint00501m4/valueConstraint00501m4_p.xml	1.0	valid	accept	-
 ElemDecl/valueconstraint00501m5/valueConstraint00501m5_p.xml	1.0	valid	accept	-

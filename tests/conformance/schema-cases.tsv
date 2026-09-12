@@ -2,9 +2,10 @@
 #
 # set/group  version-run  expected  verdict  error-codes
 #
-# cases                     5727
+# cases                     5725
+# not scored (queried)      2
 # valid schemas accepted    5231/5247
-# invalid schemas rejected  320/480
+# invalid schemas rejected  318/478
 #
 # Re-bless with XSDKIT_BLESS=1; see tests/w3c_suite.rs.
 
@@ -247,9 +248,9 @@ BoeingXSDTestCases/ipo5	1.0	valid	accept	-
 BoeingXSDTestCases/ipo6	1.0	valid	accept	-
 CTA/cta0001	1.0	valid	accept	-
 CTA/cta0002	1.0	valid	accept	-
-CTA/cta0003	1.0	valid	accept	-
-CTA/cta0004	1.0	valid	accept	-
-CTA/cta0005	1.0	valid	accept	-
+CTA/cta0003	1.1	valid	accept	-
+CTA/cta0004	1.1	valid	accept	-
+CTA/cta0005	1.1	valid	accept	-
 CTA/cta0008	1.1	valid	accept	-
 CTA/cta0009	1.1	valid	accept	-
 CTA/cta0010	1.1	valid	accept	-
@@ -258,11 +259,11 @@ CTA/cta0012	1.1	valid	accept	-
 CTA/cta0013	1.1	valid	accept	-
 CTA/cta0014	1.1	valid	accept	-
 CTA/cta0015	1.1	valid	accept	-
-CTA/cta0016	1.0	valid	accept	-
-CTA/cta0020	1.0	valid	accept	-
-CTA/cta0023	1.0	valid	accept	-
-CTA/cta0025	1.0	valid	accept	-
-CTA/cta0026	1.0	valid	accept	-
+CTA/cta0016	1.1	valid	accept	-
+CTA/cta0020	1.1	valid	accept	-
+CTA/cta0023	1.1	valid	accept	-
+CTA/cta0025	1.1	valid	accept	-
+CTA/cta0026	1.1	valid	accept	-
 CTA/cta0040	1.1	valid	accept	-
 CTA/cta0041	1.1	valid	accept	-
 CTA/cta0042	1.1	valid	accept	-
@@ -270,8 +271,8 @@ CTA/cta0043	1.1	invalid	accept	-
 CTA/cta0044	1.1	valid	accept	-
 CTA/cta0045	1.1	valid	accept	-
 CTA/cta9001err	1.1	invalid	accept	-
-CTA/cta9002err	1.0	invalid	accept	-
-CTA/cta9003err	1.0	invalid	accept	-
+CTA/cta9002err	1.1	invalid	accept	-
+CTA/cta9003err	1.1	invalid	accept	-
 CTA/cta9004err	1.1	invalid	accept	-
 CTA/cta9005err	1.1	invalid	accept	-
 CTA/cta9006err	1.1	invalid	accept	-
@@ -5652,8 +5653,8 @@ suntest/xsd011	1.0	valid	accept	-
 suntest/xsd012	1.0	valid	accept	-
 suntest/xsd013.e	1.0	invalid	reject	XSD1201
 suntest/xsd014.e	1.0	invalid	reject	XSD1201
-suntest/xsd015.e	1.0	invalid	reject	XSD1201
-suntest/xsd016.e	1.0	invalid	reject	XSD1201
+suntest/xsd015.e	1.0	invalid	skip	queried
+suntest/xsd016.e	1.0	invalid	skip	queried
 suntest/xsd017.e	1.0	invalid	reject	XSD1201
 suntest/xsd018.e	1.0	invalid	reject	XSD1201
 suntest/xsd019.e	1.0	invalid	reject	XSD1201

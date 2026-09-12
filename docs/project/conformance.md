@@ -7,13 +7,15 @@ are regenerated rather than remembered.
 
 ## Schemas
 
-5,727 scored cases: a schema, and whether it should be accepted.
+5,725 scored cases: a schema, and whether it should be accepted. Two more are
+recorded and not scored, because the working group marked its own expectation
+for them `queried`.
 
 | | |
 |---|---|
 | valid schemas accepted | **99.7%** (5,231 / 5,247) |
-| invalid schemas rejected | **66.7%** (320 / 480) |
-| overall correct | **96.9%** (5,551 / 5,727) |
+| invalid schemas rejected | **66.5%** (318 / 478) |
+| overall correct | **96.9%** (5,549 / 5,725) |
 
 **The gap between those two rows is the honest description of this library.**
 
@@ -28,41 +30,53 @@ to you, or certifying a schema before publishing it — use Xerces or Saxon. If
 you need to read a schema that already works, which is the overwhelmingly
 common case, this is built for exactly that.
 
-The 198 invalid schemas still accepted are concentrated in three areas:
-particle subsumption (the full *Derivation Valid (Restriction, Complex)* rule),
-XSD 1.1 assertions, and conditional type assignment. The first is a matter of
-finishing the remaining cases; the last two need an XPath 2.0 subset.
+The 160 invalid schemas still accepted cluster by test set as `All` (25),
+`Simple` (13), `Wild` (11), `CTA` (11), `Open` (8), `suntest` (7), and then a
+tail of six or fewer. Three areas cover most of it: particle subsumption (the
+full *Derivation Valid (Restriction, Complex)* rule), XSD 1.1 assertions, and
+conditional type assignment. The first is a matter of finishing the remaining
+cases; the last two need an XPath 2.0 subset.
 
 ### The 16 false rejections
 
 Sixteen schemas that should load and do not, across `Missing` (4), `VC` (3),
 `Assert` (2), `Override` (2), `Simple` (2), and one each in `IRI`,
-`introspection` and `suntest`. Each is a bug rather than a design limit, and
-the list is short enough to be worked through.
+`introspection` and `suntest`. By the diagnostic that refuses them: ten
+`XSD1201` unresolved reference, two `XSD1308` invalid value constraint (`+INF`
+as a default), and four that report a second code alongside `XSD1201`. Each is
+a bug rather than a design limit, and the list is short enough to be worked
+through.
 
 ## Documents
 
-21,575 scored cases: a schema, a document, and whether the document is valid.
+21,573 scored cases: a schema, a document, and whether the document is valid.
+Fifty more are recorded and not scored: a schema that does not compile says
+nothing about the document, and two are `queried`.
 
 | | |
 |---|---|
-| valid documents accepted | **99.5%** (11,846 / 11,907) |
+| valid documents accepted | **99.5%** (11,844 / 11,905) |
 | invalid documents rejected | **98.4%** (9,517 / 9,668) |
-| overall correct | **99.0%** (21,363 / 21,575) |
+| overall correct | **99.0%** (21,361 / 21,573) |
 
 Here the two rows are much closer, because validating a document against a
 model you already built is the part that is finished.
 
-The 58 remaining false alarms are not 58 separate bugs. Grouped by the
-diagnostic we wrongly emit:
+The 61 remaining false alarms are not 61 separate bugs. Grouped by the
+diagnostics we wrongly emit — counted from `tests/conformance/instance-cases.tsv`,
+which records the codes for every case, so this table is read off the gate
+rather than assembled by hand:
 
-| Diagnostic | Documents | Cause |
+| Diagnostics | Documents | Cause |
 |---|---|---|
-| `XSD2002` unexpected element | 34 | Conditional type assignment, `openContent` and `xs:all` — all three features this version does not claim |
-| `XSD2001` element not declared | 6 | Scattered |
-| `XSD2006` missing attribute, `XSD2008` bad `xsi:type` | 10 | Five each |
-| `XSD2005` attribute not allowed | 4 | Scattered |
-| `XSD2004` invalid value, `XSD2003` incomplete content | 4 | Scattered |
+| `XSD2002`+`XSD2003` unexpected element, then incomplete content | 33 | Conditional type assignment, `openContent` and `xs:all` — all three features this version does not claim |
+| `XSD2008` bad `xsi:type` | 6 | Scattered; one reports `XSD2001` too |
+| `XSD2001` element not declared | 5 | Scattered |
+| `XSD2006` missing required attribute | 5 | Scattered |
+| `XSD2005` attribute not allowed | 5 | Scattered |
+| `XSD2004` invalid value | 3 | Scattered |
+| `XSD2011` duplicate `xs:ID` | 2 | The deliberate disagreement below |
+| `XSD2003` incomplete content, `XSD2016` unresolved `keyref` | 2 | One each; the second is an identity constraint under a `lax` wildcard |
 
 What is left is now mostly the declared gaps rather than defects: the largest
 group is one this version says up front it does not implement.
@@ -103,18 +117,16 @@ runs; leave it unset and those tests skip.
 
 ```bash
 git clone --depth 1 https://github.com/w3c/xsdtests /tmp/xsdtests
-export XSDTESTS=/tmp/xsdtests
-
-# schemas — about a second
-cargo test --test w3c_suite -- --nocapture
-
-# documents — about four minutes; ignored by default because of it
-cargo test --release --test w3c_suite -- --ignored --nocapture
+XSDTESTS=/tmp/xsdtests cargo test --test w3c_suite -- --nocapture
 ```
 
-Both print the tables above plus a breakdown of the worst test sets, so a
-change that helps one area and hurts another is visible immediately rather
-than hidden behind a single percentage.
+Both halves run, in about twenty seconds together. They print the tables above
+plus a breakdown of the worst test sets, but the gate is
+`tests/conformance/*.tsv`: one row per case, holding the version it was run
+as, what the suite expects, our verdict and the diagnostic codes. A change
+that helps one area and hurts another shows up as two rows rather than a
+percentage that did not move, and CI fails on any row that differs. The
+figures above are that file's header.
 
 ## Why report the failures
 

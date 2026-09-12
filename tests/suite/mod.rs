@@ -38,6 +38,14 @@ use xsdkit::{Compilation, Conformance, Diagnostics, SchemaSetBuilder, Version};
 ///
 /// Taking the first `<expected>` regardless — which this harness used to do —
 /// scores 49 cases against the wrong expectation.
+///
+/// The same and-ing rule disposes of the CTA feature tokens without a special
+/// case: ten `saxonData/CTA` groups prescribe `valid` for
+/// `full-xpath-in-CTA` and `invalid` for `restricted-xpath-in-CTA`, we
+/// implement neither XPath subset because we implement no CTA at all, and so
+/// neither expectation is about us. No unqualified `<expected>` to fall back
+/// to means the case is not scored, which is the honest answer rather than a
+/// coin toss between the two.
 pub fn expected_validity<'a>(test: roxmltree::Node<'a, 'a>, version: Version) -> Option<&'a str> {
     let token = version_token(version);
     let expects: Vec<_> = test
@@ -50,6 +58,33 @@ pub fn expected_validity<'a>(test: roxmltree::Node<'a, 'a>, version: Version) ->
         .find(|n| n.attribute("version").is_some_and(|v| v.contains(token)))
         .or_else(|| expects.iter().find(|n| n.attribute("version").is_none()))
         .and_then(|n| n.attribute("validity"))
+}
+
+/// Whether the working group's own metadata says this expectation is in doubt.
+///
+/// `<current status="queried">` means the recorded result has been challenged,
+/// normally with a W3C bugzilla entry beside it. Scoring against an
+/// expectation the suite itself will not stand behind is scoring noise, so
+/// these are recorded as `skip queried` and left out of the percentages —
+/// visible in the baseline, absent from the denominator.
+///
+/// Four cases carry it, two schema and two instance, so this is worth nothing
+/// to the score and something to the definition of the score. The other
+/// statuses stay in: `stable` and `accepted` are settled, and `submitted`
+/// means newly contributed rather than doubted.
+///
+/// This is the only exclusion rule here, and it is the suite's own. The
+/// permanently-unwinnable pairs — `saxonData/Simple`, where `simple001` needs
+/// a 1.1 lexical form and `simple004` a 1.0 prohibition, in one unversioned
+/// group — are *not* excluded. A per-case baseline records them as the
+/// rejections they are, which is more honest than a hand-written list of
+/// cases we have decided not to count, and is why this harness needs almost
+/// none of the exclusion machinery other processors carry.
+pub fn disputed(test: roxmltree::Node<'_, '_>) -> bool {
+    test.children()
+        .find(|n| n.has_tag_name("current"))
+        .and_then(|n| n.attribute("status"))
+        == Some("queried")
 }
 
 /// How a version prints, in the suite's spelling and the baseline's.
@@ -65,7 +100,13 @@ pub fn version_token(version: Version) -> &'static str {
 /// A group listing both versions is run as 1.0: it is the stricter reading, so
 /// a schema that passes there passes in either.
 pub fn version_of(v: &str) -> Version {
-    if v.contains("1.1") && !v.contains("1.0") {
+    // `full-xpath-in-CTA` and `restricted-xpath-in-CTA` are not versions, they
+    // are which XPath subset a processor allows in conditional type
+    // assignment — and CTA exists only in 1.1, so both name 1.1. Twenty
+    // `saxonData/CTA` groups carry the first of them on the group itself, and
+    // `contains("1.1")` said no to all of them: ten were scored against XSD
+    // 1.0, a language in which `xs:alternative` is not a thing.
+    if v.contains("CTA") || (v.contains("1.1") && !v.contains("1.0")) {
         Version::Xsd11
     } else {
         Version::Xsd10
@@ -100,6 +141,8 @@ pub struct InstanceCase {
     pub schema_documents: Vec<PathBuf>,
     pub instance: PathBuf,
     pub expect_valid: bool,
+    /// The working group has challenged this expectation. See [`disputed`].
+    pub disputed: bool,
 }
 
 /// What one case did, in the two columns the baseline records.
@@ -108,7 +151,6 @@ pub struct InstanceCase {
 /// still scores as "did not accept", which is what it was before, but a case
 /// that starts or stops panicking is the single most interesting row in the
 /// file and it must not hide inside a percentage.
-
 #[derive(Debug, PartialEq, Eq)]
 pub enum Outcome {
     /// Nothing was an error.
@@ -117,7 +159,8 @@ pub enum Outcome {
     Rejected(String),
     /// The loader or the validator panicked on it.
     Panicked,
-    /// Not scored: the schema did not compile, or the file would not read.
+    /// Not scored, and the reason why: the suite disputes its own
+    /// expectation, the schema did not compile, or the file would not read.
     Skipped(&'static str),
 }
 
@@ -168,6 +211,8 @@ pub struct SchemaCase {
     pub version: String,
     pub documents: Vec<PathBuf>,
     pub expect_valid: bool,
+    /// The working group has challenged this expectation. See [`disputed`].
+    pub disputed: bool,
 }
 
 /// Reads the `.testSet` metadata with the crate itself is not appropriate —
@@ -243,6 +288,7 @@ pub fn parse_test_sets(root: &Path) -> (Vec<SchemaCase>, Vec<InstanceCase>) {
                     set: set.clone(),
                     group: name.clone(),
                     version: version.clone(),
+                    disputed: disputed(st),
                     documents: documents.clone(),
                     expect_valid,
                 });
@@ -273,6 +319,7 @@ pub fn parse_test_sets(root: &Path) -> (Vec<SchemaCase>, Vec<InstanceCase>) {
                         set: set.clone(),
                         group: name.clone(),
                         version: version.clone(),
+                        disputed: disputed(it),
                         schema_documents: documents.clone(),
                         instance: dir.join(href),
                         expect_valid: expect,
@@ -312,6 +359,9 @@ pub fn compile_case(case: &SchemaCase) -> Option<Diagnostics> {
 
 /// What `xsdkit` makes of the schema, and why not if it rejects it.
 pub fn schema_outcome(case: &SchemaCase) -> Outcome {
+    if case.disputed {
+        return Outcome::Skipped("queried");
+    }
     match compile_case(case) {
         None => Outcome::Panicked,
         Some(d) if d.has_errors() => Outcome::Rejected(error_codes(&d)),
@@ -329,6 +379,9 @@ pub fn instance_outcome(
     c: &InstanceCase,
     cache: &mut BTreeMap<String, Option<xsdkit::Schemas>>,
 ) -> Outcome {
+    if c.disputed {
+        return Outcome::Skipped("queried");
+    }
     let Ok(xml) = std::fs::read_to_string(&c.instance) else {
         return Outcome::Skipped("unreadable");
     };

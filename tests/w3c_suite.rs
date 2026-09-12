@@ -297,12 +297,12 @@ fn w3c_schema_conformance() {
     let mut by_set: BTreeMap<String, Tally> = BTreeMap::new();
     let mut false_rejections: Vec<String> = Vec::new();
     let mut rows: Vec<(String, String)> = Vec::new();
+    let mut unscored = 0usize;
 
     let hook = std::panic::take_hook();
     std::panic::set_hook(Box::new(|_| {}));
     for c in &cases {
         let outcome = schema_outcome(c);
-        let accepted = outcome.accepted();
         rows.push((
             format!("{}/{}", c.set, c.group),
             format!(
@@ -313,7 +313,11 @@ fn w3c_schema_conformance() {
             ),
         ));
         let t = by_set.entry(c.set.clone()).or_default();
-        match (c.expect_valid, accepted) {
+        if !outcome.scored() {
+            unscored += 1;
+            continue;
+        }
+        match (c.expect_valid, outcome.accepted()) {
             (true, true) => {
                 overall.accepted_valid += 1;
                 t.accepted_valid += 1;
@@ -346,6 +350,7 @@ fn w3c_schema_conformance() {
     };
     println!("\n=== W3C XML Schema Test Suite — schema tests ===");
     println!("cases                     {}", overall.total());
+    println!("not scored (queried)      {unscored}");
     println!(
         "correct                   {} ({:.1}%)",
         overall.correct(),
@@ -393,6 +398,7 @@ fn w3c_schema_conformance() {
             "set/group  version-run  expected  verdict  error-codes".to_string(),
             String::new(),
             format!("cases                     {}", overall.total()),
+            format!("not scored (queried)      {unscored}"),
             format!(
                 "valid schemas accepted    {}/{}",
                 overall.accepted_valid, valid_total
@@ -436,7 +442,7 @@ fn w3c_instance_conformance() {
     );
 
     let mut tally = Tally::default();
-    let mut unusable = 0usize;
+    let mut unscored = 0usize;
     let mut by_set: BTreeMap<String, Tally> = BTreeMap::new();
     let mut rows: Vec<(String, String)> = Vec::new();
     // Many groups share one schema, and compiling is the expensive half.
@@ -464,7 +470,7 @@ fn w3c_instance_conformance() {
         ));
         let t = by_set.entry(c.set.clone()).or_default();
         if !outcome.scored() {
-            unusable += 1;
+            unscored += 1;
             continue;
         }
         match (c.expect_valid, outcome.accepted()) {
@@ -499,7 +505,7 @@ fn w3c_instance_conformance() {
     let invalid_total = tally.rejected_invalid + tally.accepted_invalid;
     println!("\n=== W3C XML Schema Test Suite — instance tests ===");
     println!("cases scored              {}", tally.total());
-    println!("skipped (schema unusable) {unusable}");
+    println!("not scored                 {unscored}");
     println!(
         "correct                   {} ({:.1}%)",
         tally.correct(),
@@ -540,7 +546,7 @@ fn w3c_instance_conformance() {
             "set/group/document  version-run  expected  verdict  error-codes".to_string(),
             String::new(),
             format!("cases scored               {}", tally.total()),
-            format!("skipped                    {unusable}"),
+            format!("not scored                 {unscored}"),
             format!(
                 "valid documents accepted   {}/{}",
                 tally.accepted_valid, valid_total

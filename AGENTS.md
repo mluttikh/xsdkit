@@ -434,7 +434,7 @@ crate:
 | | |
 |---|---|
 | valid schemas accepted | **99.7%** — it reads real schemas |
-| invalid schemas rejected | **66.7%** — partial: see `src/restriction.rs` |
+| invalid schemas rejected | **66.5%** — partial: see `src/restriction.rs` |
 
 That asymmetry is by construction, not neglect: the Schema Component
 Constraints and the Derivation Valid rules are largely unimplemented (see §7).
@@ -451,7 +451,7 @@ otherwise never visits. `final` is enforced too (`src/derivation.rs`).
 invalid schemas we accept by test-group family, so a family with fifty misses
 is fifty cases one rule buys.
 
-The instance half — 21,671 documents — runs by default and scores 21,575 of
+The instance half — 21,671 documents — runs by default and scores 21,573 of
 them, 99.0% correct: **99.5%** of valid documents accepted, **98.4%** of
 invalid ones rejected. It used to be `#[ignore]`d on the strength of a
 4.5-minute figure that predated the harness's schema cache; measured, it is
