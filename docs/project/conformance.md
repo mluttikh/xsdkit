@@ -16,8 +16,8 @@ scored, because the working group marked its own expectation for them
 | | XSD 1.0 | XSD 1.1 |
 |---|---|---|
 | valid schemas accepted | **99.8%** (4,563 / 4,573) | **99.8%** (5,238 / 5,248) |
-| invalid schemas rejected | **77.4%** (171 / 221) | **67.2%** (315 / 469) |
-| overall correct | **98.7%** (4,734 / 4,794) | **97.1%** (5,553 / 5,717) |
+| invalid schemas rejected | **77.4%** (171 / 221) | **67.8%** (318 / 469) |
+| overall correct | **98.7%** (4,734 / 4,794) | **97.2%** (5,556 / 5,717) |
 
 The two columns are reported apart because a single percentage across them
 would be an average of two different languages, true of neither. An earlier
@@ -42,7 +42,7 @@ to you, or certifying a schema before publishing it — use Xerces or Saxon. If
 you need to read a schema that already works, which is the overwhelmingly
 common case, this is built for exactly that.
 
-The invalid schemas still accepted are 50 as 1.0 and 154 as 1.1, and the
+The invalid schemas still accepted are 50 as 1.0 and 151 as 1.1, and the
 difference is entirely 1.1 features. As 1.0 they cluster as `Simple` (13),
 `suntest` (7), `ElemDecl` (6), `Complex` (6), `MGroup` (4); as 1.1 the same
 sets plus `All` (25), `Wild` (11), `CTA` (11), `Open` (8) and

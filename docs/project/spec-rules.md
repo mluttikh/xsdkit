@@ -11,9 +11,9 @@ for what `xsdkit` does about each entry.
 
 | enforced | rules |
 |---|---|
-| yes | 92 |
-| in part | 27 |
-| no | 20 |
+| yes | 93 |
+| in part | 28 |
+| no | 18 |
 | nothing to enforce | 4 |
 
 **This is not code coverage, and the difference is the point.** Region
@@ -31,124 +31,131 @@ it does mean a schema `xsdkit` accepts is not thereby a valid schema.
 
 The rule columns are generated from the Recommendations
 (`scripts/extract-spec-rules.py`); the judgement columns are maintained by
-hand and gated by `tests/spec_rules.rs`, which requires every claim to name
-a site and every diagnostic code to be attributable to a row here.
+hand and gated by `tests/spec_rules/main.rs`, which requires every claim to
+name a site and every diagnostic code to be attributable to a row here.
+
+A ✓ in the last column means this crate has its **own** fixtures for the
+rule — the smallest schema that violates it, and a near-miss that must still
+load — in `tests/spec_rules/fixtures.rs`. 2 of 143 rules so far. The W3C
+suite cannot supply those: it offers about 220 negative schema cases per
+version to share among 66 Schema Component Constraints, so a rule can be
+enforced by a check nobody has ever seen fire.
 
 ## Part 1: Structures
 
-92 rules, of which 48 enforced.
+92 rules, of which 49 enforced.
 
 ### Schema Component Constraints
 
-| Rule | Enforced | Where, and what is missing |
-|---|---|---|
-| [All Group Limited](https://www.w3.org/TR/xmlschema11-1/#cos-all-limited) | **no** | nothing constrains where an xs:all group may appear |
-| [Annotation Correct](https://www.w3.org/TR/xmlschema11-1/#an-props-correct) | by construction | `src/model.rs` — property-tableau conformance only; an annotation component cannot be built inconsistent |
-| [Assertion Properties Correct](https://www.w3.org/TR/xmlschema11-1/#as-props-correct) | **no** | assertions are stored and never evaluated; needs XPath Valid |
-| [Attribute Declaration Properties Correct](https://www.w3.org/TR/xmlschema11-1/#a-props-correct) | partial | `src/declarations.rs` — the value-constraint clause, plus the 1.0 ID rule; the property tableau is satisfied by construction |
-| [Attribute Group Definition Properties Correct](https://www.w3.org/TR/xmlschema11-1/#ag-props-correct) | partial | `src/compile.rs` — clause 1 by construction; clause 2, two uses with one expanded name, is not checked |
-| [Attribute Use Correct](https://www.w3.org/TR/xmlschema11-1/#au-props-correct) | partial | `src/declarations.rs` — a use's own value constraint is checked as a default; clause 3, a use narrowing a fixed declaration, is not |
-| [Attribute Wildcard Intersection](https://www.w3.org/TR/xmlschema11-1/#cos-aw-intersect) | yes | `src/model.rs` — attribute wildcard intersection |
-| [Attribute Wildcard Union](https://www.w3.org/TR/xmlschema11-1/#cos-aw-union) | yes | `src/model.rs` — attribute wildcard union |
-| [Complex Type Definition Properties Correct](https://www.w3.org/TR/xmlschema11-1/#ct-props-correct) | partial | `src/compile.rs` — clause 3, no circular definitions, via check_cycles; the simple-base-implies-extension clause is not checked |
-| [Content type restricts (Complex Content)](https://www.w3.org/TR/xmlschema11-1/#cos-content-act-restrict) | partial | `src/restriction.rs` — the judgeable cases; see the module header for what is left unjudged |
-| [Derivation Valid (Extension)](https://www.w3.org/TR/xmlschema11-1/#cos-ct-extends) | **no** | Derivation Valid (Extension) is unimplemented as a set rather than half-done (AGENTS.md §7) |
-| [Derivation Valid (Restriction, Complex)](https://www.w3.org/TR/xmlschema11-1/#derivation-ok-restriction) | partial | `src/restriction.rs` — Occurrence Range OK, Elt:Elt, Elt:Any, Any:Any, RecurseAsIfGroup, Recurse and RecurseLax; MapAndSum and NSRecurseCheckCardinality are unjudged and accepted |
-| [Derivation Valid (Restriction, Simple)](https://www.w3.org/TR/xmlschema11-1/#cos-st-restricts) | partial | `src/facets.rs` — the facet clauses; the variety and base clauses only where the loader can see them |
-| [Effective Total Range (all and sequence)](https://www.w3.org/TR/xmlschema11-1/#cos-seq-range) | yes | `src/restriction.rs` — the effective total range, as the helper Particle Emptiable and the occurrence rules need |
-| [Effective Total Range (choice)](https://www.w3.org/TR/xmlschema11-1/#cos-choice-range) | yes | `src/restriction.rs` — as above, for choice |
-| [Element Declaration Properties Correct](https://www.w3.org/TR/xmlschema11-1/#e-props-correct) | partial | `src/declarations.rs` — the value-constraint clauses; the substitution-group type clause is not checked |
-| [Element Declarations Consistent](https://www.w3.org/TR/xmlschema11-1/#cos-element-consistent) | partial | `src/instance.rs` — the 1.1 dynamic form, reported when a document walks into the clash; the 1.0 static form is not checked |
-| [Element Default Valid (Immediate)](https://www.w3.org/TR/xmlschema11-1/#cos-valid-default) | yes | `src/declarations.rs` — an element's default or fixed against its own type |
-| [Fields Value OK](https://www.w3.org/TR/xmlschema11-1/#c-fields-xpaths) | yes | `src/identity.rs` — as above, with the attribute step a field may end on |
-| [Identity-constraint Definition Properties Correct](https://www.w3.org/TR/xmlschema11-1/#c-props-correct) | partial | `src/load.rs` — clause 1 by construction; clause 2, a keyref's field count matching its key's, is not checked |
-| [Model Group Correct](https://www.w3.org/TR/xmlschema11-1/#mg-props-correct) | yes | `src/compile.rs` — clause 2, no circular groups, via check_cycles |
-| [Model Group Definition Properties Correct](https://www.w3.org/TR/xmlschema11-1/#mgd-props-correct) | by construction | `src/load.rs` — property-tableau conformance only, and check_representation rejects a definition that is not exactly one model group |
-| [Notation Declaration Correct](https://www.w3.org/TR/xmlschema11-1/#n-props-correct) | by construction | `src/model.rs` — property-tableau conformance only |
-| [Particle Correct](https://www.w3.org/TR/xmlschema11-1/#p-props-correct) | yes | `src/load.rs` — minOccurs <= maxOccurs |
-| [Particle Emptiable](https://www.w3.org/TR/xmlschema11-1/#cos-group-emptiable) | yes | `src/restriction.rs` — a definition rather than a constraint, used by the derivation rules |
-| [Particle Valid (Extension)](https://www.w3.org/TR/xmlschema11-1/#cos-particle-extend) | partial | `src/restriction.rs` — a definition used by Derivation Valid (Extension), which is itself unimplemented |
-| [Schema Properties Correct](https://www.w3.org/TR/xmlschema11-1/#sch-props-correct) | yes | `src/load.rs` — clause 2, two components sharing a name in one symbol space |
-| [Selector Value OK](https://www.w3.org/TR/xmlschema11-1/#c-selector-xpath) | yes | `src/identity.rs` — the Appendix I subset, parsed and rejected when malformed |
-| [Simple Default Valid](https://www.w3.org/TR/xmlschema11-1/#cos-valid-simple-default) | yes | `src/declarations.rs` — an attribute's default or fixed against its own type |
-| [Simple Type Definition Properties Correct](https://www.w3.org/TR/xmlschema11-1/#st-props-correct) | partial | `src/compile.rs` — the circularity clause via check_cycles |
-| [Simple Type Restriction (Facets)](https://www.w3.org/TR/xmlschema11-1/#st-restrict-facets) | yes | `src/facets.rs` — applicable facets, bounds in the base value space, pairs that cannot hold, and narrowing |
-| [Substitution Group OK (Transitive)](https://www.w3.org/TR/xmlschema11-1/#cos-equiv-derived-ok-rec) | partial | `src/compile.rs` — the closure honours abstract heads; the type-derivation and disallowed-substitutions clauses are not checked |
-| [Type Alternative Properties Correct](https://www.w3.org/TR/xmlschema11-1/#ta-props-correct) | **no** | conditional type assignment is stored and never evaluated; needs XPath Valid |
-| [Type Derivation OK (Complex)](https://www.w3.org/TR/xmlschema11-1/#cos-ct-derived-ok) | partial | `src/derivation.rs` — the final clause; used by xsi:type in src/instance.rs |
-| [Type Derivation OK (Simple)](https://www.w3.org/TR/xmlschema11-1/#cos-st-derived-ok) | partial | `src/derivation.rs` — the final clause |
-| [Unique Particle Attribution](https://www.w3.org/TR/xmlschema11-1/#cos-nonambig) | yes | `src/content.rs` — UPA is automaton determinism; the check is the overlap test on out-transitions |
-| [Wildcard Properties Correct](https://www.w3.org/TR/xmlschema11-1/#w-props-correct) | partial | `src/load.rs` — namespace beside notNamespace is rejected; the disallowed-names clause is not checked |
-| [Wildcard Subset](https://www.w3.org/TR/xmlschema11-1/#cos-ns-subset) | yes | `src/restriction.rs` — Any:Any NSSubset |
-| [xmlns Not Allowed](https://www.w3.org/TR/xmlschema11-1/#no-xmlns) | **no** | an attribute declaration named xmlns is accepted |
-| [XPath Valid](https://www.w3.org/TR/xmlschema11-1/#xpath-valid) | **no** | full XPath 2.0, for assertions and CTA; the identity-constraint subset is a different rule |
-| [xsi: Not Allowed](https://www.w3.org/TR/xmlschema11-1/#no-xsi) | **no** | an attribute declaration in the xsi namespace is accepted |
+| Rule | Enforced | Where, and what is missing | Fixtures |
+|---|---|---|---|
+| [All Group Limited](https://www.w3.org/TR/xmlschema11-1/#cos-all-limited) | **no** | nothing constrains where an xs:all group may appear |  |
+| [Annotation Correct](https://www.w3.org/TR/xmlschema11-1/#an-props-correct) | by construction | `src/model.rs` — property-tableau conformance only; an annotation component cannot be built inconsistent |  |
+| [Assertion Properties Correct](https://www.w3.org/TR/xmlschema11-1/#as-props-correct) | **no** | assertions are stored and never evaluated; needs XPath Valid |  |
+| [Attribute Declaration Properties Correct](https://www.w3.org/TR/xmlschema11-1/#a-props-correct) | partial | `src/declarations.rs` — the value-constraint clause, plus the 1.0 ID rule; the property tableau is satisfied by construction |  |
+| [Attribute Group Definition Properties Correct](https://www.w3.org/TR/xmlschema11-1/#ag-props-correct) | partial | `src/compile.rs` — clause 1 by construction; clause 2, two uses with one expanded name, is not checked |  |
+| [Attribute Use Correct](https://www.w3.org/TR/xmlschema11-1/#au-props-correct) | partial | `src/declarations.rs` — a use's own value constraint is checked as a default; clause 3, a use narrowing a fixed declaration, is not |  |
+| [Attribute Wildcard Intersection](https://www.w3.org/TR/xmlschema11-1/#cos-aw-intersect) | yes | `src/model.rs` — attribute wildcard intersection |  |
+| [Attribute Wildcard Union](https://www.w3.org/TR/xmlschema11-1/#cos-aw-union) | yes | `src/model.rs` — attribute wildcard union |  |
+| [Complex Type Definition Properties Correct](https://www.w3.org/TR/xmlschema11-1/#ct-props-correct) | partial | `src/compile.rs` — clause 3, no circular definitions, via check_cycles; the simple-base-implies-extension clause is not checked |  |
+| [Content type restricts (Complex Content)](https://www.w3.org/TR/xmlschema11-1/#cos-content-act-restrict) | partial | `src/restriction.rs` — the judgeable cases; see the module header for what is left unjudged |  |
+| [Derivation Valid (Extension)](https://www.w3.org/TR/xmlschema11-1/#cos-ct-extends) | **no** | Derivation Valid (Extension) is unimplemented as a set rather than half-done (AGENTS.md §7) |  |
+| [Derivation Valid (Restriction, Complex)](https://www.w3.org/TR/xmlschema11-1/#derivation-ok-restriction) | partial | `src/restriction.rs` — Occurrence Range OK, Elt:Elt, Elt:Any, Any:Any, RecurseAsIfGroup, Recurse and RecurseLax; MapAndSum and NSRecurseCheckCardinality are unjudged and accepted |  |
+| [Derivation Valid (Restriction, Simple)](https://www.w3.org/TR/xmlschema11-1/#cos-st-restricts) | partial | `src/facets.rs` — the facet clauses; the variety and base clauses only where the loader can see them |  |
+| [Effective Total Range (all and sequence)](https://www.w3.org/TR/xmlschema11-1/#cos-seq-range) | yes | `src/restriction.rs` — the effective total range, as the helper Particle Emptiable and the occurrence rules need |  |
+| [Effective Total Range (choice)](https://www.w3.org/TR/xmlschema11-1/#cos-choice-range) | yes | `src/restriction.rs` — as above, for choice |  |
+| [Element Declaration Properties Correct](https://www.w3.org/TR/xmlschema11-1/#e-props-correct) | partial | `src/declarations.rs` — the value-constraint clauses; the substitution-group type clause is not checked |  |
+| [Element Declarations Consistent](https://www.w3.org/TR/xmlschema11-1/#cos-element-consistent) | partial | `src/instance.rs` — the 1.1 dynamic form, reported when a document walks into the clash; the 1.0 static form is not checked |  |
+| [Element Default Valid (Immediate)](https://www.w3.org/TR/xmlschema11-1/#cos-valid-default) | yes | `src/declarations.rs` — an element's default or fixed against its own type |  |
+| [Fields Value OK](https://www.w3.org/TR/xmlschema11-1/#c-fields-xpaths) | yes | `src/identity.rs` — as above, with the attribute step a field may end on |  |
+| [Identity-constraint Definition Properties Correct](https://www.w3.org/TR/xmlschema11-1/#c-props-correct) | partial | `src/load.rs` — clause 1 by construction; clause 2, a keyref's field count matching its key's, is not checked |  |
+| [Model Group Correct](https://www.w3.org/TR/xmlschema11-1/#mg-props-correct) | yes | `src/compile.rs` — clause 2, no circular groups, via check_cycles |  |
+| [Model Group Definition Properties Correct](https://www.w3.org/TR/xmlschema11-1/#mgd-props-correct) | by construction | `src/load.rs` — property-tableau conformance only, and check_representation rejects a definition that is not exactly one model group |  |
+| [Notation Declaration Correct](https://www.w3.org/TR/xmlschema11-1/#n-props-correct) | by construction | `src/model.rs` — property-tableau conformance only |  |
+| [Particle Correct](https://www.w3.org/TR/xmlschema11-1/#p-props-correct) | yes | `src/load.rs` — minOccurs <= maxOccurs |  |
+| [Particle Emptiable](https://www.w3.org/TR/xmlschema11-1/#cos-group-emptiable) | yes | `src/restriction.rs` — a definition rather than a constraint, used by the derivation rules |  |
+| [Particle Valid (Extension)](https://www.w3.org/TR/xmlschema11-1/#cos-particle-extend) | partial | `src/restriction.rs` — a definition used by Derivation Valid (Extension), which is itself unimplemented |  |
+| [Schema Properties Correct](https://www.w3.org/TR/xmlschema11-1/#sch-props-correct) | yes | `src/load.rs` — clause 2, two components sharing a name in one symbol space |  |
+| [Selector Value OK](https://www.w3.org/TR/xmlschema11-1/#c-selector-xpath) | yes | `src/identity.rs` — the Appendix I subset, parsed and rejected when malformed |  |
+| [Simple Default Valid](https://www.w3.org/TR/xmlschema11-1/#cos-valid-simple-default) | yes | `src/declarations.rs` — an attribute's default or fixed against its own type |  |
+| [Simple Type Definition Properties Correct](https://www.w3.org/TR/xmlschema11-1/#st-props-correct) | partial | `src/compile.rs` — the circularity clause via check_cycles |  |
+| [Simple Type Restriction (Facets)](https://www.w3.org/TR/xmlschema11-1/#st-restrict-facets) | yes | `src/facets.rs` — applicable facets, bounds in the base value space, pairs that cannot hold, and narrowing |  |
+| [Substitution Group OK (Transitive)](https://www.w3.org/TR/xmlschema11-1/#cos-equiv-derived-ok-rec) | partial | `src/compile.rs` — the closure honours abstract heads; the type-derivation and disallowed-substitutions clauses are not checked |  |
+| [Type Alternative Properties Correct](https://www.w3.org/TR/xmlschema11-1/#ta-props-correct) | **no** | conditional type assignment is stored and never evaluated; needs XPath Valid |  |
+| [Type Derivation OK (Complex)](https://www.w3.org/TR/xmlschema11-1/#cos-ct-derived-ok) | partial | `src/derivation.rs` — the final clause; used by xsi:type in src/instance.rs |  |
+| [Type Derivation OK (Simple)](https://www.w3.org/TR/xmlschema11-1/#cos-st-derived-ok) | partial | `src/derivation.rs` — the final clause |  |
+| [Unique Particle Attribution](https://www.w3.org/TR/xmlschema11-1/#cos-nonambig) | yes | `src/content.rs` — UPA is automaton determinism; the check is the overlap test on out-transitions |  |
+| [Wildcard Properties Correct](https://www.w3.org/TR/xmlschema11-1/#w-props-correct) | partial | `src/load.rs` — namespace beside notNamespace is rejected; the disallowed-names clause is not checked |  |
+| [Wildcard Subset](https://www.w3.org/TR/xmlschema11-1/#cos-ns-subset) | yes | `src/restriction.rs` — Any:Any NSSubset |  |
+| [xmlns Not Allowed](https://www.w3.org/TR/xmlschema11-1/#no-xmlns) | **no** | an attribute declaration named xmlns is accepted |  |
+| [XPath Valid](https://www.w3.org/TR/xmlschema11-1/#xpath-valid) | **no** | full XPath 2.0, for assertions and CTA; the identity-constraint subset is a different rule |  |
+| [xsi: Not Allowed](https://www.w3.org/TR/xmlschema11-1/#no-xsi) | **no** | an attribute declaration in the xsi namespace is accepted |  |
 
 ### Schema Representation Constraints
 
-| Rule | Enforced | Where, and what is missing |
-|---|---|---|
-| [Attribute Declaration Representation OK](https://www.w3.org/TR/xmlschema11-1/#src-attribute) | partial | `src/load.rs` — default beside fixed, and ref beside a redescription |
-| [Attribute Group Definition Representation OK](https://www.w3.org/TR/xmlschema11-1/#src-attribute_group) | **no** | nothing checks the representation clauses of an attribute group definition |
-| [Complex Type Definition Representation OK](https://www.w3.org/TR/xmlschema11-1/#src-ct) | partial | `src/load.rs` — mixed contradicting itself across xs:complexType and xs:complexContent |
-| [Conditional Inclusion Constraints](https://www.w3.org/TR/xmlschema11-1/#src-cip) | yes | `src/load.rs` — the vc: conditional-inclusion attributes, applied at every descend point |
-| [Element Declaration Representation OK](https://www.w3.org/TR/xmlschema11-1/#src-element) | partial | `src/load.rs` — default beside fixed, ref beside a redescription, and a local targetNamespace |
-| [Identity-constraint Definition Representation OK](https://www.w3.org/TR/xmlschema11-1/#src-identity-constraint) | partial | `src/load.rs` — the ref form against the named form; the selector and field clauses live in src/identity.rs |
-| [Import Constraints and Semantics](https://www.w3.org/TR/xmlschema11-1/#src-import) | **no** | `src/load.rs` — imports are followed, but a document that does not define the namespace named is not reported: XSD1103 is declared and never emitted |
-| [Inclusion Constraints and Semantics](https://www.w3.org/TR/xmlschema11-1/#src-include) | **no** | `src/load.rs` — chameleon coercion works, but a conflicting target namespace is not reported: XSD1102 is declared and never emitted |
-| [Individual Component Redefinition](https://www.w3.org/TR/xmlschema11-1/#src-expredef) | partial | `src/load.rs` — a redefined component must derive from the one it replaces, where the loader can see it |
-| [Override Constraints and Semantics](https://www.w3.org/TR/xmlschema11-1/#src-override) | partial | `src/load.rs` — the override machinery; not every clause is enforced |
-| [QName resolution (Schema Document)](https://www.w3.org/TR/xmlschema11-1/#src-resolve) | yes | `src/load.rs` — a prefixed QName attribute resolved against the document's in-scope bindings |
-| [Redefinition Constraints and Semantics](https://www.w3.org/TR/xmlschema11-1/#src-redefine) | partial | `src/load.rs` — the redefinition machinery; not every clause is enforced |
-| [Simple Type Definition Representation OK](https://www.w3.org/TR/xmlschema11-1/#src-simple-type) | yes | `src/load.rs` — more than one of restriction/list/union on one simple type |
-| [Type Alternative Representation OK](https://www.w3.org/TR/xmlschema11-1/#src-ta) | **no** | type alternatives are read and never checked |
-| [Wildcard Representation OK](https://www.w3.org/TR/xmlschema11-1/#src-wildcard) | yes | `src/load.rs` — namespace beside notNamespace, which names no set |
+| Rule | Enforced | Where, and what is missing | Fixtures |
+|---|---|---|---|
+| [Attribute Declaration Representation OK](https://www.w3.org/TR/xmlschema11-1/#src-attribute) | partial | `src/load.rs` — default beside fixed, and ref beside a redescription |  |
+| [Attribute Group Definition Representation OK](https://www.w3.org/TR/xmlschema11-1/#src-attribute_group) | **no** | nothing checks the representation clauses of an attribute group definition |  |
+| [Complex Type Definition Representation OK](https://www.w3.org/TR/xmlschema11-1/#src-ct) | partial | `src/load.rs` — mixed contradicting itself across xs:complexType and xs:complexContent |  |
+| [Conditional Inclusion Constraints](https://www.w3.org/TR/xmlschema11-1/#src-cip) | yes | `src/load.rs` — the vc: conditional-inclusion attributes, applied at every descend point |  |
+| [Element Declaration Representation OK](https://www.w3.org/TR/xmlschema11-1/#src-element) | partial | `src/load.rs` — default beside fixed, ref beside a redescription, and a local targetNamespace |  |
+| [Identity-constraint Definition Representation OK](https://www.w3.org/TR/xmlschema11-1/#src-identity-constraint) | partial | `src/load.rs` — the ref form against the named form; the selector and field clauses live in src/identity.rs |  |
+| [Import Constraints and Semantics](https://www.w3.org/TR/xmlschema11-1/#src-import) | partial | `src/load.rs` — clause 3, the namespace the imported document must declare; clause 1, which forbids importing your own namespace, is not checked | ✓ |
+| [Inclusion Constraints and Semantics](https://www.w3.org/TR/xmlschema11-1/#src-include) | yes | `src/load.rs` — clause 2, the namespace the included document may declare, and the chameleon case | ✓ |
+| [Individual Component Redefinition](https://www.w3.org/TR/xmlschema11-1/#src-expredef) | partial | `src/load.rs` — a redefined component must derive from the one it replaces, where the loader can see it |  |
+| [Override Constraints and Semantics](https://www.w3.org/TR/xmlschema11-1/#src-override) | partial | `src/load.rs` — the override machinery; not every clause is enforced |  |
+| [QName resolution (Schema Document)](https://www.w3.org/TR/xmlschema11-1/#src-resolve) | yes | `src/load.rs` — a prefixed QName attribute resolved against the document's in-scope bindings |  |
+| [Redefinition Constraints and Semantics](https://www.w3.org/TR/xmlschema11-1/#src-redefine) | partial | `src/load.rs` — the redefinition machinery; not every clause is enforced |  |
+| [Simple Type Definition Representation OK](https://www.w3.org/TR/xmlschema11-1/#src-simple-type) | yes | `src/load.rs` — more than one of restriction/list/union on one simple type |  |
+| [Type Alternative Representation OK](https://www.w3.org/TR/xmlschema11-1/#src-ta) | **no** | type alternatives are read and never checked |  |
+| [Wildcard Representation OK](https://www.w3.org/TR/xmlschema11-1/#src-wildcard) | yes | `src/load.rs` — namespace beside notNamespace, which names no set |  |
 
 ### Validation Rules
 
-| Rule | Enforced | Where, and what is missing |
-|---|---|---|
-| [Assertion Satisfied](https://www.w3.org/TR/xmlschema11-1/#cvc-assertion) | **no** | assertions are stored and never evaluated |
-| [Attribute Locally Valid](https://www.w3.org/TR/xmlschema11-1/#cvc-attribute) | yes | `src/instance.rs` — an attribute's value against its type |
-| [Attribute Locally Valid (Use)](https://www.w3.org/TR/xmlschema11-1/#cvc-au) | yes | `src/instance.rs` — required, prohibited and fixed attribute uses |
-| [Element Locally Valid (Complex Type)](https://www.w3.org/TR/xmlschema11-1/#cvc-complex-type) | yes | `src/instance.rs` — attributes, content and character data against a complex type |
-| [Element Locally Valid (Element)](https://www.w3.org/TR/xmlschema11-1/#cvc-elt) | yes | `src/instance.rs` — abstract, xsi:type, xsi:nil and the declaration's own value constraint |
-| [Element Locally Valid (Type)](https://www.w3.org/TR/xmlschema11-1/#cvc-type) | yes | `src/instance.rs` — abstract types, and the simple-type path into String Valid |
-| [Element Sequence Accepted (Particle)](https://www.w3.org/TR/xmlschema11-1/#cvc-accept) | yes | `src/content.rs` — whether the sequence reaches an accepting state |
-| [Element Sequence Locally Valid (Complex Content)](https://www.w3.org/TR/xmlschema11-1/#cvc-complex-content) | yes | `src/content.rs` — the automaton, xs:all counters and open content |
-| [Element Sequence Locally Valid (Particle)](https://www.w3.org/TR/xmlschema11-1/#cvc-particle) | yes | `src/content.rs` — one step of the automaton |
-| [Element Sequence Valid](https://www.w3.org/TR/xmlschema11-1/#cvc-model-group) | yes | `src/content.rs` — sequence, choice and all |
-| [Identity-constraint Satisfied](https://www.w3.org/TR/xmlschema11-1/#cvc-identity-constraint) | yes | `src/identity.rs` — xs:key, xs:keyref and xs:unique, matched against the open-element stack |
-| [Item Valid (Wildcard)](https://www.w3.org/TR/xmlschema11-1/#cvc-wildcard) | yes | `src/instance.rs` — processContents strict, lax and skip |
-| [QName resolution (Instance)](https://www.w3.org/TR/xmlschema11-1/#cvc-resolve-instance) | yes | `src/instance.rs` — QName and NOTATION values against the instance's namespace stack |
-| [Schema-Validity Assessment (Attribute)](https://www.w3.org/TR/xmlschema11-1/#cvc-assess-attr) | yes | `src/instance.rs` — assessment of an attribute |
-| [Schema-Validity Assessment (Element)](https://www.w3.org/TR/xmlschema11-1/#cvc-assess-elt) | yes | `src/instance.rs` — strict, lax and skip assessment of an element |
-| [String Valid](https://www.w3.org/TR/xmlschema11-1/#cvc-simple-type) | yes | `src/validate.rs` — a value against a declared simple type, facets composed up the chain |
-| [Validation Root Valid (ID/IDREF)](https://www.w3.org/TR/xmlschema11-1/#cvc-id) | yes | `src/instance.rs` — xs:ID uniqueness and xs:IDREF resolution over the validation root |
-| [Wildcard allows Expanded Name](https://www.w3.org/TR/xmlschema11-1/#cvc-wildcard-name) | yes | `src/content.rs` — wildcard_admits, including notQName |
-| [Wildcard allows Namespace Name](https://www.w3.org/TR/xmlschema11-1/#cvc-wildcard-namespace) | yes | `src/content.rs` — NamespaceConstraint::admits_uri, for names the schema never interned |
-| [XPath Evaluation](https://www.w3.org/TR/xmlschema11-1/#cvc-xpath) | **no** | no XPath engine; needed by assertions and CTA |
+| Rule | Enforced | Where, and what is missing | Fixtures |
+|---|---|---|---|
+| [Assertion Satisfied](https://www.w3.org/TR/xmlschema11-1/#cvc-assertion) | **no** | assertions are stored and never evaluated |  |
+| [Attribute Locally Valid](https://www.w3.org/TR/xmlschema11-1/#cvc-attribute) | yes | `src/instance.rs` — an attribute's value against its type |  |
+| [Attribute Locally Valid (Use)](https://www.w3.org/TR/xmlschema11-1/#cvc-au) | yes | `src/instance.rs` — required, prohibited and fixed attribute uses |  |
+| [Element Locally Valid (Complex Type)](https://www.w3.org/TR/xmlschema11-1/#cvc-complex-type) | yes | `src/instance.rs` — attributes, content and character data against a complex type |  |
+| [Element Locally Valid (Element)](https://www.w3.org/TR/xmlschema11-1/#cvc-elt) | yes | `src/instance.rs` — abstract, xsi:type, xsi:nil and the declaration's own value constraint |  |
+| [Element Locally Valid (Type)](https://www.w3.org/TR/xmlschema11-1/#cvc-type) | yes | `src/instance.rs` — abstract types, and the simple-type path into String Valid |  |
+| [Element Sequence Accepted (Particle)](https://www.w3.org/TR/xmlschema11-1/#cvc-accept) | yes | `src/content.rs` — whether the sequence reaches an accepting state |  |
+| [Element Sequence Locally Valid (Complex Content)](https://www.w3.org/TR/xmlschema11-1/#cvc-complex-content) | yes | `src/content.rs` — the automaton, xs:all counters and open content |  |
+| [Element Sequence Locally Valid (Particle)](https://www.w3.org/TR/xmlschema11-1/#cvc-particle) | yes | `src/content.rs` — one step of the automaton |  |
+| [Element Sequence Valid](https://www.w3.org/TR/xmlschema11-1/#cvc-model-group) | yes | `src/content.rs` — sequence, choice and all |  |
+| [Identity-constraint Satisfied](https://www.w3.org/TR/xmlschema11-1/#cvc-identity-constraint) | yes | `src/identity.rs` — xs:key, xs:keyref and xs:unique, matched against the open-element stack |  |
+| [Item Valid (Wildcard)](https://www.w3.org/TR/xmlschema11-1/#cvc-wildcard) | yes | `src/instance.rs` — processContents strict, lax and skip |  |
+| [QName resolution (Instance)](https://www.w3.org/TR/xmlschema11-1/#cvc-resolve-instance) | yes | `src/instance.rs` — QName and NOTATION values against the instance's namespace stack |  |
+| [Schema-Validity Assessment (Attribute)](https://www.w3.org/TR/xmlschema11-1/#cvc-assess-attr) | yes | `src/instance.rs` — assessment of an attribute |  |
+| [Schema-Validity Assessment (Element)](https://www.w3.org/TR/xmlschema11-1/#cvc-assess-elt) | yes | `src/instance.rs` — strict, lax and skip assessment of an element |  |
+| [String Valid](https://www.w3.org/TR/xmlschema11-1/#cvc-simple-type) | yes | `src/validate.rs` — a value against a declared simple type, facets composed up the chain |  |
+| [Validation Root Valid (ID/IDREF)](https://www.w3.org/TR/xmlschema11-1/#cvc-id) | yes | `src/instance.rs` — xs:ID uniqueness and xs:IDREF resolution over the validation root |  |
+| [Wildcard allows Expanded Name](https://www.w3.org/TR/xmlschema11-1/#cvc-wildcard-name) | yes | `src/content.rs` — wildcard_admits, including notQName |  |
+| [Wildcard allows Namespace Name](https://www.w3.org/TR/xmlschema11-1/#cvc-wildcard-namespace) | yes | `src/content.rs` — NamespaceConstraint::admits_uri, for names the schema never interned |  |
+| [XPath Evaluation](https://www.w3.org/TR/xmlschema11-1/#cvc-xpath) | **no** | no XPath engine; needed by assertions and CTA |  |
 
 ### Schema Information Set Contributions
 
-| Rule | Enforced | Where, and what is missing |
-|---|---|---|
-| [Assessment Outcome (Attribute)](https://www.w3.org/TR/xmlschema11-1/#sic-a-outcome) | yes | `src/instance.rs` — as above for attributes |
-| [Assessment Outcome (Element)](https://www.w3.org/TR/xmlschema11-1/#sic-e-outcome) | yes | `src/instance.rs` — the ValidationReport says whether each element was assessed and with what result |
-| [Attribute Declaration](https://www.w3.org/TR/xmlschema11-1/#sic-attr-decl) | yes | `src/instance.rs` — the governing attribute declaration |
-| [Attribute Default Value](https://www.w3.org/TR/xmlschema11-1/#sic-attrDefault) | yes | `src/instance.rs` — a schema-supplied attribute default, flagged from_schema |
-| [Attribute Validated by Type](https://www.w3.org/TR/xmlschema11-1/#sic-attrType) | yes | `src/instance.rs` — the type that governed the attribute |
-| [Element Declaration](https://www.w3.org/TR/xmlschema11-1/#sic-elt-decl) | yes | `src/instance.rs` — the governing element declaration is handed to the consumer |
-| [Element Default Value](https://www.w3.org/TR/xmlschema11-1/#sic-eltDefault) | yes | `src/instance.rs` — a schema-supplied element default, flagged from_schema |
-| [Element Validated by Type](https://www.w3.org/TR/xmlschema11-1/#sic-eltType) | yes | `src/instance.rs` — the type that governed the element, xsi:type included |
-| [ID/IDREF Table](https://www.w3.org/TR/xmlschema11-1/#sic-id) | yes | `src/instance.rs` — the ID/IDREF table, kept for the validation root |
-| [Identity-constraint Table](https://www.w3.org/TR/xmlschema11-1/#sic-key) | yes | `src/identity.rs` — the identity-constraint table, as the tuples a target settles on |
-| [Inherited Attributes](https://www.w3.org/TR/xmlschema11-1/#sic-inheritedAttrs) | **no** | inheritable attributes are a 1.1 feature CTA needs; not implemented |
-| [Match Information](https://www.w3.org/TR/xmlschema11-1/#sic-match-info) | partial | `src/content.rs` — the matcher knows whether a declaration or a wildcard matched; it is not surfaced per item |
-| [Schema Information](https://www.w3.org/TR/xmlschema11-1/#sic-schema) | yes | `src/model.rs` — Schemas is the schema information, and outlives any one validation |
-| [Validated with Notation](https://www.w3.org/TR/xmlschema11-1/#sic-notation-used) | **no** | a NOTATION value is validated but the notation declaration is not contributed |
-| [Validation Failure (Attribute)](https://www.w3.org/TR/xmlschema11-1/#sic-attr-error-code) | partial | `src/diagnostics.rs` — as above |
-| [Validation Failure (Element)](https://www.w3.org/TR/xmlschema11-1/#sic-elt-error-code) | partial | `src/diagnostics.rs` — a DiagCode per failure, not yet the Appendix B constraint name |
+| Rule | Enforced | Where, and what is missing | Fixtures |
+|---|---|---|---|
+| [Assessment Outcome (Attribute)](https://www.w3.org/TR/xmlschema11-1/#sic-a-outcome) | yes | `src/instance.rs` — as above for attributes |  |
+| [Assessment Outcome (Element)](https://www.w3.org/TR/xmlschema11-1/#sic-e-outcome) | yes | `src/instance.rs` — the ValidationReport says whether each element was assessed and with what result |  |
+| [Attribute Declaration](https://www.w3.org/TR/xmlschema11-1/#sic-attr-decl) | yes | `src/instance.rs` — the governing attribute declaration |  |
+| [Attribute Default Value](https://www.w3.org/TR/xmlschema11-1/#sic-attrDefault) | yes | `src/instance.rs` — a schema-supplied attribute default, flagged from_schema |  |
+| [Attribute Validated by Type](https://www.w3.org/TR/xmlschema11-1/#sic-attrType) | yes | `src/instance.rs` — the type that governed the attribute |  |
+| [Element Declaration](https://www.w3.org/TR/xmlschema11-1/#sic-elt-decl) | yes | `src/instance.rs` — the governing element declaration is handed to the consumer |  |
+| [Element Default Value](https://www.w3.org/TR/xmlschema11-1/#sic-eltDefault) | yes | `src/instance.rs` — a schema-supplied element default, flagged from_schema |  |
+| [Element Validated by Type](https://www.w3.org/TR/xmlschema11-1/#sic-eltType) | yes | `src/instance.rs` — the type that governed the element, xsi:type included |  |
+| [ID/IDREF Table](https://www.w3.org/TR/xmlschema11-1/#sic-id) | yes | `src/instance.rs` — the ID/IDREF table, kept for the validation root |  |
+| [Identity-constraint Table](https://www.w3.org/TR/xmlschema11-1/#sic-key) | yes | `src/identity.rs` — the identity-constraint table, as the tuples a target settles on |  |
+| [Inherited Attributes](https://www.w3.org/TR/xmlschema11-1/#sic-inheritedAttrs) | **no** | inheritable attributes are a 1.1 feature CTA needs; not implemented |  |
+| [Match Information](https://www.w3.org/TR/xmlschema11-1/#sic-match-info) | partial | `src/content.rs` — the matcher knows whether a declaration or a wildcard matched; it is not surfaced per item |  |
+| [Schema Information](https://www.w3.org/TR/xmlschema11-1/#sic-schema) | yes | `src/model.rs` — Schemas is the schema information, and outlives any one validation |  |
+| [Validated with Notation](https://www.w3.org/TR/xmlschema11-1/#sic-notation-used) | **no** | a NOTATION value is validated but the notation declaration is not contributed |  |
+| [Validation Failure (Attribute)](https://www.w3.org/TR/xmlschema11-1/#sic-attr-error-code) | partial | `src/diagnostics.rs` — as above |  |
+| [Validation Failure (Element)](https://www.w3.org/TR/xmlschema11-1/#sic-elt-error-code) | partial | `src/diagnostics.rs` — a DiagCode per failure, not yet the Appendix B constraint name |  |
 
 ## Part 2: Datatypes
 
@@ -156,71 +163,71 @@ a site and every diagnostic code to be attributable to a row here.
 
 ### Schema Component Constraints
 
-| Rule | Enforced | Where, and what is missing |
-|---|---|---|
-| [Applicable Facets](https://www.w3.org/TR/xmlschema11-2/#cos-applicable-facets) | yes | `src/facets.rs` — every declared facet is one the datatype admits |
-| [enumeration facet value required for NOTATION](https://www.w3.org/TR/xmlschema11-2/#enumeration-required-notation) | **no** | an xs:NOTATION with no enumeration is accepted |
-| [enumeration valid restriction](https://www.w3.org/TR/xmlschema11-2/#enumeration-valid-restriction) | partial | `src/facets.rs` — literals are checked against the base's built-in ancestor, not against the base's own facets |
-| [fractionDigits less than or equal to totalDigits](https://www.w3.org/TR/xmlschema11-2/#fractionDigits-totalDigits) | yes | `src/facets.rs` — fractionDigits may not exceed totalDigits |
-| [fractionDigits valid restriction](https://www.w3.org/TR/xmlschema11-2/#fractionDigits-valid-restriction) | yes | `src/facets.rs` — narrowing check |
-| [length and minLength or maxLength](https://www.w3.org/TR/xmlschema11-2/#length-minLength-maxLength) | yes | `src/facets.rs` — length beside minLength or maxLength |
-| [length valid restriction](https://www.w3.org/TR/xmlschema11-2/#length-valid-restriction) | yes | `src/facets.rs` — narrowing check |
-| [maxExclusive valid restriction](https://www.w3.org/TR/xmlschema11-2/#maxExclusive-valid-restriction) | yes | `src/facets.rs` — narrowing check |
-| [maxInclusive and maxExclusive](https://www.w3.org/TR/xmlschema11-2/#maxInclusive-maxExclusive) | yes | `src/load.rs` — both bounds at one step |
-| [maxInclusive valid restriction](https://www.w3.org/TR/xmlschema11-2/#maxInclusive-valid-restriction) | yes | `src/facets.rs` — narrowing check |
-| [maxLength valid restriction](https://www.w3.org/TR/xmlschema11-2/#maxLength-valid-restriction) | yes | `src/facets.rs` — narrowing check |
-| [minExclusive < maxInclusive](https://www.w3.org/TR/xmlschema11-2/#minExclusive-less-than-maxInclusive) | yes | `src/load.rs` — the pair check |
-| [minExclusive <= maxExclusive](https://www.w3.org/TR/xmlschema11-2/#minExclusive-less-than-equal-to-maxExclusive) | yes | `src/load.rs` — the pair check |
-| [minExclusive valid restriction](https://www.w3.org/TR/xmlschema11-2/#minExclusive-valid-restriction) | yes | `src/facets.rs` — narrowing check |
-| [minInclusive < maxExclusive](https://www.w3.org/TR/xmlschema11-2/#minInclusive-less-than-maxExclusive) | yes | `src/load.rs` — the pair check |
-| [minInclusive <= maxInclusive](https://www.w3.org/TR/xmlschema11-2/#minInclusive-less-than-equal-to-maxInclusive) | yes | `src/load.rs` — the pair check |
-| [minInclusive and minExclusive](https://www.w3.org/TR/xmlschema11-2/#minInclusive-minExclusive) | yes | `src/load.rs` — both bounds at one step |
-| [minInclusive valid restriction](https://www.w3.org/TR/xmlschema11-2/#minInclusive-valid-restriction) | yes | `src/facets.rs` — narrowing check |
-| [minLength <= maxLength](https://www.w3.org/TR/xmlschema11-2/#minLength-less-than-equal-to-maxLength) | yes | `src/facets.rs` — the pair check |
-| [minLength valid restriction](https://www.w3.org/TR/xmlschema11-2/#minLength-valid-restriction) | yes | `src/facets.rs` — narrowing check |
-| [timezone valid restriction](https://www.w3.org/TR/xmlschema11-2/#timezone-valid-restriction) | **no** | `src/values.rs` — the facet is enforced against values; narrowing it across a restriction step is not checked |
-| [totalDigits valid restriction](https://www.w3.org/TR/xmlschema11-2/#totalDigits-valid-restriction) | yes | `src/facets.rs` — narrowing check |
-| [Valid restriction of assertions](https://www.w3.org/TR/xmlschema11-2/#cos-assertions-restriction) | **no** | assertions are not evaluated, so a restriction of them is not checked |
-| [Valid restriction of pattern](https://www.w3.org/TR/xmlschema11-2/#cos-pattern-restriction) | by construction | `src/validate.rs` — patterns intersect down the chain, so a step can only narrow |
-| [whiteSpace valid restriction](https://www.w3.org/TR/xmlschema11-2/#whiteSpace-valid-restriction) | **no** | a step may widen whiteSpace from collapse back to preserve |
+| Rule | Enforced | Where, and what is missing | Fixtures |
+|---|---|---|---|
+| [Applicable Facets](https://www.w3.org/TR/xmlschema11-2/#cos-applicable-facets) | yes | `src/facets.rs` — every declared facet is one the datatype admits |  |
+| [enumeration facet value required for NOTATION](https://www.w3.org/TR/xmlschema11-2/#enumeration-required-notation) | **no** | an xs:NOTATION with no enumeration is accepted |  |
+| [enumeration valid restriction](https://www.w3.org/TR/xmlschema11-2/#enumeration-valid-restriction) | partial | `src/facets.rs` — literals are checked against the base's built-in ancestor, not against the base's own facets |  |
+| [fractionDigits less than or equal to totalDigits](https://www.w3.org/TR/xmlschema11-2/#fractionDigits-totalDigits) | yes | `src/facets.rs` — fractionDigits may not exceed totalDigits |  |
+| [fractionDigits valid restriction](https://www.w3.org/TR/xmlschema11-2/#fractionDigits-valid-restriction) | yes | `src/facets.rs` — narrowing check |  |
+| [length and minLength or maxLength](https://www.w3.org/TR/xmlschema11-2/#length-minLength-maxLength) | yes | `src/facets.rs` — length beside minLength or maxLength |  |
+| [length valid restriction](https://www.w3.org/TR/xmlschema11-2/#length-valid-restriction) | yes | `src/facets.rs` — narrowing check |  |
+| [maxExclusive valid restriction](https://www.w3.org/TR/xmlschema11-2/#maxExclusive-valid-restriction) | yes | `src/facets.rs` — narrowing check |  |
+| [maxInclusive and maxExclusive](https://www.w3.org/TR/xmlschema11-2/#maxInclusive-maxExclusive) | yes | `src/load.rs` — both bounds at one step |  |
+| [maxInclusive valid restriction](https://www.w3.org/TR/xmlschema11-2/#maxInclusive-valid-restriction) | yes | `src/facets.rs` — narrowing check |  |
+| [maxLength valid restriction](https://www.w3.org/TR/xmlschema11-2/#maxLength-valid-restriction) | yes | `src/facets.rs` — narrowing check |  |
+| [minExclusive < maxInclusive](https://www.w3.org/TR/xmlschema11-2/#minExclusive-less-than-maxInclusive) | yes | `src/load.rs` — the pair check |  |
+| [minExclusive <= maxExclusive](https://www.w3.org/TR/xmlschema11-2/#minExclusive-less-than-equal-to-maxExclusive) | yes | `src/load.rs` — the pair check |  |
+| [minExclusive valid restriction](https://www.w3.org/TR/xmlschema11-2/#minExclusive-valid-restriction) | yes | `src/facets.rs` — narrowing check |  |
+| [minInclusive < maxExclusive](https://www.w3.org/TR/xmlschema11-2/#minInclusive-less-than-maxExclusive) | yes | `src/load.rs` — the pair check |  |
+| [minInclusive <= maxInclusive](https://www.w3.org/TR/xmlschema11-2/#minInclusive-less-than-equal-to-maxInclusive) | yes | `src/load.rs` — the pair check |  |
+| [minInclusive and minExclusive](https://www.w3.org/TR/xmlschema11-2/#minInclusive-minExclusive) | yes | `src/load.rs` — both bounds at one step |  |
+| [minInclusive valid restriction](https://www.w3.org/TR/xmlschema11-2/#minInclusive-valid-restriction) | yes | `src/facets.rs` — narrowing check |  |
+| [minLength <= maxLength](https://www.w3.org/TR/xmlschema11-2/#minLength-less-than-equal-to-maxLength) | yes | `src/facets.rs` — the pair check |  |
+| [minLength valid restriction](https://www.w3.org/TR/xmlschema11-2/#minLength-valid-restriction) | yes | `src/facets.rs` — narrowing check |  |
+| [timezone valid restriction](https://www.w3.org/TR/xmlschema11-2/#timezone-valid-restriction) | **no** | `src/values.rs` — the facet is enforced against values; narrowing it across a restriction step is not checked |  |
+| [totalDigits valid restriction](https://www.w3.org/TR/xmlschema11-2/#totalDigits-valid-restriction) | yes | `src/facets.rs` — narrowing check |  |
+| [Valid restriction of assertions](https://www.w3.org/TR/xmlschema11-2/#cos-assertions-restriction) | **no** | assertions are not evaluated, so a restriction of them is not checked |  |
+| [Valid restriction of pattern](https://www.w3.org/TR/xmlschema11-2/#cos-pattern-restriction) | by construction | `src/validate.rs` — patterns intersect down the chain, so a step can only narrow |  |
+| [whiteSpace valid restriction](https://www.w3.org/TR/xmlschema11-2/#whiteSpace-valid-restriction) | **no** | a step may widen whiteSpace from collapse back to preserve |  |
 
 ### Schema Representation Constraints
 
-| Rule | Enforced | Where, and what is missing |
-|---|---|---|
-| [base attribute or simpleType child](https://www.w3.org/TR/xmlschema11-2/#src-restriction-base-or-simpleType) | yes | `src/load.rs` — base beside an inline simpleType |
-| [Enumeration value](https://www.w3.org/TR/xmlschema11-2/#src-enumeration-value) | yes | `src/facets.rs` — each enumerated literal is a value of the base |
-| [itemType attribute or simpleType child](https://www.w3.org/TR/xmlschema11-2/#src-list-itemType-or-simpleType) | yes | `src/load.rs` — itemType beside an inline simpleType |
-| [memberTypes attribute or simpleType children](https://www.w3.org/TR/xmlschema11-2/#src-union-memberTypes-or-simpleTypes) | yes | `src/load.rs` — memberTypes beside inline simpleTypes |
-| [Pattern value](https://www.w3.org/TR/xmlschema11-2/#src-pattern-value) | yes | `src/regex.rs` — the pattern compiles as an XSD regular expression |
+| Rule | Enforced | Where, and what is missing | Fixtures |
+|---|---|---|---|
+| [base attribute or simpleType child](https://www.w3.org/TR/xmlschema11-2/#src-restriction-base-or-simpleType) | yes | `src/load.rs` — base beside an inline simpleType |  |
+| [Enumeration value](https://www.w3.org/TR/xmlschema11-2/#src-enumeration-value) | yes | `src/facets.rs` — each enumerated literal is a value of the base |  |
+| [itemType attribute or simpleType child](https://www.w3.org/TR/xmlschema11-2/#src-list-itemType-or-simpleType) | yes | `src/load.rs` — itemType beside an inline simpleType |  |
+| [memberTypes attribute or simpleType children](https://www.w3.org/TR/xmlschema11-2/#src-union-memberTypes-or-simpleTypes) | yes | `src/load.rs` — memberTypes beside inline simpleTypes |  |
+| [Pattern value](https://www.w3.org/TR/xmlschema11-2/#src-pattern-value) | yes | `src/regex.rs` — the pattern compiles as an XSD regular expression |  |
 
 ### Validation Rules
 
-| Rule | Enforced | Where, and what is missing |
-|---|---|---|
-| [Assertions Valid](https://www.w3.org/TR/xmlschema11-2/#cvc-assertions-valid) | **no** | assertions are not evaluated |
-| [Datatype Valid](https://www.w3.org/TR/xmlschema11-2/#cvc-datatype-valid) | yes | `src/validate.rs` — atomic, list and union varieties |
-| [enumeration valid](https://www.w3.org/TR/xmlschema11-2/#cvc-enumeration-valid) | yes | `src/values.rs` — compared in the value space, not as strings |
-| [explicitOffset Valid](https://www.w3.org/TR/xmlschema11-2/#cvc-explicitTimezone-valid) | yes | `src/values.rs` — required, prohibited and optional against a value's timezone |
-| [Facet Valid](https://www.w3.org/TR/xmlschema11-2/#cvc-facet-valid) | yes | `src/values.rs` — check_facets, against the set src/validate.rs composed up the chain |
-| [fractionDigits Valid](https://www.w3.org/TR/xmlschema11-2/#cvc-fractionDigits-valid) | yes | `src/values.rs` |
-| [Length Valid](https://www.w3.org/TR/xmlschema11-2/#cvc-length-valid) | yes | `src/values.rs` — facet_length, which each datatype defines for itself |
-| [maxExclusive Valid](https://www.w3.org/TR/xmlschema11-2/#cvc-maxExclusive-valid) | yes | `src/values.rs` |
-| [maxInclusive Valid](https://www.w3.org/TR/xmlschema11-2/#cvc-maxInclusive-valid) | yes | `src/values.rs` |
-| [maxLength Valid](https://www.w3.org/TR/xmlschema11-2/#cvc-maxLength-valid) | yes | `src/values.rs` |
-| [minExclusive Valid](https://www.w3.org/TR/xmlschema11-2/#cvc-minExclusive-valid) | yes | `src/values.rs` |
-| [minInclusive Valid](https://www.w3.org/TR/xmlschema11-2/#cvc-minInclusive-valid) | yes | `src/values.rs` |
-| [minLength Valid](https://www.w3.org/TR/xmlschema11-2/#cvc-minLength-valid) | yes | `src/values.rs` |
-| [pattern valid](https://www.w3.org/TR/xmlschema11-2/#cvc-pattern-valid) | yes | `src/regex.rs` — XSD regular expressions, compiled and matched |
-| [totalDigits Valid](https://www.w3.org/TR/xmlschema11-2/#cvc-totalDigits-valid) | yes | `src/values.rs` |
+| Rule | Enforced | Where, and what is missing | Fixtures |
+|---|---|---|---|
+| [Assertions Valid](https://www.w3.org/TR/xmlschema11-2/#cvc-assertions-valid) | **no** | assertions are not evaluated |  |
+| [Datatype Valid](https://www.w3.org/TR/xmlschema11-2/#cvc-datatype-valid) | yes | `src/validate.rs` — atomic, list and union varieties |  |
+| [enumeration valid](https://www.w3.org/TR/xmlschema11-2/#cvc-enumeration-valid) | yes | `src/values.rs` — compared in the value space, not as strings |  |
+| [explicitOffset Valid](https://www.w3.org/TR/xmlschema11-2/#cvc-explicitTimezone-valid) | yes | `src/values.rs` — required, prohibited and optional against a value's timezone |  |
+| [Facet Valid](https://www.w3.org/TR/xmlschema11-2/#cvc-facet-valid) | yes | `src/values.rs` — check_facets, against the set src/validate.rs composed up the chain |  |
+| [fractionDigits Valid](https://www.w3.org/TR/xmlschema11-2/#cvc-fractionDigits-valid) | yes | `src/values.rs` |  |
+| [Length Valid](https://www.w3.org/TR/xmlschema11-2/#cvc-length-valid) | yes | `src/values.rs` — facet_length, which each datatype defines for itself |  |
+| [maxExclusive Valid](https://www.w3.org/TR/xmlschema11-2/#cvc-maxExclusive-valid) | yes | `src/values.rs` |  |
+| [maxInclusive Valid](https://www.w3.org/TR/xmlschema11-2/#cvc-maxInclusive-valid) | yes | `src/values.rs` |  |
+| [maxLength Valid](https://www.w3.org/TR/xmlschema11-2/#cvc-maxLength-valid) | yes | `src/values.rs` |  |
+| [minExclusive Valid](https://www.w3.org/TR/xmlschema11-2/#cvc-minExclusive-valid) | yes | `src/values.rs` |  |
+| [minInclusive Valid](https://www.w3.org/TR/xmlschema11-2/#cvc-minInclusive-valid) | yes | `src/values.rs` |  |
+| [minLength Valid](https://www.w3.org/TR/xmlschema11-2/#cvc-minLength-valid) | yes | `src/values.rs` |  |
+| [pattern valid](https://www.w3.org/TR/xmlschema11-2/#cvc-pattern-valid) | yes | `src/regex.rs` — XSD regular expressions, compiled and matched |  |
+| [totalDigits Valid](https://www.w3.org/TR/xmlschema11-2/#cvc-totalDigits-valid) | yes | `src/values.rs` |  |
 
 ### Constraints
 
-| Rule | Enforced | Where, and what is missing |
-|---|---|---|
-| [Day-of-month Representations](https://www.w3.org/TR/xmlschema11-2/#con-date-day) | yes | `src/atomic.rs` — as above for xs:date |
-| [Day-of-month Representations](https://www.w3.org/TR/xmlschema11-2/#con-dateTime-day) | yes | `src/atomic.rs` — the lexical form is rejected with it |
-| [Day-of-month Representations](https://www.w3.org/TR/xmlschema11-2/#con-gMonthDay-day) | yes | `src/atomic.rs` — as above for xs:gMonthDay |
-| [Day-of-month Values](https://www.w3.org/TR/xmlschema11-2/#con-date-dayValue) | yes | `src/atomic.rs` — as above for xs:date |
-| [Day-of-month Values](https://www.w3.org/TR/xmlschema11-2/#con-dateTime-dayValue) | yes | `src/atomic.rs` — a day that does not exist in its month is not a value |
-| [Day-of-month Values](https://www.w3.org/TR/xmlschema11-2/#con-gMonthDay-dayValue) | yes | `src/atomic.rs` — as above for xs:gMonthDay, which is why --02-29 is a value |
+| Rule | Enforced | Where, and what is missing | Fixtures |
+|---|---|---|---|
+| [Day-of-month Representations](https://www.w3.org/TR/xmlschema11-2/#con-date-day) | yes | `src/atomic.rs` — as above for xs:date |  |
+| [Day-of-month Representations](https://www.w3.org/TR/xmlschema11-2/#con-dateTime-day) | yes | `src/atomic.rs` — the lexical form is rejected with it |  |
+| [Day-of-month Representations](https://www.w3.org/TR/xmlschema11-2/#con-gMonthDay-day) | yes | `src/atomic.rs` — as above for xs:gMonthDay |  |
+| [Day-of-month Values](https://www.w3.org/TR/xmlschema11-2/#con-date-dayValue) | yes | `src/atomic.rs` — as above for xs:date |  |
+| [Day-of-month Values](https://www.w3.org/TR/xmlschema11-2/#con-dateTime-dayValue) | yes | `src/atomic.rs` — a day that does not exist in its month is not a value |  |
+| [Day-of-month Values](https://www.w3.org/TR/xmlschema11-2/#con-gMonthDay-dayValue) | yes | `src/atomic.rs` — as above for xs:gMonthDay, which is why --02-29 is a value |  |

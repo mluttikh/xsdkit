@@ -5,7 +5,7 @@
 # runs                      10511
 # not scored (queried)      4
 # as XSD 1.0   valid accepted 4563/4573   invalid rejected 171/221
-# as XSD 1.1   valid accepted 5238/5248   invalid rejected 315/469
+# as XSD 1.1   valid accepted 5238/5248   invalid rejected 318/469
 # accepted as 1.0 and rejected as 1.1: 0, of 4786 groups run as both
 #
 # Re-bless with XSDKIT_BLESS=1; see tests/w3c_suite.rs.
@@ -9284,8 +9284,8 @@ Override/over012@1.1	valid	accept	-
 Override/over013@1.1	valid	accept	-
 Override/over014@1.1	invalid	accept	-
 Override/over015@1.1	valid	accept	-
-Override/over016@1.1	invalid	accept	-
-Override/over017@1.1	invalid	accept	-
+Override/over016@1.1	invalid	reject	XSD1102
+Override/over017@1.1	invalid	reject	XSD1102
 Override/over018@1.1	valid	accept	-
 Override/over019@1.1	valid	reject	XSD1201
 Override/over020@1.1	valid	reject	XSD1201
@@ -9833,7 +9833,7 @@ TargetNS/target003@1.0	valid	accept	-
 TargetNS/target003@1.1	valid	accept	-
 TargetNS/target004@1.0	invalid	reject	XSD1005
 TargetNS/target004@1.1	invalid	reject	XSD1005
-TargetNS/target007@1.1	invalid	accept	-
+TargetNS/target007@1.1	invalid	reject	XSD1103
 TargetNS/targetNamespace_004@1.1	valid	accept	-
 TargetNS/targetNamespace_005@1.1	valid	accept	-
 TypeAlternativeTests/s3_12ii01@1.1	valid	accept	-
