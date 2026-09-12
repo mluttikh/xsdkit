@@ -1,0 +1,8 @@
+# The commit of <https://github.com/w3c/xsdtests> the baselines beside this
+# file were blessed against, and the one the `conformance` CI job fetches.
+#
+# A baseline only means anything against one snapshot of the suite, so bumping
+# this and re-blessing are the same change. Upstream edits are rare — the
+# README describes the suite as its state at 2018-03-06 — but when one lands it
+# should arrive here deliberately, with the row changes it causes in the diff.
+7bc3365c652a322f3d762021b3879eb92dae7e30

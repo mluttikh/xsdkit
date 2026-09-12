@@ -15,11 +15,21 @@
 //! ```
 //!
 //! Without the variable every test here is skipped, so CI stays green on a
-//! machine that has not fetched it.
+//! machine that has not fetched it. The `conformance` job does set it: it
+//! fetches the single commit pinned in `tests/conformance/SUITE`, which is a
+//! few seconds and 16 MB where the checkout is 231 MB.
+//!
+//! Both halves score themselves against a **committed per-case baseline** in
+//! `tests/conformance/`, which is the gate; the percentages are a summary of
+//! it. Re-bless after a deliberate change:
+//!
+//! ```text
+//! XSDTESTS=/tmp/xsdtests XSDKIT_BLESS=1 cargo test --test w3c_suite
+//! ```
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
-use xsdkit::{Compilation, Conformance, SchemaSetBuilder, Version};
+use xsdkit::{Compilation, Conformance, Diagnostics, SchemaSetBuilder, Version};
 
 /// The `validity` the suite prescribes for a test, read at the version we
 /// actually run it as.
@@ -34,10 +44,7 @@ use xsdkit::{Compilation, Conformance, SchemaSetBuilder, Version};
 /// Taking the first `<expected>` regardless — which this harness used to do —
 /// scores 49 cases against the wrong expectation.
 fn expected_validity<'a>(test: roxmltree::Node<'a, 'a>, version: Version) -> Option<&'a str> {
-    let token = match version {
-        Version::Xsd10 => "1.0",
-        Version::Xsd11 => "1.1",
-    };
+    let token = version_token(version);
     let expects: Vec<_> = test
         .children()
         .filter(|n| n.has_tag_name("expected"))
@@ -48,6 +55,14 @@ fn expected_validity<'a>(test: roxmltree::Node<'a, 'a>, version: Version) -> Opt
         .find(|n| n.attribute("version").is_some_and(|v| v.contains(token)))
         .or_else(|| expects.iter().find(|n| n.attribute("version").is_none()))
         .and_then(|n| n.attribute("validity"))
+}
+
+/// How a version prints, in the suite's spelling and the baseline's.
+fn version_token(version: Version) -> &'static str {
+    match version {
+        Version::Xsd10 => "1.0",
+        Version::Xsd11 => "1.1",
+    }
 }
 
 /// Which XSD a test group is run as.
@@ -85,10 +100,217 @@ fn suite() -> Option<PathBuf> {
 #[derive(Debug)]
 struct InstanceCase {
     set: String,
+    group: String,
     version: String,
     schema_documents: Vec<PathBuf>,
     instance: PathBuf,
     expect_valid: bool,
+}
+
+/// What one case did, in the two columns the baseline records.
+///
+/// `Panicked` is its own verdict rather than folded into a rejection. A panic
+/// still scores as "did not accept", which is what it was before, but a case
+/// that starts or stops panicking is the single most interesting row in the
+/// file and it must not hide inside a percentage.
+#[derive(Debug, PartialEq, Eq)]
+enum Outcome {
+    /// Nothing was an error.
+    Accepted,
+    /// Something was, and these are the distinct codes.
+    Rejected(String),
+    /// The loader or the validator panicked on it.
+    Panicked,
+    /// Not scored: the schema did not compile, or the file would not read.
+    Skipped(&'static str),
+}
+
+impl Outcome {
+    fn accepted(&self) -> bool {
+        matches!(self, Outcome::Accepted)
+    }
+
+    /// Whether this case counts towards the score at all.
+    fn scored(&self) -> bool {
+        !matches!(self, Outcome::Skipped(_))
+    }
+
+    /// The `verdict` and `codes` columns.
+    fn columns(&self) -> String {
+        match self {
+            Outcome::Accepted => "accept\t-".to_string(),
+            Outcome::Rejected(codes) => format!("reject\t{codes}"),
+            Outcome::Panicked => "panic\t-".to_string(),
+            Outcome::Skipped(why) => format!("skip\t{why}"),
+        }
+    }
+}
+
+/// The distinct error codes of a diagnostic set, sorted and joined with `+`.
+///
+/// Sorted and deduplicated rather than "the first one": the order diagnostics
+/// come out in is an implementation detail, but *which* rules fired is worth
+/// pinning. A case that starts being caught by a second rule as well is a
+/// change a reviewer should see, and one whose only rule changes is a case
+/// that used to pass for a different reason than it does now.
+fn error_codes(d: &Diagnostics) -> String {
+    let codes: BTreeSet<&str> = d.errors().map(|e| e.code.as_str()).collect();
+    if codes.is_empty() {
+        // Unreachable while callers only ask after `has_errors`, but a silent
+        // empty column would be worse than a visible marker.
+        return "-".to_string();
+    }
+    codes.into_iter().collect::<Vec<_>>().join("+")
+}
+
+/// Where the committed baselines live. Excluded from the published crate: 2.6
+/// MB of test data that no downstream build reads.
+fn baseline_path(name: &str) -> PathBuf {
+    Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("tests")
+        .join("conformance")
+        .join(name)
+}
+
+/// Compares this run against the committed baseline, or rewrites it under
+/// `XSDKIT_BLESS`.
+///
+/// This is the gate, and the percentages printed alongside it are a summary.
+/// A floor on a percentage cannot see three fixes landing beside three
+/// regressions; a file with one row per case sees both, and says which cases.
+///
+/// `rows` are `(key, rest)`: the key identifies the case and the rest is what
+/// we did with it, so a case that changed is reported as one `~` line rather
+/// than as an unpaired removal and addition forty lines apart.
+fn check_baseline(name: &str, summary: &[String], rows: Vec<(String, String)>) {
+    let mut rows = rows;
+    rows.sort();
+
+    // Keys have to be unique, because the diff pairs a changed case by key and
+    // a collapsed pair would hide one side of it. Two instance cases do
+    // collide: `introspection` validates the suite's own metadata twice, and
+    // `sg-abstract-upa2` lists `e1.xml` twice with *contradictory*
+    // expectations — one valid, one invalid. Suffix the later occurrences
+    // rather than lose them; a suite quirk should be visible in the file.
+    let mut total: BTreeMap<&str, usize> = BTreeMap::new();
+    for (key, _) in &rows {
+        *total.entry(key.as_str()).or_default() += 1;
+    }
+    let repeated: BTreeSet<String> = total
+        .iter()
+        .filter(|(_, n)| **n > 1)
+        .map(|(k, _)| (*k).to_string())
+        .collect();
+    let mut seen: BTreeMap<String, usize> = BTreeMap::new();
+    for (key, _) in rows.iter_mut() {
+        if repeated.contains(key) {
+            let n = seen.entry(key.clone()).or_default();
+            *n += 1;
+            if *n > 1 {
+                key.push_str(&format!("#{n}"));
+            }
+        }
+    }
+    rows.sort();
+
+    let mut text = String::new();
+    for line in summary {
+        if line.is_empty() {
+            text.push_str("#\n");
+        } else {
+            text.push_str("# ");
+            text.push_str(line);
+            text.push('\n');
+        }
+    }
+    text.push('\n');
+    for (key, rest) in &rows {
+        text.push_str(key);
+        text.push('\t');
+        text.push_str(rest);
+        text.push('\n');
+    }
+
+    let path = baseline_path(name);
+    if std::env::var_os("XSDKIT_BLESS").is_some() {
+        std::fs::create_dir_all(path.parent().expect("baseline has a parent"))
+            .expect("create tests/conformance");
+        std::fs::write(&path, &text).expect("write the baseline");
+        eprintln!("blessed {} — {} rows", path.display(), rows.len());
+        return;
+    }
+
+    let Ok(committed) = std::fs::read_to_string(&path) else {
+        panic!(
+            "no baseline at {}. Write it with:\n    \
+             XSDTESTS=… XSDKIT_BLESS=1 cargo test --test w3c_suite",
+            path.display()
+        );
+    };
+    // A CRLF checkout must not read as a whole-file change. `.gitattributes`
+    // pins these to LF, which makes this belt and braces — and belt and braces
+    // is right for the one gate that fails on a byte.
+    let split = |s: &str| -> Vec<(String, String)> {
+        s.lines()
+            .map(|l| l.trim_end_matches('\r'))
+            .filter(|l| !l.is_empty() && !l.starts_with('#'))
+            .map(|l| match l.split_once('\t') {
+                Some((k, rest)) => (k.to_string(), rest.to_string()),
+                None => (l.to_string(), String::new()),
+            })
+            .collect()
+    };
+    let old: BTreeMap<String, String> = split(&committed).into_iter().collect();
+    let new: BTreeMap<String, String> = split(&text).into_iter().collect();
+    if old == new {
+        return;
+    }
+
+    // Tabs are right in the file and wrong in a terminal report.
+    let show = |row: &str| row.replace('\t', "  ");
+    let mut changed = Vec::new();
+    let mut gone = Vec::new();
+    let mut added = Vec::new();
+    for (key, was) in &old {
+        match new.get(key) {
+            None => gone.push(format!("  - {key}  ({})", show(was))),
+            Some(now) if now != was => changed.push(format!(
+                "  ~ {key}\n        was  {}\n        now  {}",
+                show(was),
+                show(now)
+            )),
+            Some(_) => {}
+        }
+    }
+    for (key, now) in &new {
+        if !old.contains_key(key) {
+            added.push(format!("  + {key}  ({})", show(now)));
+        }
+    }
+
+    let mut report = format!("\n{name} does not match the committed baseline.\n");
+    for (label, list) in [
+        ("cases whose outcome changed", &changed),
+        ("cases no longer in the suite", &gone),
+        ("cases new in the suite", &added),
+    ] {
+        if list.is_empty() {
+            continue;
+        }
+        report.push_str(&format!("\n{} ({}):\n", label, list.len()));
+        for line in list.iter().take(40) {
+            report.push_str(line);
+            report.push('\n');
+        }
+        if list.len() > 40 {
+            report.push_str(&format!("  … and {} more\n", list.len() - 40));
+        }
+    }
+    report.push_str(
+        "\nIf every line above is an improvement, re-bless it in the same change:\n    \
+         XSDTESTS=… XSDKIT_BLESS=1 cargo test --test w3c_suite\n",
+    );
+    panic!("{report}");
 }
 
 /// One schema case: the documents to load, and whether the suite says the
@@ -203,6 +425,7 @@ fn parse_test_sets(root: &Path) -> (Vec<SchemaCase>, Vec<InstanceCase>) {
                     };
                     instances.push(InstanceCase {
                         set: set.clone(),
+                        group: name.clone(),
                         version: version.clone(),
                         schema_documents: documents.clone(),
                         instance: dir.join(href),
@@ -215,8 +438,8 @@ fn parse_test_sets(root: &Path) -> (Vec<SchemaCase>, Vec<InstanceCase>) {
     (out, instances)
 }
 
-/// Whether `xsdkit` considers the schema valid.
-fn accepts(case: &SchemaCase) -> bool {
+/// What `xsdkit` makes of the schema, and why not if it rejects it.
+fn schema_outcome(case: &SchemaCase) -> Outcome {
     let version = version_of(&case.version);
     let mut b = SchemaSetBuilder::new()
         .version(version)
@@ -230,9 +453,15 @@ fn accepts(case: &SchemaCase) -> bool {
     // Loading is deliberately done inside `catch_unwind`: a panic on a
     // hostile schema is itself a conformance failure worth counting rather
     // than one that aborts the run.
-    std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| b.compile().has_errors()))
-        .map(|has_errors| !has_errors)
-        .unwrap_or(false)
+    let compiled = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        let Compilation { diagnostics, .. } = b.compile();
+        diagnostics.has_errors().then(|| error_codes(&diagnostics))
+    }));
+    match compiled {
+        Ok(None) => Outcome::Accepted,
+        Ok(Some(codes)) => Outcome::Rejected(codes),
+        Err(_) => Outcome::Panicked,
+    }
 }
 
 #[derive(Default, Debug)]
@@ -346,11 +575,22 @@ fn w3c_schema_conformance() {
     let mut overall = Tally::default();
     let mut by_set: BTreeMap<String, Tally> = BTreeMap::new();
     let mut false_rejections: Vec<String> = Vec::new();
+    let mut rows: Vec<(String, String)> = Vec::new();
 
     let hook = std::panic::take_hook();
     std::panic::set_hook(Box::new(|_| {}));
     for c in &cases {
-        let accepted = accepts(c);
+        let outcome = schema_outcome(c);
+        let accepted = outcome.accepted();
+        rows.push((
+            format!("{}/{}", c.set, c.group),
+            format!(
+                "{}\t{}\t{}",
+                version_token(version_of(&c.version)),
+                if c.expect_valid { "valid" } else { "invalid" },
+                outcome.columns(),
+            ),
+        ));
         let t = by_set.entry(c.set.clone()).or_default();
         match (c.expect_valid, accepted) {
             (true, true) => {
@@ -422,8 +662,34 @@ fn w3c_schema_conformance() {
         println!("\nfirst false rejections: {}", false_rejections.join(", "));
     }
 
+    // The gate. The floor below is a second, far weaker one; this is the check
+    // that fails on one case moving in either direction.
+    check_baseline(
+        "schema-cases.tsv",
+        &[
+            "W3C XML Schema Test Suite — one row per schema case.".to_string(),
+            String::new(),
+            "set/group  version-run  expected  verdict  error-codes".to_string(),
+            String::new(),
+            format!("cases                     {}", overall.total()),
+            format!(
+                "valid schemas accepted    {}/{}",
+                overall.accepted_valid, valid_total
+            ),
+            format!(
+                "invalid schemas rejected  {}/{}",
+                overall.rejected_invalid, invalid_total
+            ),
+            String::new(),
+            "Re-bless with XSDKIT_BLESS=1; see tests/w3c_suite.rs.".to_string(),
+        ],
+        rows,
+    );
+
     // A ratchet, not a target. Raise it as the number improves; never lower
-    // it silently.
+    // it silently. It survives the baseline because it is the one assertion
+    // that still means something on a machine whose baseline was blessed
+    // against a half-fetched suite.
     let accepted_pct = pct(overall.accepted_valid, valid_total);
     assert!(
         accepted_pct >= 50.0,
@@ -431,14 +697,11 @@ fn w3c_schema_conformance() {
     );
 }
 
-/// Ignored by default: 21,671 documents takes minutes even with the schema
-/// cache, where the schema half takes seconds. Run it deliberately:
-///
-/// ```text
-/// XSDTESTS=/tmp/xsdtests cargo test --test w3c_suite -- --ignored --nocapture
-/// ```
+/// 21,671 documents, and no longer expensive: 3.3s in `--release` and 19s in a
+/// debug build, because the schema cache below turned it from "compile per
+/// document" into "compile per group". It was `#[ignore]`d on the strength of
+/// a 4.5-minute figure that predates that cache, and ran nowhere as a result.
 #[test]
-#[ignore = "21,671 documents; run deliberately with --ignored"]
 fn w3c_instance_conformance() {
     let Some(root) = suite() else {
         eprintln!("XSDTESTS is not set; skipping the W3C suite");
@@ -454,6 +717,7 @@ fn w3c_instance_conformance() {
     let mut tally = Tally::default();
     let mut unusable = 0usize;
     let mut by_set: BTreeMap<String, Tally> = BTreeMap::new();
+    let mut rows: Vec<(String, String)> = Vec::new();
     // Many groups share one schema, and compiling is the expensive half.
     // "Compile once, validate many" is the crate's own claim; the harness
     // takes it at its word or the run takes ten minutes instead of one.
@@ -462,68 +726,43 @@ fn w3c_instance_conformance() {
     let hook = std::panic::take_hook();
     std::panic::set_hook(Box::new(|_| {}));
     for c in &cases {
-        let Ok(xml) = std::fs::read_to_string(&c.instance) else {
+        let outcome = instance_outcome(c, &mut cache);
+        rows.push((
+            format!(
+                "{}/{}/{}",
+                c.set,
+                c.group,
+                c.instance.file_name().unwrap_or_default().to_string_lossy()
+            ),
+            format!(
+                "{}\t{}\t{}",
+                version_token(version_of(&c.version)),
+                if c.expect_valid { "valid" } else { "invalid" },
+                outcome.columns(),
+            ),
+        ));
+        let t = by_set.entry(c.set.clone()).or_default();
+        if !outcome.scored() {
             unusable += 1;
             continue;
-        };
-        let key = format!(
-            "{}|{}",
-            c.version,
-            c.schema_documents
-                .iter()
-                .map(|p| p.display().to_string())
-                .collect::<Vec<_>>()
-                .join(",")
-        );
-        let entry = cache.entry(key).or_insert_with(|| {
-            let version = version_of(&c.version);
-            let mut b = SchemaSetBuilder::new()
-                .version(version)
-                .conformance(Conformance::Lax);
-            if let Some(dir) = c.schema_documents[0].parent() {
-                b = b.search_path(dir);
+        }
+        match (c.expect_valid, outcome.accepted()) {
+            (true, true) => {
+                tally.accepted_valid += 1;
+                t.accepted_valid += 1;
             }
-            for d in &c.schema_documents {
-                b = b.file(d.display().to_string());
+            (true, false) => {
+                tally.rejected_valid += 1;
+                t.rejected_valid += 1;
             }
-            std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                let Compilation {
-                    schemas,
-                    diagnostics: diags,
-                } = b.compile();
-                // A schema this crate could not load says nothing about the
-                // document, so those are counted apart rather than scored.
-                (!diags.has_errors()).then_some(schemas)
-            }))
-            .unwrap_or(None)
-        });
-        let verdict = match entry {
-            None => Ok(None),
-            Some(schemas) => std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                Some(schemas.document_validator().validate(&xml).is_valid())
-            })),
-        };
-        let t = by_set.entry(c.set.clone()).or_default();
-        match verdict {
-            Ok(Some(accepted)) => match (c.expect_valid, accepted) {
-                (true, true) => {
-                    tally.accepted_valid += 1;
-                    t.accepted_valid += 1;
-                }
-                (true, false) => {
-                    tally.rejected_valid += 1;
-                    t.rejected_valid += 1;
-                }
-                (false, false) => {
-                    tally.rejected_invalid += 1;
-                    t.rejected_invalid += 1;
-                }
-                (false, true) => {
-                    tally.accepted_invalid += 1;
-                    t.accepted_invalid += 1;
-                }
-            },
-            _ => unusable += 1,
+            (false, false) => {
+                tally.rejected_invalid += 1;
+                t.rejected_invalid += 1;
+            }
+            (false, true) => {
+                tally.accepted_invalid += 1;
+                t.accepted_invalid += 1;
+            }
         }
     }
     std::panic::set_hook(hook);
@@ -572,6 +811,29 @@ fn w3c_instance_conformance() {
         );
     }
 
+    check_baseline(
+        "instance-cases.tsv",
+        &[
+            "W3C XML Schema Test Suite — one row per instance case.".to_string(),
+            String::new(),
+            "set/group/document  version-run  expected  verdict  error-codes".to_string(),
+            String::new(),
+            format!("cases scored               {}", tally.total()),
+            format!("skipped                    {unusable}"),
+            format!(
+                "valid documents accepted   {}/{}",
+                tally.accepted_valid, valid_total
+            ),
+            format!(
+                "invalid documents rejected {}/{}",
+                tally.rejected_invalid, invalid_total
+            ),
+            String::new(),
+            "Re-bless with XSDKIT_BLESS=1; see tests/w3c_suite.rs.".to_string(),
+        ],
+        rows,
+    );
+
     // A ratchet on false alarms: rejecting a valid document is the failure
     // that makes a validator unusable.
     let accepted = pct(tally.accepted_valid, valid_total);
@@ -579,4 +841,60 @@ fn w3c_instance_conformance() {
         accepted >= 40.0,
         "valid-document acceptance fell to {accepted:.1}%"
     );
+}
+
+/// One instance document against its schema, with the schema compiled at most
+/// once per group.
+///
+/// A schema this crate could not load says nothing about the document, so those
+/// are skipped rather than scored. A panic is not: it scores as "did not
+/// accept", the same way the schema half treats one.
+fn instance_outcome(
+    c: &InstanceCase,
+    cache: &mut BTreeMap<String, Option<xsdkit::Schemas>>,
+) -> Outcome {
+    let Ok(xml) = std::fs::read_to_string(&c.instance) else {
+        return Outcome::Skipped("unreadable");
+    };
+    let cache_key = format!(
+        "{}|{}",
+        c.version,
+        c.schema_documents
+            .iter()
+            .map(|p| p.display().to_string())
+            .collect::<Vec<_>>()
+            .join(",")
+    );
+    let entry = cache.entry(cache_key).or_insert_with(|| {
+        let version = version_of(&c.version);
+        let mut b = SchemaSetBuilder::new()
+            .version(version)
+            .conformance(Conformance::Lax);
+        if let Some(dir) = c.schema_documents[0].parent() {
+            b = b.search_path(dir);
+        }
+        for d in &c.schema_documents {
+            b = b.file(d.display().to_string());
+        }
+        std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let Compilation {
+                schemas,
+                diagnostics: diags,
+            } = b.compile();
+            (!diags.has_errors()).then_some(schemas)
+        }))
+        .unwrap_or(None)
+    });
+    let Some(schemas) = entry else {
+        return Outcome::Skipped("schema");
+    };
+    let verdict = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        let report = schemas.document_validator().validate(&xml);
+        (!report.is_valid()).then(|| error_codes(&report.diagnostics))
+    }));
+    match verdict {
+        Ok(None) => Outcome::Accepted,
+        Ok(Some(codes)) => Outcome::Rejected(codes),
+        Err(_) => Outcome::Panicked,
+    }
 }
