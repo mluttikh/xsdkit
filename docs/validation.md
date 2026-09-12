@@ -241,7 +241,8 @@ not evaluated. A document that violates one of those is currently reported as
 valid.
 
 [Conformance](project/conformance.md) has the measured numbers: 99.0% of the
-W3C suite's 21,573 document cases are judged correctly.
+W3C suite's 21,671 documents are judged correctly when read as XSD 1.1, and
+99.8% when read as XSD 1.0.
 
 ## Next
 

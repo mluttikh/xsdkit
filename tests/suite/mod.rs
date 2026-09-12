@@ -95,21 +95,33 @@ pub fn version_token(version: Version) -> &'static str {
     }
 }
 
-/// Which XSD a test group is run as.
+/// Which XSD a test group is run as — every one of them, not one of them.
 ///
-/// A group listing both versions is run as 1.0: it is the stricter reading, so
-/// a schema that passes there passes in either.
-pub fn version_of(v: &str) -> Version {
-    // `full-xpath-in-CTA` and `restricted-xpath-in-CTA` are not versions, they
-    // are which XPath subset a processor allows in conditional type
-    // assignment — and CTA exists only in 1.1, so both name 1.1. Twenty
-    // `saxonData/CTA` groups carry the first of them on the group itself, and
-    // `contains("1.1")` said no to all of them: ten were scored against XSD
-    // 1.0, a language in which `xs:alternative` is not a thing.
-    if v.contains("CTA") || (v.contains("1.1") && !v.contains("1.0")) {
-        Version::Xsd11
-    } else {
-        Version::Xsd10
+/// A group that declares both versions, or declares none, is run **twice**,
+/// once as each. It used to be run as 1.0 alone on the reasoning that 1.0 is
+/// the stricter reading, so a schema passing there passes in either — which is
+/// true of the score and false of the coverage. 4,788 of the 5,737 groups
+/// declare no version, so that choice left the whole XSD 1.1 path exercised by
+/// the 921 groups that name it. Running both costs about a second and takes
+/// that to 5,709.
+///
+/// It also makes the version-dependent half of `<expected>` reachable: a case
+/// can be valid in one version and invalid in the other, and only one run per
+/// group could ever see one of those answers.
+///
+/// `full-xpath-in-CTA` and `restricted-xpath-in-CTA` are not versions, they
+/// are which XPath subset a processor allows in conditional type assignment —
+/// and CTA exists only in 1.1, so both name 1.1. Twenty `saxonData/CTA` groups
+/// carry the first of them on the group itself, and `contains("1.1")` said no
+/// to all of them: ten were read as XSD 1.0, a language in which
+/// `xs:alternative` is not a thing.
+pub fn versions_of(v: &str) -> &'static [Version] {
+    let (has10, has11) = (v.contains("1.0"), v.contains("1.1") || v.contains("CTA"));
+    match (has10, has11) {
+        (true, false) => &[Version::Xsd10],
+        (false, true) => &[Version::Xsd11],
+        // Both, or neither declared, which the suite means as both.
+        _ => &[Version::Xsd10, Version::Xsd11],
     }
 }
 
@@ -137,7 +149,8 @@ pub fn suite_root() -> Option<PathBuf> {
 pub struct InstanceCase {
     pub set: String,
     pub group: String,
-    pub version: String,
+    /// The language the schema is read as. See [`versions_of`].
+    pub version: Version,
     pub schema_documents: Vec<PathBuf>,
     pub instance: PathBuf,
     pub expect_valid: bool,
@@ -208,7 +221,9 @@ pub fn error_codes(d: &Diagnostics) -> String {
 pub struct SchemaCase {
     pub set: String,
     pub group: String,
-    pub version: String,
+    /// The language this case is read as, already resolved from the group's
+    /// declaration by [`versions_of`].
+    pub version: Version,
     pub documents: Vec<PathBuf>,
     pub expect_valid: bool,
     /// The working group has challenged this expectation. See [`disputed`].
@@ -262,7 +277,7 @@ pub fn parse_test_sets(root: &Path) -> (Vec<SchemaCase>, Vec<InstanceCase>) {
             .to_string();
 
         for group in doc.descendants().filter(|n| n.has_tag_name("testGroup")) {
-            let version = group.attribute("version").unwrap_or("1.0 1.1").to_string();
+            let declared = group.attribute("version").unwrap_or("1.0 1.1");
             let name = group.attribute("name").unwrap_or("?").to_string();
             for st in group.children().filter(|n| n.has_tag_name("schemaTest")) {
                 let documents: Vec<PathBuf> = st
@@ -271,59 +286,65 @@ pub fn parse_test_sets(root: &Path) -> (Vec<SchemaCase>, Vec<InstanceCase>) {
                     .filter_map(|n| n.attribute(("http://www.w3.org/1999/xlink", "href")))
                     .map(|h| dir.join(h))
                     .collect();
-                let Some(validity) = expected_validity(st, version_of(&version)) else {
-                    continue;
-                };
-                // `notKnown` cases are the ones the working group could not
-                // agree on; scoring against them would be scoring noise.
-                let expect_valid = match validity {
-                    "valid" => true,
-                    "invalid" => false,
-                    _ => continue,
-                };
                 if documents.is_empty() {
                     continue;
                 }
-                out.push(SchemaCase {
-                    set: set.clone(),
-                    group: name.clone(),
-                    version: version.clone(),
-                    disputed: disputed(st),
-                    documents: documents.clone(),
-                    expect_valid,
-                });
-
-                // Instance cases only mean anything against a schema the
-                // suite says is valid; a document cannot be judged against a
-                // schema that should not have compiled.
-                if !expect_valid {
-                    continue;
-                }
-                for it in group.children().filter(|n| n.has_tag_name("instanceTest")) {
-                    let Some(href) = it
-                        .children()
-                        .find(|n| n.has_tag_name("instanceDocument"))
-                        .and_then(|n| n.attribute(("http://www.w3.org/1999/xlink", "href")))
-                    else {
+                // One case per version the group is run as, each with the
+                // expectation resolved at *that* version: the two can differ,
+                // and a single run per group could only ever see one of them.
+                for &version in versions_of(declared) {
+                    let Some(validity) = expected_validity(st, version) else {
                         continue;
                     };
-                    let Some(validity) = expected_validity(it, version_of(&version)) else {
-                        continue;
-                    };
-                    let expect = match validity {
+                    // `notKnown` cases are the ones the working group could
+                    // not agree on; scoring against them would be scoring
+                    // noise.
+                    let expect_valid = match validity {
                         "valid" => true,
                         "invalid" => false,
                         _ => continue,
                     };
-                    instances.push(InstanceCase {
+                    out.push(SchemaCase {
                         set: set.clone(),
                         group: name.clone(),
-                        version: version.clone(),
-                        disputed: disputed(it),
-                        schema_documents: documents.clone(),
-                        instance: dir.join(href),
-                        expect_valid: expect,
+                        version,
+                        disputed: disputed(st),
+                        documents: documents.clone(),
+                        expect_valid,
                     });
+
+                    // Instance cases only mean anything against a schema the
+                    // suite says is valid; a document cannot be judged
+                    // against a schema that should not have compiled.
+                    if !expect_valid {
+                        continue;
+                    }
+                    for it in group.children().filter(|n| n.has_tag_name("instanceTest")) {
+                        let Some(href) = it
+                            .children()
+                            .find(|n| n.has_tag_name("instanceDocument"))
+                            .and_then(|n| n.attribute(("http://www.w3.org/1999/xlink", "href")))
+                        else {
+                            continue;
+                        };
+                        let Some(validity) = expected_validity(it, version) else {
+                            continue;
+                        };
+                        let expect = match validity {
+                            "valid" => true,
+                            "invalid" => false,
+                            _ => continue,
+                        };
+                        instances.push(InstanceCase {
+                            set: set.clone(),
+                            group: name.clone(),
+                            version,
+                            disputed: disputed(it),
+                            schema_documents: documents.clone(),
+                            instance: dir.join(href),
+                            expect_valid: expect,
+                        });
+                    }
                 }
             }
         }
@@ -339,7 +360,7 @@ pub fn parse_test_sets(root: &Path) -> (Vec<SchemaCase>, Vec<InstanceCase>) {
 /// them.
 pub fn compile_case(case: &SchemaCase) -> Option<Diagnostics> {
     let mut b = SchemaSetBuilder::new()
-        .version(version_of(&case.version))
+        .version(case.version)
         .conformance(Conformance::Strict);
     if let Some(dir) = case.documents[0].parent() {
         b = b.search_path(dir);
@@ -387,7 +408,7 @@ pub fn instance_outcome(
     };
     let cache_key = format!(
         "{}|{}",
-        c.version,
+        version_token(c.version),
         c.schema_documents
             .iter()
             .map(|p| p.display().to_string())
@@ -395,9 +416,8 @@ pub fn instance_outcome(
             .join(",")
     );
     let entry = cache.entry(cache_key).or_insert_with(|| {
-        let version = version_of(&c.version);
         let mut b = SchemaSetBuilder::new()
-            .version(version)
+            .version(c.version)
             .conformance(Conformance::Lax);
         if let Some(dir) = c.schema_documents[0].parent() {
             b = b.search_path(dir);

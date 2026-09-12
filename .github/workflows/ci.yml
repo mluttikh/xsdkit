@@ -89,11 +89,12 @@ jobs:
           git -C /tmp/xsdtests fetch -q --depth 1 origin "$suite"
           git -C /tmp/xsdtests checkout -q FETCH_HEAD
       # Both halves, against the committed per-case baselines in
-      # tests/conformance: 5,727 schema cases and 21,623 instance cases in
-      # about twenty seconds in a debug build. The gate is per case, so a fix
-      # landing beside a regression fails here rather than averaging out.
+      # tests/conformance: 10,515 schema runs and 42,058 instance runs — every
+      # group that the suite prescribes for both versions is read as each — in
+      # about thirty-five seconds in a debug build. The gate is per case, so a
+      # fix landing beside a regression fails here rather than averaging out.
       #
-      # `--release` would run it in four seconds and spend two minutes
+      # `--release` would run it in seven seconds and spend two minutes
       # compiling to get there.
       - name: Run the suite against the committed baselines
         env:

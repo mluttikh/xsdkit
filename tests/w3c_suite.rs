@@ -29,14 +29,33 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
-use xsdkit::{Conformance, SchemaSetBuilder};
+use xsdkit::{Conformance, SchemaSetBuilder, Version};
 
 #[path = "suite/mod.rs"]
 mod suite;
 use suite::*;
 
-/// Where the committed baselines live. Excluded from the published crate: 2.6
-/// MB of test data that no downstream build reads.
+/// `accepted/total` for one half of a tally, or `-` when that version ran
+/// nothing. Keeps the baseline header readable without repeating the
+/// arithmetic four times.
+fn fraction(t: Option<&Tally>, valid_half: bool) -> String {
+    match t {
+        None => "-".to_string(),
+        Some(t) if valid_half => format!(
+            "{}/{}",
+            t.accepted_valid,
+            t.accepted_valid + t.rejected_valid
+        ),
+        Some(t) => format!(
+            "{}/{}",
+            t.rejected_invalid,
+            t.rejected_invalid + t.accepted_invalid
+        ),
+    }
+}
+
+/// Where the committed baselines live. Excluded from the published crate: 5 MB
+/// of test data that no downstream build reads, and about 180 KB packed.
 fn baseline_path(name: &str) -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("tests")
@@ -224,9 +243,8 @@ fn children_agrees_with_the_predicates_across_the_suite() {
     let (mut types, mut pairs) = (0usize, 0usize);
 
     for case in &cases {
-        let version = version_of(&case.version);
         let mut b = SchemaSetBuilder::new()
-            .version(version)
+            .version(case.version)
             .conformance(Conformance::Lax);
         if let Some(dir) = case.documents[0].parent() {
             b = b.search_path(dir);
@@ -294,20 +312,26 @@ fn w3c_schema_conformance() {
     );
 
     let mut overall = Tally::default();
+    // Per version, because one percentage over both would be an average of
+    // two different languages: "70.4% of invalid schemas rejected" is true of
+    // neither XSD 1.0 nor XSD 1.1 on its own.
+    let mut by_version: BTreeMap<&'static str, Tally> = BTreeMap::new();
     let mut by_set: BTreeMap<String, Tally> = BTreeMap::new();
     let mut false_rejections: Vec<String> = Vec::new();
     let mut rows: Vec<(String, String)> = Vec::new();
     let mut unscored = 0usize;
+    // group -> what each version made of it, for the one relation that ought
+    // to hold across them.
+    let mut both: BTreeMap<String, (Option<bool>, Option<bool>)> = BTreeMap::new();
 
     let hook = std::panic::take_hook();
     std::panic::set_hook(Box::new(|_| {}));
     for c in &cases {
         let outcome = schema_outcome(c);
         rows.push((
-            format!("{}/{}", c.set, c.group),
+            format!("{}/{}@{}", c.set, c.group, version_token(c.version)),
             format!(
-                "{}\t{}\t{}",
-                version_token(version_of(&c.version)),
+                "{}\t{}",
                 if c.expect_valid { "valid" } else { "invalid" },
                 outcome.columns(),
             ),
@@ -317,24 +341,41 @@ fn w3c_schema_conformance() {
             unscored += 1;
             continue;
         }
+        let seen = both.entry(format!("{}/{}", c.set, c.group)).or_default();
+        match c.version {
+            Version::Xsd10 => seen.0 = Some(outcome.accepted()),
+            Version::Xsd11 => seen.1 = Some(outcome.accepted()),
+        }
+        let v = by_version.entry(version_token(c.version)).or_default();
         match (c.expect_valid, outcome.accepted()) {
             (true, true) => {
                 overall.accepted_valid += 1;
+                v.accepted_valid += 1;
                 t.accepted_valid += 1;
             }
             (true, false) => {
                 overall.rejected_valid += 1;
+                v.rejected_valid += 1;
                 t.rejected_valid += 1;
                 if false_rejections.len() < 40 {
-                    false_rejections.push(format!("{}/{}", c.set, c.group));
+                    // With the version, or a group rejected in both looks
+                    // like the same case listed twice.
+                    false_rejections.push(format!(
+                        "{}/{}@{}",
+                        c.set,
+                        c.group,
+                        version_token(c.version)
+                    ));
                 }
             }
             (false, false) => {
                 overall.rejected_invalid += 1;
+                v.rejected_invalid += 1;
                 t.rejected_invalid += 1;
             }
             (false, true) => {
                 overall.accepted_invalid += 1;
+                v.accepted_invalid += 1;
                 t.accepted_invalid += 1;
             }
         }
@@ -349,27 +390,55 @@ fn w3c_schema_conformance() {
         }
     };
     println!("\n=== W3C XML Schema Test Suite — schema tests ===");
-    println!("cases                     {}", overall.total());
+    println!("runs                      {}", overall.total());
     println!("not scored (queried)      {unscored}");
+    for (version, t) in &by_version {
+        let valid = t.accepted_valid + t.rejected_valid;
+        let invalid = t.rejected_invalid + t.accepted_invalid;
+        println!(
+            "\nas XSD {version}  —  {} runs, {} correct ({:.1}%)",
+            t.total(),
+            t.correct(),
+            pct(t.correct(), t.total())
+        );
+        println!(
+            "  valid schemas accepted    {}/{} ({:.1}%)   <- reading real schemas",
+            t.accepted_valid,
+            valid,
+            pct(t.accepted_valid, valid)
+        );
+        println!(
+            "  invalid schemas rejected  {}/{} ({:.1}%)   <- validity constraints",
+            t.rejected_invalid,
+            invalid,
+            pct(t.rejected_invalid, invalid)
+        );
+    }
+
+    // The relation the suite lets us check for free, over the 4,786 groups it
+    // prescribes for both versions: XSD 1.1 is meant to be a superset, so a
+    // schema we read as 1.0 should still read as 1.1. The other direction is
+    // ordinary — 1.1 relaxes rules and adds lexical forms — and is reported
+    // separately rather than treated as a fault.
+    let paired: Vec<_> = both
+        .iter()
+        .filter_map(|(g, (a, b))| Some((g, (*a)?, (*b)?)))
+        .collect();
+    let tightened: Vec<_> = paired
+        .iter()
+        .filter(|(_, a, b)| *a && !*b)
+        .map(|(g, ..)| g.as_str())
+        .collect();
+    let relaxed = paired.iter().filter(|(_, a, b)| !*a && *b).count();
+    println!("\nboth versions: {} groups", paired.len());
     println!(
-        "correct                   {} ({:.1}%)",
-        overall.correct(),
-        pct(overall.correct(), overall.total())
+        "  accepted as 1.0, rejected as 1.1  {}   <- 1.1 is meant to be a superset",
+        tightened.len()
     );
-    let valid_total = overall.accepted_valid + overall.rejected_valid;
-    let invalid_total = overall.rejected_invalid + overall.accepted_invalid;
-    println!(
-        "\nvalid schemas accepted    {}/{} ({:.1}%)   <- reading real schemas",
-        overall.accepted_valid,
-        valid_total,
-        pct(overall.accepted_valid, valid_total)
-    );
-    println!(
-        "invalid schemas rejected  {}/{} ({:.1}%)   <- validity constraints",
-        overall.rejected_invalid,
-        invalid_total,
-        pct(overall.rejected_invalid, invalid_total)
-    );
+    println!("  rejected as 1.0, accepted as 1.1  {relaxed}   <- ordinary: 1.1 relaxes rules");
+    if !tightened.is_empty() {
+        println!("  {}", tightened.join(", "));
+    }
 
     println!("\nworst test sets by false rejection:");
     let mut sets: Vec<_> = by_set.iter().collect();
@@ -395,17 +464,24 @@ fn w3c_schema_conformance() {
         &[
             "W3C XML Schema Test Suite — one row per schema case.".to_string(),
             String::new(),
-            "set/group  version-run  expected  verdict  error-codes".to_string(),
+            "set/group@version  expected  verdict  error-codes".to_string(),
             String::new(),
-            format!("cases                     {}", overall.total()),
+            format!("runs                      {}", overall.total()),
             format!("not scored (queried)      {unscored}"),
             format!(
-                "valid schemas accepted    {}/{}",
-                overall.accepted_valid, valid_total
+                "as XSD 1.0   valid accepted {}   invalid rejected {}",
+                fraction(by_version.get("1.0"), true),
+                fraction(by_version.get("1.0"), false)
             ),
             format!(
-                "invalid schemas rejected  {}/{}",
-                overall.rejected_invalid, invalid_total
+                "as XSD 1.1   valid accepted {}   invalid rejected {}",
+                fraction(by_version.get("1.1"), true),
+                fraction(by_version.get("1.1"), false)
+            ),
+            format!(
+                "accepted as 1.0 and rejected as 1.1: {}, of {} groups run as both",
+                tightened.len(),
+                paired.len()
             ),
             String::new(),
             "Re-bless with XSDKIT_BLESS=1; see tests/w3c_suite.rs.".to_string(),
@@ -417,6 +493,7 @@ fn w3c_schema_conformance() {
     // it silently. It survives the baseline because it is the one assertion
     // that still means something on a machine whose baseline was blessed
     // against a half-fetched suite.
+    let valid_total = overall.accepted_valid + overall.rejected_valid;
     let accepted_pct = pct(overall.accepted_valid, valid_total);
     assert!(
         accepted_pct >= 50.0,
@@ -443,6 +520,7 @@ fn w3c_instance_conformance() {
 
     let mut tally = Tally::default();
     let mut unscored = 0usize;
+    let mut by_version: BTreeMap<&'static str, Tally> = BTreeMap::new();
     let mut by_set: BTreeMap<String, Tally> = BTreeMap::new();
     let mut rows: Vec<(String, String)> = Vec::new();
     // Many groups share one schema, and compiling is the expensive half.
@@ -456,14 +534,14 @@ fn w3c_instance_conformance() {
         let outcome = instance_outcome(c, &mut cache);
         rows.push((
             format!(
-                "{}/{}/{}",
+                "{}/{}/{}@{}",
                 c.set,
                 c.group,
-                c.instance.file_name().unwrap_or_default().to_string_lossy()
+                c.instance.file_name().unwrap_or_default().to_string_lossy(),
+                version_token(c.version),
             ),
             format!(
-                "{}\t{}\t{}",
-                version_token(version_of(&c.version)),
+                "{}\t{}",
                 if c.expect_valid { "valid" } else { "invalid" },
                 outcome.columns(),
             ),
@@ -473,21 +551,26 @@ fn w3c_instance_conformance() {
             unscored += 1;
             continue;
         }
+        let v = by_version.entry(version_token(c.version)).or_default();
         match (c.expect_valid, outcome.accepted()) {
             (true, true) => {
                 tally.accepted_valid += 1;
+                v.accepted_valid += 1;
                 t.accepted_valid += 1;
             }
             (true, false) => {
                 tally.rejected_valid += 1;
+                v.rejected_valid += 1;
                 t.rejected_valid += 1;
             }
             (false, false) => {
                 tally.rejected_invalid += 1;
+                v.rejected_invalid += 1;
                 t.rejected_invalid += 1;
             }
             (false, true) => {
                 tally.accepted_invalid += 1;
+                v.accepted_invalid += 1;
                 t.accepted_invalid += 1;
             }
         }
@@ -501,28 +584,31 @@ fn w3c_instance_conformance() {
             n as f64 * 100.0 / d as f64
         }
     };
-    let valid_total = tally.accepted_valid + tally.rejected_valid;
-    let invalid_total = tally.rejected_invalid + tally.accepted_invalid;
     println!("\n=== W3C XML Schema Test Suite — instance tests ===");
-    println!("cases scored              {}", tally.total());
-    println!("not scored                 {unscored}");
-    println!(
-        "correct                   {} ({:.1}%)",
-        tally.correct(),
-        pct(tally.correct(), tally.total())
-    );
-    println!(
-        "\nvalid documents accepted  {}/{} ({:.1}%)   <- false alarms",
-        tally.accepted_valid,
-        valid_total,
-        pct(tally.accepted_valid, valid_total)
-    );
-    println!(
-        "invalid documents rejected {}/{} ({:.1}%)   <- what validation catches",
-        tally.rejected_invalid,
-        invalid_total,
-        pct(tally.rejected_invalid, invalid_total)
-    );
+    println!("runs                      {}", tally.total());
+    println!("not scored                {unscored}");
+    for (version, t) in &by_version {
+        let valid = t.accepted_valid + t.rejected_valid;
+        let invalid = t.rejected_invalid + t.accepted_invalid;
+        println!(
+            "\nas XSD {version}  —  {} runs, {} correct ({:.1}%)",
+            t.total(),
+            t.correct(),
+            pct(t.correct(), t.total())
+        );
+        println!(
+            "  valid documents accepted   {}/{} ({:.1}%)   <- false alarms",
+            t.accepted_valid,
+            valid,
+            pct(t.accepted_valid, valid)
+        );
+        println!(
+            "  invalid documents rejected {}/{} ({:.1}%)   <- what validation catches",
+            t.rejected_invalid,
+            invalid,
+            pct(t.rejected_invalid, invalid)
+        );
+    }
 
     println!("\nworst sets by false alarm:");
     let mut sets: Vec<_> = by_set.iter().collect();
@@ -543,17 +629,19 @@ fn w3c_instance_conformance() {
         &[
             "W3C XML Schema Test Suite — one row per instance case.".to_string(),
             String::new(),
-            "set/group/document  version-run  expected  verdict  error-codes".to_string(),
+            "set/group/document@version  expected  verdict  error-codes".to_string(),
             String::new(),
-            format!("cases scored               {}", tally.total()),
-            format!("not scored                 {unscored}"),
+            format!("runs                      {}", tally.total()),
+            format!("not scored                {unscored}"),
             format!(
-                "valid documents accepted   {}/{}",
-                tally.accepted_valid, valid_total
+                "as XSD 1.0   valid accepted {}   invalid rejected {}",
+                fraction(by_version.get("1.0"), true),
+                fraction(by_version.get("1.0"), false)
             ),
             format!(
-                "invalid documents rejected {}/{}",
-                tally.rejected_invalid, invalid_total
+                "as XSD 1.1   valid accepted {}   invalid rejected {}",
+                fraction(by_version.get("1.1"), true),
+                fraction(by_version.get("1.1"), false)
             ),
             String::new(),
             "Re-bless with XSDKIT_BLESS=1; see tests/w3c_suite.rs.".to_string(),
@@ -563,6 +651,7 @@ fn w3c_instance_conformance() {
 
     // A ratchet on false alarms: rejecting a valid document is the failure
     // that makes a validator unusable.
+    let valid_total = tally.accepted_valid + tally.rejected_valid;
     let accepted = pct(tally.accepted_valid, valid_total);
     assert!(
         accepted >= 40.0,

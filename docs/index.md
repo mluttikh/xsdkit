@@ -115,11 +115,11 @@ The component model, loading, composition, content automata, instance
 validation and the Python bindings work, and are measured against the W3C XML
 Schema Test Suite on every change.
 
-| | |
-|---|---|
-| valid schemas accepted | **99.7%** (5,231 / 5,247) |
-| invalid schemas rejected | **66.5%** (318 / 478) |
-| documents judged correctly | **99.0%** (21,361 / 21,573) |
+| | XSD 1.0 | XSD 1.1 |
+|---|---|---|
+| valid schemas accepted | **99.8%** | **99.8%** |
+| invalid schemas rejected | **77.4%** | **67.2%** |
+| documents judged correctly | **99.8%** | **99.0%** |
 
 The gap in the second row is the honest description of what this is.
 `xsdkit` reads real schemas well; it does not yet enforce most of the

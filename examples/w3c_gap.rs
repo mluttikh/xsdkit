@@ -48,11 +48,18 @@ fn main() {
     // family -> (missed, caught, a few sample documents)
     let mut by_family: BTreeMap<String, (usize, usize, Vec<String>)> = BTreeMap::new();
     for case in cases.iter().filter(|c| !c.expect_valid) {
-        // A panic is not an acceptance, but it is not a rejection either;
-        // count it with the misses so it cannot hide. The gate scores it as
-        // "did not accept", which is the right call there and the wrong one in
-        // a list of work still to do.
-        let missed = !matches!(schema_outcome(case), Outcome::Rejected(_));
+        let missed = match schema_outcome(case) {
+            Outcome::Rejected(_) => false,
+            // A case the suite will not stand behind is not work to do. The
+            // gate leaves these out of its denominator; counting them here
+            // would put this report 4 cases above it.
+            Outcome::Skipped(_) => continue,
+            // A panic is not an acceptance, but it is not a rejection either;
+            // count it with the misses so it cannot hide. The gate scores it
+            // as "did not accept", which is the right call there and the
+            // wrong one in a list of work still to do.
+            Outcome::Accepted | Outcome::Panicked => true,
+        };
 
         let e = by_family.entry(family(&case.group)).or_default();
         if missed {
