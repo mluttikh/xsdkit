@@ -464,9 +464,25 @@ loader, as one sweep of the document tree: they are answerable from the XML
 alone, with nothing resolved, and several concern elements the loader
 otherwise never visits. `final` is enforced too (`src/derivation.rs`).
 
-`examples/w3c_gap.rs` is how to pick what to implement next: it clusters the
-invalid schemas we accept by test-group family, so a family with fifty misses
-is fifty cases one rule buys.
+Three examples read the same cases the gate does, and are how to pick what to
+implement next:
+
+- `examples/w3c_gap.rs` clusters the invalid schemas we accept by test-group
+  family, so a family with fifty misses is fifty cases one rule buys.
+- `examples/w3c_why.rs` clusters the valid schemas we reject by the diagnostic
+  that refuses them.
+- `examples/w3c_features.rs` scores the XSD 1.1 features by the suite's own
+  taxonomy — `XSD1_1TestCategories.xml`, 17 features over 99 categories, which
+  the harness had been parsing and discarding. It reads as a map of the 1.1
+  surface: `Assertions` at 99% of schemas and 53% of documents is the shape of
+  a feature that builds fine and then rejects nothing, and is a different job
+  from `AllGroups` at 64% of schemas, which is a rule that is not there.
+
+Which *rules* are enforced is a separate question from either percentage, and
+`docs/project/spec-rules.md` is the answer: all 143 named rules in the two
+RECs, generated from Appendix B of each, with what this crate does about them.
+`tests/spec_rules.rs` gates it — every claim names a site, and every
+`DiagCode` has to be attributable to a rule.
 
 The instance half — 21,671 documents, 41,994 runs across the two versions —
 splits the same way:
