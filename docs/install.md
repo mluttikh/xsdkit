@@ -81,9 +81,12 @@ at a clone and the suite runs; leave it unset and those tests skip.
 git clone --depth 1 https://github.com/w3c/xsdtests /tmp/xsdtests
 export XSDTESTS=/tmp/xsdtests
 
-cargo test --test w3c_suite -- --nocapture                      # schemas
-cargo test --release --test w3c_suite -- --ignored --nocapture  # documents
+cargo test --test w3c_suite -- --nocapture   # both halves, ~20 seconds
 ```
+
+Both halves are scored against a committed per-case baseline in
+`tests/conformance/`. After a deliberate change, re-bless it with
+`XSDKIT_BLESS=1` in the same commit, and read the diff first.
 
 ### The documentation
 

@@ -308,9 +308,12 @@ Document validation is the other half of the suite — 21,575 scored cases,
 ```bash
 git clone --depth 1 https://github.com/w3c/xsdtests /tmp/xsdtests
 export XSDTESTS=/tmp/xsdtests
-cargo test --test w3c_suite -- --nocapture              # schemas, seconds
-cargo test --release --test w3c_suite -- --ignored --nocapture   # documents
+cargo test --test w3c_suite -- --nocapture   # both halves, ~20 seconds
 ```
+
+Both halves score against a committed per-case baseline in
+`tests/conformance/`, so a regression names the case it broke rather than
+moving a percentage. CI runs it on every push.
 
 ## Security
 

@@ -396,14 +396,37 @@ which is the major under Cargo's 0.x rules, and the check passes.
 ## Conformance
 
 `tests/w3c_suite.rs` runs the **W3C XML Schema Test Suite** — 5,737 schema
-cases from NIST, Microsoft, IBM, Sun, Boeing and Saxonica. It is 231 MB and
-not vendored; point `XSDTESTS` at a clone of
+cases from NIST, Microsoft, IBM, Sun, Boeing and Saxonica. It is 231 MB
+checked out and not vendored; point `XSDTESTS` at a clone of
 <https://github.com/w3c/xsdtests> and it runs, otherwise it skips.
 
 ```bash
 git clone --depth 1 https://github.com/w3c/xsdtests /tmp/xsdtests
 XSDTESTS=/tmp/xsdtests cargo test --test w3c_suite -- --nocapture
 ```
+
+**The gate is `tests/conformance/*.tsv`, one row per case**, not the
+percentages below. A percentage cannot see three fixes landing beside three
+regressions; a per-case file sees both and names the cases. Each row is
+`set/group · version run · expected · verdict · error codes`, and the
+verdict is `accept`, `reject`, `panic` or `skip`. After a deliberate change,
+re-bless it *in the same commit* as the change:
+
+```bash
+XSDTESTS=/tmp/xsdtests XSDKIT_BLESS=1 cargo test --test w3c_suite
+```
+
+Read the diff before you do. The failure output pairs each changed case with
+what it used to say, so a rule that starts catching a case for a *different*
+reason — the codes column changed, the verdict did not — is visible, and that
+is exactly the change a percentage hides. The percentage floors in the harness
+survive as a second, far weaker check: they are what still means something on
+a machine whose baseline was blessed against a half-fetched suite.
+
+The baselines are blessed against one snapshot of the suite, pinned in
+`tests/conformance/SUITE`, which is what CI fetches. Bumping the pin and
+re-blessing are the same change. They are also `exclude`d from the published
+crate: 2.6 MB that only this test reads.
 
 Two numbers, and the gap between them is the honest description of this
 crate:
@@ -428,11 +451,14 @@ otherwise never visits. `final` is enforced too (`src/derivation.rs`).
 invalid schemas we accept by test-group family, so a family with fifty misses
 is fifty cases one rule buys.
 
-The instance half — 21,671 documents — is `#[ignore]`d because it takes
-minutes where the schema half takes seconds (4.5 minutes in `--release`; run
-it that way). Run it with `-- --ignored`. It scores 21,575 of them, 99.0%
-correct: **99.5%** of valid documents accepted, **98.4%** of invalid ones
-rejected.
+The instance half — 21,671 documents — runs by default and scores 21,575 of
+them, 99.0% correct: **99.5%** of valid documents accepted, **98.4%** of
+invalid ones rejected. It used to be `#[ignore]`d on the strength of a
+4.5-minute figure that predated the harness's schema cache; measured, it is
+**3.3s in `--release` and 19s in a debug build**, so it was skipping in CI for
+no reason. If you find a conformance figure here surprising, re-measure before
+believing it: that timing and the count of invalid schemas we still accept had
+both drifted while nothing ran them.
 
 That first figure was 88.1% until a one-line bug turned up: an *enumeration on
 a list type* compared its literals as strings against a list, so every such
@@ -482,10 +508,14 @@ off `ComplexType::content` with nothing to be pruned from.
 - `cargo llvm-cov --summary-only` for coverage. 87.4% of regions overall; see
   the road to 1.0 for where the floor is and why it is there.
 
-CI (`.github/workflows/ci.yml`) gates on four things: `cargo fmt --check`,
-`cargo clippy --all-targets -D warnings`, tests on Linux/macOS/Windows, and
-`cargo doc` with `RUSTDOCFLAGS=-D warnings` — broken intra-doc links are only
-warnings otherwise, and two had already crept in. The lint job also
+CI (`.github/workflows/ci.yml`) gates on five things: `cargo fmt --check`,
+`cargo clippy --all-targets -D warnings`, tests on Linux/macOS/Windows, the
+W3C suite against its committed baselines, and `cargo doc` with
+`RUSTDOCFLAGS=-D warnings` — broken intra-doc links are only warnings
+otherwise, and two had already crept in. The conformance job fetches the
+suite commit pinned in `tests/conformance/SUITE`, which takes seconds; it ran
+nowhere before, so every conformance number in this file was one somebody
+re-derived by hand, and two of them had drifted. The lint job also
 `cargo check`s the fuzz crate, which is a separate workspace nothing else
 compiles. A fourth job builds on the declared `rust-version`, because nothing
 enforces that claim at publish time.
@@ -1018,7 +1048,7 @@ type's `final` is complete on its own, needing only the base's `final` and the
 method used. What remains is **particle subsumption** — whether a restriction's
 content model actually accepts a subset of its base's — which is the single
 biggest thing standing between the invalid-schema figure and 100%. It is worth
-about 50 of the ~236 cases still accepted; `examples/w3c_gap.rs` names them
+about 50 of the 160 cases still accepted; `examples/w3c_gap.rs` names them
 (the `all`, `simple`, `complex` and `over` families).
 
 ### 8. Input encoding

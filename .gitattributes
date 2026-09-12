@@ -3,3 +3,9 @@
 # shift those, but keeping the file byte-identical across platforms means a
 # failure on Windows is a real failure rather than a checkout artefact.
 tests/fixtures/** text eol=lf
+
+# The conformance baselines are the gate for the W3C suite, and the gate fails
+# on a byte. A checkout that rewrote LF to CRLF would fail every case on
+# Windows for a reason that has nothing to do with conformance. The harness
+# tolerates CRLF when comparing as well; this makes that belt and braces.
+tests/conformance/** text eol=lf

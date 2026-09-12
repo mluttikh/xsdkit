@@ -64,6 +64,42 @@ jobs:
       - name: Run doctests (serde feature)
         run: cargo test --doc --features serde
 
+  conformance:
+    name: Conformance (W3C suite)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      # The suite is 231 MB checked out but only 16 MB to fetch, and fetching
+      # the one pinned commit takes a few seconds — quicker than restoring it
+      # from a cache would be.
+      #
+      # Pinned, because a baseline only means anything against one snapshot of
+      # the suite: the pin lives in tests/conformance/SUITE, beside the
+      # baselines it describes, and bumping it is the same change as
+      # re-blessing them. Unpinned, an upstream edit would turn some unrelated
+      # pull request red.
+      - name: Fetch the W3C XML Schema Test Suite
+        run: |
+          suite=$(grep -v '^#' tests/conformance/SUITE | tr -d '[:space:]')
+          echo "pinned at $suite"
+          git init -q /tmp/xsdtests
+          git -C /tmp/xsdtests remote add origin https://github.com/w3c/xsdtests
+          git -C /tmp/xsdtests fetch -q --depth 1 origin "$suite"
+          git -C /tmp/xsdtests checkout -q FETCH_HEAD
+      # Both halves, against the committed per-case baselines in
+      # tests/conformance: 5,727 schema cases and 21,623 instance cases in
+      # about twenty seconds in a debug build. The gate is per case, so a fix
+      # landing beside a regression fails here rather than averaging out.
+      #
+      # `--release` would run it in four seconds and spend two minutes
+      # compiling to get there.
+      - name: Run the suite against the committed baselines
+        env:
+          XSDTESTS: /tmp/xsdtests
+        run: cargo test --test w3c_suite -- --nocapture
+
   docs:
     name: Docs
     runs-on: ubuntu-latest
