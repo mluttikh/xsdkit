@@ -577,8 +577,8 @@ pub(crate) fn build_all(
         let Some(content) = &models[id.index()] else {
             continue;
         };
-        if let ContentModel::Automaton(a) = &content.model {
-            check_upa(
+        match &content.model {
+            ContentModel::Automaton(a) => check_upa(
                 schemas,
                 def,
                 a,
@@ -586,7 +586,17 @@ pub(crate) fn build_all(
                 mode,
                 version,
                 &mut diags,
-            );
+            ),
+            ContentModel::All(all) => check_all_upa(
+                schemas,
+                def,
+                all,
+                &content.siblings,
+                mode,
+                version,
+                &mut diags,
+            ),
+            ContentModel::Empty => {}
         }
     }
 
@@ -715,7 +725,7 @@ fn check_upa(
                     // choice; they can never be confused for each other.
                     continue;
                 }
-                let Some(overlap) = overlap(schemas, p, q, siblings) else {
+                let Some(overlap) = overlap(schemas, p.into(), q.into(), siblings) else {
                     continue;
                 };
                 // XSD 1.1 resolves an element competing with a wildcard in
@@ -736,8 +746,8 @@ fn check_upa(
                 diags.push(upa_diagnostic(
                     schemas,
                     def,
-                    p,
-                    q,
+                    p.particle,
+                    q.particle,
                     overlap,
                     a.approximated(),
                     mode,
@@ -753,7 +763,88 @@ fn check_upa(
     }
 }
 
-/// What the two positions have in common, if anything.
+/// The three things an overlap question needs of a candidate: which particle
+/// it came from, what kind of label it carries, and which declarations it
+/// admits.
+///
+/// A [`Position`] and an [`AllMember`] both have exactly these, and the
+/// question "could one element match both of these?" is the same question in
+/// an automaton and in an `xs:all`. Sharing the predicate is what keeps the
+/// two from drifting — the `xs:all` half went unchecked entirely until
+/// `saxonData/All`'s all240 to all243 said so.
+#[derive(Copy, Clone)]
+struct Competitor<'a> {
+    particle: ParticleId,
+    label: &'a Label,
+    admits: &'a [ElementId],
+}
+
+impl<'a> From<&'a Position> for Competitor<'a> {
+    fn from(p: &'a Position) -> Self {
+        Competitor {
+            particle: p.particle,
+            label: &p.label,
+            admits: &p.admits,
+        }
+    }
+}
+
+impl<'a> From<&'a AllMember> for Competitor<'a> {
+    fn from(m: &'a AllMember) -> Self {
+        Competitor {
+            particle: m.particle,
+            label: &m.label,
+            admits: &m.admits,
+        }
+    }
+}
+
+/// The same rule over an `xs:all`, whose members are not automaton states.
+///
+/// An `xs:all` has no positions and no transitions — [`build_all_group`] gives
+/// it per-member counters instead, because interleaving *n* members is *n!*
+/// paths as a regular expression. Unique Particle Attribution still applies:
+/// the members are matched in any order, so if one element could satisfy two
+/// of them the matcher cannot attribute it, and no amount of ordering helps.
+///
+/// Every member competes with every other, which makes this the whole
+/// automaton check with the reachability question deleted. Two members are
+/// always distinct particles — there is no unrolling here — so the
+/// same-particle case the automaton has to skip cannot arise.
+fn check_all_upa(
+    schemas: &Schemas,
+    def: &TypeDefinition,
+    all: &AllGroup,
+    siblings: &FxHashSet<QName>,
+    mode: crate::load::Conformance,
+    version: crate::load::Version,
+    diags: &mut Diagnostics,
+) {
+    let members = &all.members;
+    for i in 0..members.len() {
+        for j in (i + 1)..members.len() {
+            let (p, q) = (&members[i], &members[j]);
+            let Some(overlap) = overlap(schemas, p.into(), q.into(), siblings) else {
+                continue;
+            };
+            // As in an automaton: 1.1 resolves an element competing with a
+            // wildcard in favour of the element.
+            if version == crate::load::Version::Xsd11
+                && matches!(overlap, Overlap::ElementAndWildcard(_))
+            {
+                continue;
+            }
+            diags.push(upa_diagnostic(
+                schemas, def, p.particle, q.particle, overlap,
+                // Nothing was widened: an `xs:all` member keeps the bounds it
+                // was written with, so the verdict is exact.
+                false, mode,
+            ));
+        }
+    }
+}
+
+/// What the two candidates have in common, if anything.
 enum Overlap {
     /// Both are element particles admitting this name.
     Name(QName),
@@ -765,11 +856,11 @@ enum Overlap {
 
 fn overlap(
     schemas: &Schemas,
-    p: &Position,
-    q: &Position,
+    p: Competitor<'_>,
+    q: Competitor<'_>,
     siblings: &FxHashSet<QName>,
 ) -> Option<Overlap> {
-    match (&p.label, &q.label) {
+    match (p.label, q.label) {
         (Label::Element(_), Label::Element(_)) => {
             // By *name*, not by declaration identity. Two distinct local
             // declarations that share a name are precisely what makes a
@@ -781,14 +872,15 @@ fn overlap(
                 .find(|n| rhs.contains(n))
                 .map(Overlap::Name)
         }
-        (Label::Element(_), Label::Wildcard) => {
-            wildcard_of(schemas, q).and_then(|w| first_admitted(schemas, w, &p.admits, siblings))
-        }
-        (Label::Wildcard, Label::Element(_)) => {
-            wildcard_of(schemas, p).and_then(|w| first_admitted(schemas, w, &q.admits, siblings))
-        }
+        (Label::Element(_), Label::Wildcard) => wildcard_of(schemas, q.particle)
+            .and_then(|w| first_admitted(schemas, w, p.admits, siblings)),
+        (Label::Wildcard, Label::Element(_)) => wildcard_of(schemas, p.particle)
+            .and_then(|w| first_admitted(schemas, w, q.admits, siblings)),
         (Label::Wildcard, Label::Wildcard) => {
-            let (Some(a), Some(b)) = (wildcard_of(schemas, p), wildcard_of(schemas, q)) else {
+            let (Some(a), Some(b)) = (
+                wildcard_of(schemas, p.particle),
+                wildcard_of(schemas, q.particle),
+            ) else {
                 return None;
             };
             wildcards_overlap(a, b).then_some(Overlap::Wildcards)
@@ -796,8 +888,8 @@ fn overlap(
     }
 }
 
-fn wildcard_of<'a>(schemas: &'a Schemas, p: &Position) -> Option<&'a Wildcard> {
-    match &schemas[p.particle].term {
+fn wildcard_of(schemas: &Schemas, particle: ParticleId) -> Option<&Wildcard> {
+    match &schemas[particle].term {
         Term::Wildcard(w) => Some(w),
         _ => None,
     }
@@ -928,8 +1020,8 @@ fn wildcards_overlap(a: &Wildcard, b: &Wildcard) -> bool {
 fn upa_diagnostic(
     schemas: &Schemas,
     def: &TypeDefinition,
-    p: &Position,
-    q: &Position,
+    p: ParticleId,
+    q: ParticleId,
     overlap: Overlap,
     approximated: bool,
     mode: crate::load::Conformance,
@@ -963,13 +1055,13 @@ fn upa_diagnostic(
         format!("the content model of {owner} is ambiguous: {what}"),
     )
     .at(Span::labelled(
-        schemas[p.particle].span.uri.clone(),
-        schemas[p.particle].span.line,
+        schemas[p].span.uri.clone(),
+        schemas[p].span.line,
         "one candidate",
     ))
     .at(Span::labelled(
-        schemas[q.particle].span.uri.clone(),
-        schemas[q.particle].span.line,
+        schemas[q].span.uri.clone(),
+        schemas[q].span.line,
         "the other",
     ))
     .with_help(help);

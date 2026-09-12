@@ -19,6 +19,7 @@ use xsdkit::{Conformance, DiagCode, Diagnostics, Resolver, SchemaSetBuilder, Ver
 /// The rules with fixtures below, as `spec#anchor`.
 pub const COVERED: &[&str] = &[
     "structures#cos-all-limited",
+    "structures#cos-nonambig",
     "structures#src-import",
     "structures#src-include",
 ];
@@ -539,4 +540,109 @@ fn cos_all_limited_rejects_a_repeated_nested_all() {
            </xs:complexType>"#,
     );
     expect_code(&d, DiagCode::InvalidOccurrence);
+}
+
+// ---------------------------------------------------------------------------
+// structures#cos-nonambig — Unique Particle Attribution
+// ---------------------------------------------------------------------------
+//
+// UPA over a sequence or a choice is automaton determinism, and has been
+// checked since the automata existed. Over an `xs:all` there is no automaton —
+// members get per-member counters — and it went unchecked until
+// `saxonData/All`'s all240 to all243 said so. These fixtures are the `xs:all`
+// half; the automaton half is covered by `tests/content_model.rs`.
+
+/// Two members naming the same element. A violation even though both particles
+/// refer to one declaration: the matcher has to attribute the element to a
+/// member, and either would do.
+#[test]
+fn cos_nonambig_rejects_two_all_members_with_one_name() {
+    for d in build_both(
+        r#"<xs:element name="o" type="xs:integer"/>
+           <xs:complexType name="T">
+             <xs:all>
+               <xs:element ref="t:o"/>
+               <xs:element name="x" type="xs:boolean"/>
+               <xs:element ref="t:o"/>
+             </xs:all>
+           </xs:complexType>"#,
+    ) {
+        expect_code(&d, DiagCode::AmbiguousContentModel);
+    }
+}
+
+/// One member's substitution group reaching another member's name. The overlap
+/// is between the *closures*, not the declarations, which is why the check
+/// compares what each member admits rather than what it names.
+#[test]
+fn cos_nonambig_rejects_an_all_member_reachable_by_substitution() {
+    for d in build_both(
+        r#"<xs:element name="o" type="xs:integer"/>
+           <xs:element name="p" substitutionGroup="t:o" type="xs:integer"/>
+           <xs:complexType name="T">
+             <xs:all>
+               <xs:element ref="t:o"/>
+               <xs:element name="x" type="xs:boolean"/>
+               <xs:element ref="t:p"/>
+             </xs:all>
+           </xs:complexType>"#,
+    ) {
+        expect_code(&d, DiagCode::AmbiguousContentModel);
+    }
+}
+
+/// Two wildcards over overlapping namespaces. `urn:b` satisfies either, and
+/// unlike the element-versus-wildcard case below, XSD 1.1 does not resolve
+/// this one — there is no declaration to prefer.
+#[test]
+fn cos_nonambig_rejects_two_overlapping_wildcards_in_an_all() {
+    for d in build_both(
+        r#"<xs:complexType name="T">
+             <xs:all>
+               <xs:any namespace="urn:a urn:b" processContents="lax"/>
+               <xs:any namespace="urn:b urn:c" processContents="lax"/>
+             </xs:all>
+           </xs:complexType>"#,
+    ) {
+        expect_code(&d, DiagCode::AmbiguousContentModel);
+    }
+}
+
+/// Members that cannot be confused are fine, however many there are. The
+/// near-miss for all three cases above — a check that reported every pair of
+/// `xs:all` members would pass them and reject every `xs:all` ever written.
+#[test]
+fn cos_nonambig_accepts_distinct_all_members() {
+    for d in build_both(
+        r#"<xs:complexType name="T">
+             <xs:all>
+               <xs:element name="a" type="xs:string"/>
+               <xs:element name="b" type="xs:string" minOccurs="0"/>
+               <xs:element name="c" type="xs:string"/>
+             </xs:all>
+           </xs:complexType>"#,
+    ) {
+        expect_clean(&d);
+    }
+}
+
+/// An element competing with a wildcard inside an `xs:all`: ambiguous in 1.0,
+/// and resolved in favour of the element in 1.1. The same version split the
+/// automaton half already applies, and applying it in one place and not the
+/// other is exactly what sharing the overlap predicate prevents.
+#[test]
+fn cos_nonambig_resolves_an_element_against_a_wildcard_only_in_1_1() {
+    // `r###` because the content carries `"##local"`, and `"##` would close an
+    // `r#"…"#` literal early — see AGENTS.md on raw strings and `##`.
+    let body = r###"<xs:complexType name="T">
+                    <xs:all>
+                      <xs:element name="a" type="xs:string"/>
+                      <xs:any namespace="##local" processContents="lax"/>
+                    </xs:all>
+                  </xs:complexType>"###;
+    expect_code(
+        &build(Version::Xsd10, body),
+        DiagCode::AmbiguousContentModel,
+    );
+    expect_clean(&build(Version::Xsd11, body));
 }
