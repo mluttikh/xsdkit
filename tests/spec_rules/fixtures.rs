@@ -14,10 +14,14 @@
 //! contradiction.
 
 use fxhash::FxHashMap;
-use xsdkit::{Conformance, DiagCode, Diagnostics, Resolver, SchemaSetBuilder};
+use xsdkit::{Conformance, DiagCode, Diagnostics, Resolver, SchemaSetBuilder, Version};
 
 /// The rules with fixtures below, as `spec#anchor`.
-pub const COVERED: &[&str] = &["structures#src-include", "structures#src-import"];
+pub const COVERED: &[&str] = &[
+    "structures#cos-all-limited",
+    "structures#src-import",
+    "structures#src-include",
+];
 
 /// Resolves `schemaLocation` out of a map, so a composition fixture needs no
 /// files. The same idiom as `tests/integration_tests.rs`.
@@ -49,6 +53,26 @@ fn compose(main: &str, other: (&str, &str)) -> Diagnostics {
         .text(main, "mem://main.xsd")
         .compile()
         .diagnostics
+}
+
+/// Compiles one document at one version. Several rules below say different
+/// things in 1.0 and 1.1, so the version is never implicit here.
+fn build(version: Version, body: &str) -> Diagnostics {
+    let xsd = format!(
+        r#"<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema"
+                      targetNamespace="urn:t" xmlns:t="urn:t">{body}</xs:schema>"#
+    );
+    SchemaSetBuilder::new()
+        .version(version)
+        .conformance(Conformance::Strict)
+        .text(xsd, "mem://main.xsd")
+        .compile()
+        .diagnostics
+}
+
+/// The same body read as both versions, for a rule that does not differ.
+fn build_both(body: &str) -> [Diagnostics; 2] {
+    [build(Version::Xsd10, body), build(Version::Xsd11, body)]
 }
 
 #[track_caller]
@@ -303,4 +327,216 @@ fn src_import_does_not_absorb_the_document_it_names() {
         ),
     );
     expect_code(&d, DiagCode::UnresolvedReference);
+}
+
+// ---------------------------------------------------------------------------
+// structures#cos-all-limited — All Group Limited
+// ---------------------------------------------------------------------------
+//
+// The clearest case of a rule the two versions state differently. 1.0 confines
+// an `all` to two positions and caps each member at one occurrence; 1.1 lifts
+// the cap, allows an `all` inside an `all`, and in exchange requires a group
+// referenced from inside an `all` to be an `all` group.
+
+/// Clause 1: not inside an `xs:sequence`, in either version. An `all` matches
+/// its members in any order and a sequence fixes an order, so there is no
+/// reading of the two together.
+#[test]
+fn cos_all_limited_rejects_an_all_inside_a_sequence() {
+    for d in build_both(
+        r#"<xs:complexType name="T">
+             <xs:sequence>
+               <xs:all>
+                 <xs:element name="a" type="xs:string"/>
+               </xs:all>
+             </xs:sequence>
+           </xs:complexType>"#,
+    ) {
+        expect_code(&d, DiagCode::InvalidOccurrence);
+    }
+}
+
+/// And not inside an `xs:choice` either, which is the same clause and the
+/// mistake a check written only against `xs:sequence` would miss.
+#[test]
+fn cos_all_limited_rejects_an_all_inside_a_choice() {
+    for d in build_both(
+        r#"<xs:complexType name="T">
+             <xs:choice>
+               <xs:all>
+                 <xs:element name="a" type="xs:string"/>
+               </xs:all>
+             </xs:choice>
+           </xs:complexType>"#,
+    ) {
+        expect_code(&d, DiagCode::InvalidOccurrence);
+    }
+}
+
+/// Clause 1.2: a complex type's whole content model, with `maxOccurs` of 1.
+/// Repeating the group would need the ordering its members do not have.
+#[test]
+fn cos_all_limited_rejects_a_repeated_all() {
+    for d in build_both(
+        r#"<xs:complexType name="T">
+             <xs:all maxOccurs="2">
+               <xs:element name="a" type="xs:string"/>
+             </xs:all>
+           </xs:complexType>"#,
+    ) {
+        expect_code(&d, DiagCode::InvalidOccurrence);
+    }
+}
+
+/// The two positions clause 1 does allow: a complex type's content model, and
+/// a named group definition. Both versions, and the near-miss for everything
+/// above.
+#[test]
+fn cos_all_limited_accepts_the_positions_it_allows() {
+    for d in build_both(
+        r#"<xs:complexType name="T">
+             <xs:all minOccurs="0">
+               <xs:element name="a" type="xs:string"/>
+               <xs:element name="b" type="xs:string" minOccurs="0"/>
+             </xs:all>
+           </xs:complexType>
+           <xs:group name="g">
+             <xs:all>
+               <xs:element name="c" type="xs:string"/>
+             </xs:all>
+           </xs:group>"#,
+    ) {
+        expect_clean(&d);
+    }
+}
+
+/// 1.0 clause 2: a member occurs at most once. This is the half of the rule
+/// the W3C suite never exercises — the `All` test set is 1.1-only — so without
+/// a fixture the 1.0 branch would be a check nobody had ever seen fire.
+#[test]
+fn cos_all_limited_rejects_a_repeating_member_in_1_0() {
+    let d = build(
+        Version::Xsd10,
+        r#"<xs:complexType name="T">
+             <xs:all>
+               <xs:element name="a" type="xs:string" maxOccurs="unbounded"/>
+             </xs:all>
+           </xs:complexType>"#,
+    );
+    expect_code(&d, DiagCode::InvalidOccurrence);
+}
+
+/// And 1.1 lifts it: `xsd1_1-AllGroups-MaxOccurs`. The same schema, and the
+/// version is the only thing that changes the answer — which is why a rule
+/// like this one needs a pair rather than a case.
+#[test]
+fn cos_all_limited_accepts_a_repeating_member_in_1_1() {
+    let d = build(
+        Version::Xsd11,
+        r#"<xs:complexType name="T">
+             <xs:all>
+               <xs:element name="a" type="xs:string" maxOccurs="unbounded"/>
+             </xs:all>
+           </xs:complexType>"#,
+    );
+    expect_clean(&d);
+}
+
+/// 1.1 clause 2: a group referenced from inside an `all` has to *be* an `all`
+/// group. `saxonData/All/all008` is this case, and it needs the reference
+/// resolved — the compositor of the referenced group is not in the document
+/// that refers to it.
+#[test]
+fn cos_all_limited_rejects_a_reference_to_a_sequence_group() {
+    let d = build(
+        Version::Xsd11,
+        r#"<xs:complexType name="T">
+             <xs:all>
+               <xs:element name="a" type="xs:string"/>
+               <xs:group ref="t:g"/>
+             </xs:all>
+           </xs:complexType>
+           <xs:group name="g">
+             <xs:sequence>
+               <xs:element name="b" type="xs:string"/>
+             </xs:sequence>
+           </xs:group>"#,
+    );
+    expect_code(&d, DiagCode::InvalidOccurrence);
+}
+
+/// Clause 1.3: the reference is allowed, but exactly once.
+/// `saxonData/All/all009` differs from the case above only in the occurrence.
+#[test]
+fn cos_all_limited_rejects_an_optional_reference_inside_an_all() {
+    let d = build(
+        Version::Xsd11,
+        r#"<xs:complexType name="T">
+             <xs:all>
+               <xs:element name="a" type="xs:string"/>
+               <xs:group ref="t:g" minOccurs="0"/>
+             </xs:all>
+           </xs:complexType>
+           <xs:group name="g">
+             <xs:all>
+               <xs:element name="b" type="xs:string"/>
+             </xs:all>
+           </xs:group>"#,
+    );
+    expect_code(&d, DiagCode::InvalidOccurrence);
+}
+
+/// The near-miss for both of those: an `all` group, referenced exactly once,
+/// from inside an `all`. This is the `xsd1_1-AllGroups-NamedModelGroupRef`
+/// feature, and a check that simply refused group references inside an `all`
+/// would pass every negative case above and reject this.
+#[test]
+fn cos_all_limited_accepts_an_all_group_referenced_once() {
+    let d = build(
+        Version::Xsd11,
+        r#"<xs:complexType name="T">
+             <xs:all>
+               <xs:element name="a" type="xs:string"/>
+               <xs:group ref="t:g"/>
+             </xs:all>
+           </xs:complexType>
+           <xs:group name="g">
+             <xs:all>
+               <xs:element name="b" type="xs:string"/>
+             </xs:all>
+           </xs:group>"#,
+    );
+    expect_clean(&d);
+}
+
+/// An inline `xs:all` nested in another: allowed in 1.1 at exactly one
+/// occurrence, never in 1.0.
+#[test]
+fn cos_all_limited_nests_an_all_only_in_1_1() {
+    let body = r#"<xs:complexType name="T">
+                    <xs:all>
+                      <xs:element name="a" type="xs:string"/>
+                      <xs:all>
+                        <xs:element name="b" type="xs:string"/>
+                      </xs:all>
+                    </xs:all>
+                  </xs:complexType>"#;
+    expect_clean(&build(Version::Xsd11, body));
+    expect_code(&build(Version::Xsd10, body), DiagCode::InvalidOccurrence);
+}
+
+/// And in 1.1 the nested one is still bounded to one occurrence.
+#[test]
+fn cos_all_limited_rejects_a_repeated_nested_all() {
+    let d = build(
+        Version::Xsd11,
+        r#"<xs:complexType name="T">
+             <xs:all>
+               <xs:all maxOccurs="2">
+                 <xs:element name="b" type="xs:string"/>
+               </xs:all>
+             </xs:all>
+           </xs:complexType>"#,
+    );
+    expect_code(&d, DiagCode::InvalidOccurrence);
 }

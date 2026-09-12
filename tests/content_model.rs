@@ -21,6 +21,17 @@ fn build(body: &str) -> Schemas {
         .unwrap_or_else(|d| panic!("expected a clean build, got:\n{d}"))
 }
 
+/// The same, read as XSD 1.1. A few of the shapes below only exist there — a
+/// repeating `xs:all` member, for one, which 1.0's *All Group Limited* forbids.
+fn build_11(body: &str) -> Schemas {
+    SchemaSetBuilder::new()
+        .version(Version::Xsd11)
+        .text(schema(body), "mem://main.xsd")
+        .compile()
+        .into_result()
+        .unwrap_or_else(|d| panic!("expected a clean build, got:\n{d}"))
+}
+
 fn build_lax(body: &str) -> (Schemas, Diagnostics) {
     let c = SchemaSetBuilder::new()
         .text(schema(body), "mem://main.xsd")
@@ -647,7 +658,9 @@ fn a_nullable_model_makes_every_child_optional() {
 /// of them is skippable.
 #[test]
 fn an_all_group_reads_its_members() {
-    let s = build(&ty(r#"<xs:all>
+    // 1.1: `maxOccurs="unbounded"` on an `xs:all` member is the
+    // `xsd1_1-AllGroups-MaxOccurs` feature, and invalid in 1.0.
+    let s = build_11(&ty(r#"<xs:all>
         <xs:element name="need" type="xs:string"/>
         <xs:element name="skip" type="xs:string" minOccurs="0"/>
         <xs:element name="many" type="xs:string" minOccurs="0" maxOccurs="unbounded"/>

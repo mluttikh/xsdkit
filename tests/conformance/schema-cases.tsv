@@ -5,7 +5,7 @@
 # runs                      10511
 # not scored (queried)      4
 # as XSD 1.0   valid accepted 4563/4573   invalid rejected 171/221
-# as XSD 1.1   valid accepted 5238/5248   invalid rejected 318/469
+# as XSD 1.1   valid accepted 5238/5248   invalid rejected 322/469
 # accepted as 1.0 and rejected as 1.1: 0, of 4786 groups run as both
 #
 # Re-bless with XSDKIT_BLESS=1; see tests/w3c_suite.rs.
@@ -43,10 +43,10 @@ All/all004@1.1	valid	accept	-
 All/all005@1.1	valid	accept	-
 All/all006@1.1	valid	accept	-
 All/all007@1.1	valid	accept	-
-All/all008@1.1	invalid	accept	-
-All/all009@1.1	invalid	accept	-
-All/all010@1.1	invalid	accept	-
-All/all011@1.1	invalid	accept	-
+All/all008@1.1	invalid	reject	XSD1302
+All/all009@1.1	invalid	reject	XSD1302
+All/all010@1.1	invalid	reject	XSD1302
+All/all011@1.1	invalid	reject	XSD1302
 All/all201@1.1	valid	accept	-
 All/all202@1.1	invalid	reject	XSD1310
 All/all203@1.1	invalid	reject	XSD1310

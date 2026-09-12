@@ -20,6 +20,8 @@
 //!    against the type it belongs to.
 //! 9. [`crate::derivation`] checks that no type derives from a base whose
 //!    `final` forbids it.
+//! 10. [`crate::groups`] checks where an `xs:all` may appear and what it may
+//!     contain, which needs group references resolved.
 
 use crate::datatypes::Builtin;
 use crate::diagnostics::{DiagCode, Diagnostic, Diagnostics, Severity, Span};
@@ -86,6 +88,7 @@ pub(crate) fn compile(mut loader: Loader<'_>, mode: Conformance) -> (Schemas, Di
     diags.extend(crate::facets::check_all(&schemas));
     diags.extend(crate::declarations::check_all(&schemas));
     diags.extend(crate::derivation::check_all(&schemas));
+    diags.extend(crate::groups::check_all(&schemas));
     diags.extend(crate::restriction::check_all(&schemas));
 
     (schemas, diags)
