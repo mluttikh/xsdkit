@@ -12,8 +12,8 @@ Building a `SchemaSet` is linear in the size of the schema documents.
 | 3,000 | 15.5 ms |
 
 The schema for schemas — 86 KB, 1,600 lines, and about as gnarly as real
-schemas get — compiles in **3.0 ms**. The whole 5,727-case W3C schema suite
-runs in **1.3 s**.
+schemas get — compiles in **3.0 ms**. The whole W3C schema suite — 10,511
+runs, every dual-version group read as both languages — takes **2.4 s**.
 
 Measured on an Apple M-series laptop with a release build. What matters is the
 shape rather than the absolute numbers: doubling the input doubles the time.

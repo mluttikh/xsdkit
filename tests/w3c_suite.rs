@@ -29,142 +29,33 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
-use xsdkit::{Compilation, Conformance, Diagnostics, SchemaSetBuilder, Version};
+use xsdkit::{Conformance, SchemaSetBuilder, Version};
 
-/// The `validity` the suite prescribes for a test, read at the version we
-/// actually run it as.
-///
-/// A test may carry several `<expected>` elements, each qualified by
-/// `version`. Per the suite's own schema those tokens are **and**ed: the
-/// result is prescribed only for a processor supporting all of them. So a
-/// version-qualified `expected` that names our version wins, an unqualified
-/// one is the fallback, and one naming only the *other* version says nothing
-/// about us.
-///
-/// Taking the first `<expected>` regardless — which this harness used to do —
-/// scores 49 cases against the wrong expectation.
-fn expected_validity<'a>(test: roxmltree::Node<'a, 'a>, version: Version) -> Option<&'a str> {
-    let token = version_token(version);
-    let expects: Vec<_> = test
-        .children()
-        .filter(|n| n.has_tag_name("expected"))
-        .collect();
+#[path = "suite/mod.rs"]
+mod suite;
+use suite::*;
 
-    expects
-        .iter()
-        .find(|n| n.attribute("version").is_some_and(|v| v.contains(token)))
-        .or_else(|| expects.iter().find(|n| n.attribute("version").is_none()))
-        .and_then(|n| n.attribute("validity"))
-}
-
-/// How a version prints, in the suite's spelling and the baseline's.
-fn version_token(version: Version) -> &'static str {
-    match version {
-        Version::Xsd10 => "1.0",
-        Version::Xsd11 => "1.1",
+/// `accepted/total` for one half of a tally, or `-` when that version ran
+/// nothing. Keeps the baseline header readable without repeating the
+/// arithmetic four times.
+fn fraction(t: Option<&Tally>, valid_half: bool) -> String {
+    match t {
+        None => "-".to_string(),
+        Some(t) if valid_half => format!(
+            "{}/{}",
+            t.accepted_valid,
+            t.accepted_valid + t.rejected_valid
+        ),
+        Some(t) => format!(
+            "{}/{}",
+            t.rejected_invalid,
+            t.rejected_invalid + t.accepted_invalid
+        ),
     }
 }
 
-/// Which XSD a test group is run as.
-///
-/// A group listing both versions is run as 1.0: it is the stricter reading, so
-/// a schema that passes there passes in either.
-fn version_of(v: &str) -> Version {
-    if v.contains("1.1") && !v.contains("1.0") {
-        Version::Xsd11
-    } else {
-        Version::Xsd10
-    }
-}
-
-/// Where the suite lives, if it is available.
-fn suite() -> Option<PathBuf> {
-    // Unset means "not asked to run this", which is a legitimate skip.
-    let Ok(var) = std::env::var("XSDTESTS") else {
-        return None;
-    };
-    // Set but wrong is a different thing entirely, and used to skip in the
-    // same silence — so a conformance run against a directory that had been
-    // cleaned up reported success having measured nothing.
-    let p = PathBuf::from(&var);
-    assert!(
-        p.join("suite.xml").is_file(),
-        "XSDTESTS is set to `{var}`, which contains no suite.xml. Refusing to \
-         skip: a run that measures nothing must not look like a run that passed."
-    );
-    Some(p)
-}
-
-/// One instance case: a document, the schema it belongs to, and whether the
-/// suite says the document is valid against it.
-#[derive(Debug)]
-struct InstanceCase {
-    set: String,
-    group: String,
-    version: String,
-    schema_documents: Vec<PathBuf>,
-    instance: PathBuf,
-    expect_valid: bool,
-}
-
-/// What one case did, in the two columns the baseline records.
-///
-/// `Panicked` is its own verdict rather than folded into a rejection. A panic
-/// still scores as "did not accept", which is what it was before, but a case
-/// that starts or stops panicking is the single most interesting row in the
-/// file and it must not hide inside a percentage.
-#[derive(Debug, PartialEq, Eq)]
-enum Outcome {
-    /// Nothing was an error.
-    Accepted,
-    /// Something was, and these are the distinct codes.
-    Rejected(String),
-    /// The loader or the validator panicked on it.
-    Panicked,
-    /// Not scored: the schema did not compile, or the file would not read.
-    Skipped(&'static str),
-}
-
-impl Outcome {
-    fn accepted(&self) -> bool {
-        matches!(self, Outcome::Accepted)
-    }
-
-    /// Whether this case counts towards the score at all.
-    fn scored(&self) -> bool {
-        !matches!(self, Outcome::Skipped(_))
-    }
-
-    /// The `verdict` and `codes` columns.
-    fn columns(&self) -> String {
-        match self {
-            Outcome::Accepted => "accept\t-".to_string(),
-            Outcome::Rejected(codes) => format!("reject\t{codes}"),
-            Outcome::Panicked => "panic\t-".to_string(),
-            Outcome::Skipped(why) => format!("skip\t{why}"),
-        }
-    }
-}
-
-/// The distinct error codes of a diagnostic set, sorted and joined with `+`.
-///
-/// Sorted and deduplicated rather than "the first one": the order diagnostics
-/// come out in is an implementation detail, but *which* rules fired is worth
-/// pinning. A case that starts being caught by a second rule as well is a
-/// change a reviewer should see, and one whose only rule changes is a case
-/// that used to pass for a different reason than it does now.
-fn error_codes(d: &Diagnostics) -> String {
-    let codes: BTreeSet<&str> = d.errors().map(|e| e.code.as_str()).collect();
-    if codes.is_empty() {
-        // Unreachable while callers only ask after `has_errors`, but a silent
-        // empty column would be worse than a visible marker.
-        return "-".to_string();
-    }
-    codes.into_iter().collect::<Vec<_>>().join("+")
-}
-
-/// Where the committed baselines live. Excluded from the published crate: 2.6
-/// MB of test data that no downstream build reads.
+/// Where the committed baselines live. Excluded from the published crate: 5 MB
+/// of test data that no downstream build reads, and about 180 KB packed.
 fn baseline_path(name: &str) -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("tests")
@@ -313,157 +204,6 @@ fn check_baseline(name: &str, summary: &[String], rows: Vec<(String, String)>) {
     panic!("{report}");
 }
 
-/// One schema case: the documents to load, and whether the suite says the
-/// schema is valid.
-#[derive(Debug)]
-struct SchemaCase {
-    set: String,
-    group: String,
-    version: String,
-    documents: Vec<PathBuf>,
-    expect_valid: bool,
-}
-
-/// Reads the `.testSet` metadata with the crate itself is not appropriate —
-/// these are ordinary XML, read with a small hand-rolled scan so a bug in
-/// `xsdkit` cannot silently change which cases run.
-fn parse_test_sets(root: &Path) -> (Vec<SchemaCase>, Vec<InstanceCase>) {
-    let mut out = Vec::new();
-    let mut instances = Vec::new();
-    let mut dirs = vec![root.to_path_buf()];
-    let mut files = Vec::new();
-    while let Some(d) = dirs.pop() {
-        let Ok(entries) = std::fs::read_dir(&d) else {
-            continue;
-        };
-        for e in entries.flatten() {
-            let p = e.path();
-            if p.is_dir() {
-                if p.file_name().is_some_and(|n| n == ".git") {
-                    continue;
-                }
-                dirs.push(p);
-            } else if p.extension().is_some_and(|x| x == "testSet") {
-                files.push(p);
-            }
-        }
-    }
-    files.sort();
-
-    for f in files {
-        let Ok(text) = std::fs::read_to_string(&f) else {
-            continue;
-        };
-        let Ok(doc) = roxmltree::Document::parse_with_options(
-            &text,
-            roxmltree::ParsingOptions {
-                allow_dtd: true,
-                ..Default::default()
-            },
-        ) else {
-            continue;
-        };
-        let dir = f.parent().unwrap_or(root).to_path_buf();
-        let set = doc
-            .root_element()
-            .attribute("name")
-            .unwrap_or("?")
-            .to_string();
-
-        for group in doc.descendants().filter(|n| n.has_tag_name("testGroup")) {
-            let version = group.attribute("version").unwrap_or("1.0 1.1").to_string();
-            let name = group.attribute("name").unwrap_or("?").to_string();
-            for st in group.children().filter(|n| n.has_tag_name("schemaTest")) {
-                let documents: Vec<PathBuf> = st
-                    .children()
-                    .filter(|n| n.has_tag_name("schemaDocument"))
-                    .filter_map(|n| n.attribute(("http://www.w3.org/1999/xlink", "href")))
-                    .map(|h| dir.join(h))
-                    .collect();
-                let Some(validity) = expected_validity(st, version_of(&version)) else {
-                    continue;
-                };
-                // `notKnown` cases are the ones the working group could not
-                // agree on; scoring against them would be scoring noise.
-                let expect_valid = match validity {
-                    "valid" => true,
-                    "invalid" => false,
-                    _ => continue,
-                };
-                if documents.is_empty() {
-                    continue;
-                }
-                out.push(SchemaCase {
-                    set: set.clone(),
-                    group: name.clone(),
-                    version: version.clone(),
-                    documents: documents.clone(),
-                    expect_valid,
-                });
-
-                // Instance cases only mean anything against a schema the
-                // suite says is valid; a document cannot be judged against a
-                // schema that should not have compiled.
-                if !expect_valid {
-                    continue;
-                }
-                for it in group.children().filter(|n| n.has_tag_name("instanceTest")) {
-                    let Some(href) = it
-                        .children()
-                        .find(|n| n.has_tag_name("instanceDocument"))
-                        .and_then(|n| n.attribute(("http://www.w3.org/1999/xlink", "href")))
-                    else {
-                        continue;
-                    };
-                    let Some(validity) = expected_validity(it, version_of(&version)) else {
-                        continue;
-                    };
-                    let expect = match validity {
-                        "valid" => true,
-                        "invalid" => false,
-                        _ => continue,
-                    };
-                    instances.push(InstanceCase {
-                        set: set.clone(),
-                        group: name.clone(),
-                        version: version.clone(),
-                        schema_documents: documents.clone(),
-                        instance: dir.join(href),
-                        expect_valid: expect,
-                    });
-                }
-            }
-        }
-    }
-    (out, instances)
-}
-
-/// What `xsdkit` makes of the schema, and why not if it rejects it.
-fn schema_outcome(case: &SchemaCase) -> Outcome {
-    let version = version_of(&case.version);
-    let mut b = SchemaSetBuilder::new()
-        .version(version)
-        .conformance(Conformance::Strict);
-    if let Some(dir) = case.documents[0].parent() {
-        b = b.search_path(dir);
-    }
-    for d in &case.documents {
-        b = b.file(d.display().to_string());
-    }
-    // Loading is deliberately done inside `catch_unwind`: a panic on a
-    // hostile schema is itself a conformance failure worth counting rather
-    // than one that aborts the run.
-    let compiled = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        let Compilation { diagnostics, .. } = b.compile();
-        diagnostics.has_errors().then(|| error_codes(&diagnostics))
-    }));
-    match compiled {
-        Ok(None) => Outcome::Accepted,
-        Ok(Some(codes)) => Outcome::Rejected(codes),
-        Err(_) => Outcome::Panicked,
-    }
-}
-
 #[derive(Default, Debug)]
 struct Tally {
     /// Expected valid, accepted. Correct.
@@ -495,7 +235,7 @@ impl Tally {
 /// that were not, over real content models that no one wrote for this.
 #[test]
 fn children_agrees_with_the_predicates_across_the_suite() {
-    let Some(root) = suite() else {
+    let Some(root) = suite_root() else {
         eprintln!("XSDTESTS is not set; skipping the W3C suite");
         return;
     };
@@ -503,9 +243,8 @@ fn children_agrees_with_the_predicates_across_the_suite() {
     let (mut types, mut pairs) = (0usize, 0usize);
 
     for case in &cases {
-        let version = version_of(&case.version);
         let mut b = SchemaSetBuilder::new()
-            .version(version)
+            .version(case.version)
             .conformance(Conformance::Lax);
         if let Some(dir) = case.documents[0].parent() {
             b = b.search_path(dir);
@@ -561,7 +300,7 @@ fn children_agrees_with_the_predicates_across_the_suite() {
 
 #[test]
 fn w3c_schema_conformance() {
-    let Some(root) = suite() else {
+    let Some(root) = suite_root() else {
         eprintln!("XSDTESTS is not set; skipping the W3C suite");
         return;
     };
@@ -573,43 +312,70 @@ fn w3c_schema_conformance() {
     );
 
     let mut overall = Tally::default();
+    // Per version, because one percentage over both would be an average of
+    // two different languages: "70.4% of invalid schemas rejected" is true of
+    // neither XSD 1.0 nor XSD 1.1 on its own.
+    let mut by_version: BTreeMap<&'static str, Tally> = BTreeMap::new();
     let mut by_set: BTreeMap<String, Tally> = BTreeMap::new();
     let mut false_rejections: Vec<String> = Vec::new();
     let mut rows: Vec<(String, String)> = Vec::new();
+    let mut unscored = 0usize;
+    // group -> what each version made of it, for the one relation that ought
+    // to hold across them.
+    let mut both: BTreeMap<String, (Option<bool>, Option<bool>)> = BTreeMap::new();
 
     let hook = std::panic::take_hook();
     std::panic::set_hook(Box::new(|_| {}));
     for c in &cases {
         let outcome = schema_outcome(c);
-        let accepted = outcome.accepted();
         rows.push((
-            format!("{}/{}", c.set, c.group),
+            format!("{}/{}@{}", c.set, c.group, version_token(c.version)),
             format!(
-                "{}\t{}\t{}",
-                version_token(version_of(&c.version)),
+                "{}\t{}",
                 if c.expect_valid { "valid" } else { "invalid" },
                 outcome.columns(),
             ),
         ));
         let t = by_set.entry(c.set.clone()).or_default();
-        match (c.expect_valid, accepted) {
+        if !outcome.scored() {
+            unscored += 1;
+            continue;
+        }
+        let seen = both.entry(format!("{}/{}", c.set, c.group)).or_default();
+        match c.version {
+            Version::Xsd10 => seen.0 = Some(outcome.accepted()),
+            Version::Xsd11 => seen.1 = Some(outcome.accepted()),
+        }
+        let v = by_version.entry(version_token(c.version)).or_default();
+        match (c.expect_valid, outcome.accepted()) {
             (true, true) => {
                 overall.accepted_valid += 1;
+                v.accepted_valid += 1;
                 t.accepted_valid += 1;
             }
             (true, false) => {
                 overall.rejected_valid += 1;
+                v.rejected_valid += 1;
                 t.rejected_valid += 1;
                 if false_rejections.len() < 40 {
-                    false_rejections.push(format!("{}/{}", c.set, c.group));
+                    // With the version, or a group rejected in both looks
+                    // like the same case listed twice.
+                    false_rejections.push(format!(
+                        "{}/{}@{}",
+                        c.set,
+                        c.group,
+                        version_token(c.version)
+                    ));
                 }
             }
             (false, false) => {
                 overall.rejected_invalid += 1;
+                v.rejected_invalid += 1;
                 t.rejected_invalid += 1;
             }
             (false, true) => {
                 overall.accepted_invalid += 1;
+                v.accepted_invalid += 1;
                 t.accepted_invalid += 1;
             }
         }
@@ -624,26 +390,55 @@ fn w3c_schema_conformance() {
         }
     };
     println!("\n=== W3C XML Schema Test Suite — schema tests ===");
-    println!("cases                     {}", overall.total());
+    println!("runs                      {}", overall.total());
+    println!("not scored (queried)      {unscored}");
+    for (version, t) in &by_version {
+        let valid = t.accepted_valid + t.rejected_valid;
+        let invalid = t.rejected_invalid + t.accepted_invalid;
+        println!(
+            "\nas XSD {version}  —  {} runs, {} correct ({:.1}%)",
+            t.total(),
+            t.correct(),
+            pct(t.correct(), t.total())
+        );
+        println!(
+            "  valid schemas accepted    {}/{} ({:.1}%)   <- reading real schemas",
+            t.accepted_valid,
+            valid,
+            pct(t.accepted_valid, valid)
+        );
+        println!(
+            "  invalid schemas rejected  {}/{} ({:.1}%)   <- validity constraints",
+            t.rejected_invalid,
+            invalid,
+            pct(t.rejected_invalid, invalid)
+        );
+    }
+
+    // The relation the suite lets us check for free, over the 4,786 groups it
+    // prescribes for both versions: XSD 1.1 is meant to be a superset, so a
+    // schema we read as 1.0 should still read as 1.1. The other direction is
+    // ordinary — 1.1 relaxes rules and adds lexical forms — and is reported
+    // separately rather than treated as a fault.
+    let paired: Vec<_> = both
+        .iter()
+        .filter_map(|(g, (a, b))| Some((g, (*a)?, (*b)?)))
+        .collect();
+    let tightened: Vec<_> = paired
+        .iter()
+        .filter(|(_, a, b)| *a && !*b)
+        .map(|(g, ..)| g.as_str())
+        .collect();
+    let relaxed = paired.iter().filter(|(_, a, b)| !*a && *b).count();
+    println!("\nboth versions: {} groups", paired.len());
     println!(
-        "correct                   {} ({:.1}%)",
-        overall.correct(),
-        pct(overall.correct(), overall.total())
+        "  accepted as 1.0, rejected as 1.1  {}   <- 1.1 is meant to be a superset",
+        tightened.len()
     );
-    let valid_total = overall.accepted_valid + overall.rejected_valid;
-    let invalid_total = overall.rejected_invalid + overall.accepted_invalid;
-    println!(
-        "\nvalid schemas accepted    {}/{} ({:.1}%)   <- reading real schemas",
-        overall.accepted_valid,
-        valid_total,
-        pct(overall.accepted_valid, valid_total)
-    );
-    println!(
-        "invalid schemas rejected  {}/{} ({:.1}%)   <- validity constraints",
-        overall.rejected_invalid,
-        invalid_total,
-        pct(overall.rejected_invalid, invalid_total)
-    );
+    println!("  rejected as 1.0, accepted as 1.1  {relaxed}   <- ordinary: 1.1 relaxes rules");
+    if !tightened.is_empty() {
+        println!("  {}", tightened.join(", "));
+    }
 
     println!("\nworst test sets by false rejection:");
     let mut sets: Vec<_> = by_set.iter().collect();
@@ -669,16 +464,24 @@ fn w3c_schema_conformance() {
         &[
             "W3C XML Schema Test Suite — one row per schema case.".to_string(),
             String::new(),
-            "set/group  version-run  expected  verdict  error-codes".to_string(),
+            "set/group@version  expected  verdict  error-codes".to_string(),
             String::new(),
-            format!("cases                     {}", overall.total()),
+            format!("runs                      {}", overall.total()),
+            format!("not scored (queried)      {unscored}"),
             format!(
-                "valid schemas accepted    {}/{}",
-                overall.accepted_valid, valid_total
+                "as XSD 1.0   valid accepted {}   invalid rejected {}",
+                fraction(by_version.get("1.0"), true),
+                fraction(by_version.get("1.0"), false)
             ),
             format!(
-                "invalid schemas rejected  {}/{}",
-                overall.rejected_invalid, invalid_total
+                "as XSD 1.1   valid accepted {}   invalid rejected {}",
+                fraction(by_version.get("1.1"), true),
+                fraction(by_version.get("1.1"), false)
+            ),
+            format!(
+                "accepted as 1.0 and rejected as 1.1: {}, of {} groups run as both",
+                tightened.len(),
+                paired.len()
             ),
             String::new(),
             "Re-bless with XSDKIT_BLESS=1; see tests/w3c_suite.rs.".to_string(),
@@ -690,6 +493,7 @@ fn w3c_schema_conformance() {
     // it silently. It survives the baseline because it is the one assertion
     // that still means something on a machine whose baseline was blessed
     // against a half-fetched suite.
+    let valid_total = overall.accepted_valid + overall.rejected_valid;
     let accepted_pct = pct(overall.accepted_valid, valid_total);
     assert!(
         accepted_pct >= 50.0,
@@ -703,7 +507,7 @@ fn w3c_schema_conformance() {
 /// a 4.5-minute figure that predates that cache, and ran nowhere as a result.
 #[test]
 fn w3c_instance_conformance() {
-    let Some(root) = suite() else {
+    let Some(root) = suite_root() else {
         eprintln!("XSDTESTS is not set; skipping the W3C suite");
         return;
     };
@@ -715,7 +519,8 @@ fn w3c_instance_conformance() {
     );
 
     let mut tally = Tally::default();
-    let mut unusable = 0usize;
+    let mut unscored = 0usize;
+    let mut by_version: BTreeMap<&'static str, Tally> = BTreeMap::new();
     let mut by_set: BTreeMap<String, Tally> = BTreeMap::new();
     let mut rows: Vec<(String, String)> = Vec::new();
     // Many groups share one schema, and compiling is the expensive half.
@@ -729,38 +534,43 @@ fn w3c_instance_conformance() {
         let outcome = instance_outcome(c, &mut cache);
         rows.push((
             format!(
-                "{}/{}/{}",
+                "{}/{}/{}@{}",
                 c.set,
                 c.group,
-                c.instance.file_name().unwrap_or_default().to_string_lossy()
+                c.instance.file_name().unwrap_or_default().to_string_lossy(),
+                version_token(c.version),
             ),
             format!(
-                "{}\t{}\t{}",
-                version_token(version_of(&c.version)),
+                "{}\t{}",
                 if c.expect_valid { "valid" } else { "invalid" },
                 outcome.columns(),
             ),
         ));
         let t = by_set.entry(c.set.clone()).or_default();
         if !outcome.scored() {
-            unusable += 1;
+            unscored += 1;
             continue;
         }
+        let v = by_version.entry(version_token(c.version)).or_default();
         match (c.expect_valid, outcome.accepted()) {
             (true, true) => {
                 tally.accepted_valid += 1;
+                v.accepted_valid += 1;
                 t.accepted_valid += 1;
             }
             (true, false) => {
                 tally.rejected_valid += 1;
+                v.rejected_valid += 1;
                 t.rejected_valid += 1;
             }
             (false, false) => {
                 tally.rejected_invalid += 1;
+                v.rejected_invalid += 1;
                 t.rejected_invalid += 1;
             }
             (false, true) => {
                 tally.accepted_invalid += 1;
+                v.accepted_invalid += 1;
                 t.accepted_invalid += 1;
             }
         }
@@ -774,28 +584,31 @@ fn w3c_instance_conformance() {
             n as f64 * 100.0 / d as f64
         }
     };
-    let valid_total = tally.accepted_valid + tally.rejected_valid;
-    let invalid_total = tally.rejected_invalid + tally.accepted_invalid;
     println!("\n=== W3C XML Schema Test Suite — instance tests ===");
-    println!("cases scored              {}", tally.total());
-    println!("skipped (schema unusable) {unusable}");
-    println!(
-        "correct                   {} ({:.1}%)",
-        tally.correct(),
-        pct(tally.correct(), tally.total())
-    );
-    println!(
-        "\nvalid documents accepted  {}/{} ({:.1}%)   <- false alarms",
-        tally.accepted_valid,
-        valid_total,
-        pct(tally.accepted_valid, valid_total)
-    );
-    println!(
-        "invalid documents rejected {}/{} ({:.1}%)   <- what validation catches",
-        tally.rejected_invalid,
-        invalid_total,
-        pct(tally.rejected_invalid, invalid_total)
-    );
+    println!("runs                      {}", tally.total());
+    println!("not scored                {unscored}");
+    for (version, t) in &by_version {
+        let valid = t.accepted_valid + t.rejected_valid;
+        let invalid = t.rejected_invalid + t.accepted_invalid;
+        println!(
+            "\nas XSD {version}  —  {} runs, {} correct ({:.1}%)",
+            t.total(),
+            t.correct(),
+            pct(t.correct(), t.total())
+        );
+        println!(
+            "  valid documents accepted   {}/{} ({:.1}%)   <- false alarms",
+            t.accepted_valid,
+            valid,
+            pct(t.accepted_valid, valid)
+        );
+        println!(
+            "  invalid documents rejected {}/{} ({:.1}%)   <- what validation catches",
+            t.rejected_invalid,
+            invalid,
+            pct(t.rejected_invalid, invalid)
+        );
+    }
 
     println!("\nworst sets by false alarm:");
     let mut sets: Vec<_> = by_set.iter().collect();
@@ -816,17 +629,19 @@ fn w3c_instance_conformance() {
         &[
             "W3C XML Schema Test Suite — one row per instance case.".to_string(),
             String::new(),
-            "set/group/document  version-run  expected  verdict  error-codes".to_string(),
+            "set/group/document@version  expected  verdict  error-codes".to_string(),
             String::new(),
-            format!("cases scored               {}", tally.total()),
-            format!("skipped                    {unusable}"),
+            format!("runs                      {}", tally.total()),
+            format!("not scored                {unscored}"),
             format!(
-                "valid documents accepted   {}/{}",
-                tally.accepted_valid, valid_total
+                "as XSD 1.0   valid accepted {}   invalid rejected {}",
+                fraction(by_version.get("1.0"), true),
+                fraction(by_version.get("1.0"), false)
             ),
             format!(
-                "invalid documents rejected {}/{}",
-                tally.rejected_invalid, invalid_total
+                "as XSD 1.1   valid accepted {}   invalid rejected {}",
+                fraction(by_version.get("1.1"), true),
+                fraction(by_version.get("1.1"), false)
             ),
             String::new(),
             "Re-bless with XSDKIT_BLESS=1; see tests/w3c_suite.rs.".to_string(),
@@ -836,65 +651,10 @@ fn w3c_instance_conformance() {
 
     // A ratchet on false alarms: rejecting a valid document is the failure
     // that makes a validator unusable.
+    let valid_total = tally.accepted_valid + tally.rejected_valid;
     let accepted = pct(tally.accepted_valid, valid_total);
     assert!(
         accepted >= 40.0,
         "valid-document acceptance fell to {accepted:.1}%"
     );
-}
-
-/// One instance document against its schema, with the schema compiled at most
-/// once per group.
-///
-/// A schema this crate could not load says nothing about the document, so those
-/// are skipped rather than scored. A panic is not: it scores as "did not
-/// accept", the same way the schema half treats one.
-fn instance_outcome(
-    c: &InstanceCase,
-    cache: &mut BTreeMap<String, Option<xsdkit::Schemas>>,
-) -> Outcome {
-    let Ok(xml) = std::fs::read_to_string(&c.instance) else {
-        return Outcome::Skipped("unreadable");
-    };
-    let cache_key = format!(
-        "{}|{}",
-        c.version,
-        c.schema_documents
-            .iter()
-            .map(|p| p.display().to_string())
-            .collect::<Vec<_>>()
-            .join(",")
-    );
-    let entry = cache.entry(cache_key).or_insert_with(|| {
-        let version = version_of(&c.version);
-        let mut b = SchemaSetBuilder::new()
-            .version(version)
-            .conformance(Conformance::Lax);
-        if let Some(dir) = c.schema_documents[0].parent() {
-            b = b.search_path(dir);
-        }
-        for d in &c.schema_documents {
-            b = b.file(d.display().to_string());
-        }
-        std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            let Compilation {
-                schemas,
-                diagnostics: diags,
-            } = b.compile();
-            (!diags.has_errors()).then_some(schemas)
-        }))
-        .unwrap_or(None)
-    });
-    let Some(schemas) = entry else {
-        return Outcome::Skipped("schema");
-    };
-    let verdict = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-        let report = schemas.document_validator().validate(&xml);
-        (!report.is_valid()).then(|| error_codes(&report.diagnostics))
-    }));
-    match verdict {
-        Ok(None) => Outcome::Accepted,
-        Ok(Some(codes)) => Outcome::Rejected(codes),
-        Err(_) => Outcome::Panicked,
-    }
 }

@@ -283,13 +283,14 @@ let Compilation { schemas, diagnostics } = SchemaSetBuilder::new()
 
 ## Conformance
 
-Measured against the **W3C XML Schema Test Suite** (5,727 scored schema
-cases from NIST, Microsoft, IBM, Sun, Boeing and Saxonica):
+Measured against the **W3C XML Schema Test Suite** — from NIST, Microsoft,
+IBM, Sun, Boeing and Saxonica — with every group the suite prescribes for both
+versions read as each, 10,511 runs in all:
 
-| | |
-|---|---|
-| valid schemas accepted | **99.7%** (5,231 / 5,247) |
-| invalid schemas rejected | **66.7%** (320 / 480) |
+| | XSD 1.0 | XSD 1.1 |
+|---|---|---|
+| valid schemas accepted | **99.8%** (4,563 / 4,573) | **99.8%** (5,238 / 5,248) |
+| invalid schemas rejected | **77.4%** (171 / 221) | **67.2%** (315 / 469) |
 
 The gap is the honest description of what this is. `xsdkit` reads real
 schemas well; it does not yet enforce most of the specification's *validity
@@ -297,13 +298,13 @@ constraints*, so a schema it accepts is not thereby a valid schema. If you
 need a conformance checker, use Xerces or Saxon; if you need to read a schema
 that already works, this is built for that.
 
-Document validation is the other half of the suite — 21,575 scored cases,
-99.0% correct:
+Document validation is the other half of the suite — 41,994 runs over 21,671
+documents:
 
-| | |
-|---|---|
-| valid documents accepted | **99.5%** (11,846 / 11,907) |
-| invalid documents rejected | **98.4%** (9,517 / 9,668) |
+| | XSD 1.0 | XSD 1.1 |
+|---|---|---|
+| valid documents accepted | **99.8%** (11,300 / 11,325) | **99.5%** (11,845 / 11,906) |
+| invalid documents rejected | **99.7%** (9,057 / 9,083) | **98.4%** (9,524 / 9,680) |
 
 ```bash
 git clone --depth 1 https://github.com/w3c/xsdtests /tmp/xsdtests

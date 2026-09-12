@@ -426,15 +426,32 @@ a machine whose baseline was blessed against a half-fetched suite.
 The baselines are blessed against one snapshot of the suite, pinned in
 `tests/conformance/SUITE`, which is what CI fetches. Bumping the pin and
 re-blessing are the same change. They are also `exclude`d from the published
-crate: 2.6 MB that only this test reads.
+crate: 5 MB that only this test reads, and about 180 KB packed.
 
-Two numbers, and the gap between them is the honest description of this
-crate:
+**Every group the suite prescribes for both versions is run as both.** 4,786
+of the 5,737 groups declare no version, and running those as 1.0 alone — on
+the reasoning that 1.0 is the stricter reading — left the whole XSD 1.1 path
+measured by the 921 groups that name it. So the schema half is 10,511 runs
+rather than 5,725, and the figures are **per version**, because one percentage
+over both would be an average of two different languages:
 
-| | |
-|---|---|
-| valid schemas accepted | **99.7%** — it reads real schemas |
-| invalid schemas rejected | **66.7%** — partial: see `src/restriction.rs` |
+| | XSD 1.0 | XSD 1.1 |
+|---|---|---|
+| valid schemas accepted | **99.8%** (4,563/4,573) | **99.8%** (5,238/5,248) |
+| invalid schemas rejected | **77.4%** (171/221) | **67.2%** (315/469) |
+
+The single figure this replaced was 66.5%, and the difference is not a change
+in the code: it was an average over a mix of 1.0 and 1.1 runs, which is a
+number true of neither. The 1.1 column is lower because the 1.1-only test sets
+are largely assertions, conditional type assignment and `openContent` — three
+features this version does not claim.
+
+The suite also hands us one relation for free: XSD 1.1 is meant to be a
+superset, so a schema read as 1.0 should still read as 1.1. Over the 4,786
+groups run as both, **0** are accepted as 1.0 and rejected as 1.1, and 3 go
+the other way, which is ordinary — 1.1 relaxes rules. The count is in the
+baseline header, so a change to it is a diff rather than an assertion with a
+hand-maintained exception list.
 
 That asymmetry is by construction, not neglect: the Schema Component
 Constraints and the Derivation Valid rules are largely unimplemented (see §7).
@@ -451,12 +468,21 @@ otherwise never visits. `final` is enforced too (`src/derivation.rs`).
 invalid schemas we accept by test-group family, so a family with fifty misses
 is fifty cases one rule buys.
 
-The instance half — 21,671 documents — runs by default and scores 21,575 of
-them, 99.0% correct: **99.5%** of valid documents accepted, **98.4%** of
-invalid ones rejected. It used to be `#[ignore]`d on the strength of a
-4.5-minute figure that predated the harness's schema cache; measured, it is
-**3.3s in `--release` and 19s in a debug build**, so it was skipping in CI for
-no reason. If you find a conformance figure here surprising, re-measure before
+The instance half — 21,671 documents, 41,994 runs across the two versions —
+splits the same way:
+
+| | XSD 1.0 | XSD 1.1 |
+|---|---|---|
+| valid documents accepted | **99.8%** (11,300/11,325) | **99.5%** (11,845/11,906) |
+| invalid documents rejected | **99.7%** (9,057/9,083) | **98.4%** (9,524/9,680) |
+
+25 false alarms under 1.0 against 61 under 1.1, which is the same story: the
+1.1-only sets are the features that are not there yet.
+
+It used to be `#[ignore]`d on the strength of a 4.5-minute figure that
+predated the harness's schema cache; measured, both halves together are **7s
+in `--release` and 35s in a debug build**, so it was skipping in CI for no
+reason. If you find a conformance figure here surprising, re-measure before
 believing it: that timing and the count of invalid schemas we still accept had
 both drifted while nothing ran them.
 
@@ -476,13 +502,23 @@ names the other version. Taking the first `<expected>` regardless, which it
 used to do, scored 49 cases against the wrong expectation and inflated the
 denominator by 10.
 
-Some groups are unmarked but only make sense in one version, and no scoring
-rule fixes that. `saxonData/Simple` is the clearest: `simple001` expects `+INF`
-to be **valid** (a 1.1-only lexical form) while `simple004` expects
-`final="extension"` on a simple type to be **invalid** (a 1.0-only
-prohibition), and neither group declares a version. No single reading satisfies
-both, so two cases there are permanently lost. **Do not "fix" that by relaxing
-the 1.0 lexical rules** — the suite's own `XSD1_1TestCategories.xml` lists
+Running each group as both versions is what makes that half of the metadata
+reachable at all. `substitution-groups/sg-and-defined-Sibling-3` prescribes
+**invalid** for 1.0 and **valid** for 1.1, and we now get both right — under
+one run per group, one of those two answers could never be scored. The same
+mechanism disposes of `full-xpath-in-CTA` and `restricted-xpath-in-CTA`
+without a special case: both name 1.1, we implement neither XPath subset, so
+neither expectation is about us.
+
+Some groups are unmarked but only make sense in one version. `saxonData/Simple`
+is the clearest: `simple001` expects `+INF` to be **valid** (a 1.1-only lexical
+form) while `simple004` expects `final="extension"` on a simple type to be
+**invalid** (a 1.0-only prohibition), and neither group declares a version.
+Under one run per group no single reading satisfied both and two cases were
+lost; running both versions costs one of them instead of two — `simple001` is
+correct as 1.1 and a false rejection as 1.0, and `simple004` is correct as
+both. **Do not "fix" the remaining one by relaxing the 1.0 lexical rules** —
+the suite's own `XSD1_1TestCategories.xml` lists
 `xsd1_1-Misc-LexicalRepForFloatAndDouble`, "lexical representation +INF for
 float and double", as a 1.1 *feature*. The rule is right; the test data is
 unmarked.

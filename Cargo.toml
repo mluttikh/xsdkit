@@ -14,10 +14,10 @@ readme = "README.md"
 # Pointer stubs for AI contributors that redirect to AGENTS.md. They mean
 # nothing outside this repository, and a crates.io publish is permanent.
 #
-# `tests/conformance` is 2.6 MB of W3C-suite baselines that only the
-# `w3c_suite` test reads, and only when `XSDTESTS` points at a suite nobody
-# downloading the crate has fetched. Shipping it would put it in every
-# downstream `~/.cargo` for nothing.
+# `tests/conformance` is 5 MB of W3C-suite baselines that only the `w3c_suite`
+# test reads, and only when `XSDTESTS` points at a suite nobody downloading the
+# crate has fetched. Shipping it would put it in every downstream `~/.cargo`
+# for nothing. (It packs to about 180 KB, so it costs a clone very little.)
 exclude = ["/CLAUDE.md", "/GEMINI.md", "/tests/conformance"]
 
 [package.metadata.docs.rs]
