@@ -60,6 +60,27 @@ pub fn expected_validity<'a>(test: roxmltree::Node<'a, 'a>, version: Version) ->
         .and_then(|n| n.attribute("validity"))
 }
 
+/// Which XSD 1.1 features a test group says it exercises.
+///
+/// The suite ships its own feature taxonomy in `XSD1_1TestCategories.xml` — 17
+/// features broken into 99 categories, from `xsd1_1-Assertions-StayInSubtree`
+/// to `xsd1_1-OpenContent-DefaultOCAppliesToOverride` — and a group points at
+/// the ones it tests through `documentationReference`. 1,087 references across
+/// 94 of the 99 categories, which is a per-feature conformance table sitting in
+/// metadata the harness already parses and used to discard.
+///
+/// Anything not pointing into that file is a spec section reference rather than
+/// a feature, and is ignored here.
+pub fn feature_categories(group: roxmltree::Node<'_, '_>) -> Vec<String> {
+    group
+        .children()
+        .filter(|n| n.has_tag_name("documentationReference"))
+        .filter_map(|n| n.attribute(("http://www.w3.org/1999/xlink", "href")))
+        .filter(|u| u.contains("XSD1_1TestCategories"))
+        .filter_map(|u| u.split_once('#').map(|(_, frag)| frag.to_string()))
+        .collect()
+}
+
 /// Whether the working group's own metadata says this expectation is in doubt.
 ///
 /// `<current status="queried">` means the recorded result has been challenged,
@@ -149,6 +170,8 @@ pub fn suite_root() -> Option<PathBuf> {
 pub struct InstanceCase {
     pub set: String,
     pub group: String,
+    /// See [`feature_categories`].
+    pub features: Vec<String>,
     /// The language the schema is read as. See [`versions_of`].
     pub version: Version,
     pub schema_documents: Vec<PathBuf>,
@@ -221,6 +244,9 @@ pub fn error_codes(d: &Diagnostics) -> String {
 pub struct SchemaCase {
     pub set: String,
     pub group: String,
+    /// The XSD 1.1 feature categories this group says it tests. See
+    /// [`feature_categories`].
+    pub features: Vec<String>,
     /// The language this case is read as, already resolved from the group's
     /// declaration by [`versions_of`].
     pub version: Version,
@@ -279,6 +305,7 @@ pub fn parse_test_sets(root: &Path) -> (Vec<SchemaCase>, Vec<InstanceCase>) {
         for group in doc.descendants().filter(|n| n.has_tag_name("testGroup")) {
             let declared = group.attribute("version").unwrap_or("1.0 1.1");
             let name = group.attribute("name").unwrap_or("?").to_string();
+            let features = feature_categories(group);
             for st in group.children().filter(|n| n.has_tag_name("schemaTest")) {
                 let documents: Vec<PathBuf> = st
                     .children()
@@ -307,6 +334,7 @@ pub fn parse_test_sets(root: &Path) -> (Vec<SchemaCase>, Vec<InstanceCase>) {
                     out.push(SchemaCase {
                         set: set.clone(),
                         group: name.clone(),
+                        features: features.clone(),
                         version,
                         disputed: disputed(st),
                         documents: documents.clone(),
@@ -338,6 +366,7 @@ pub fn parse_test_sets(root: &Path) -> (Vec<SchemaCase>, Vec<InstanceCase>) {
                         instances.push(InstanceCase {
                             set: set.clone(),
                             group: name.clone(),
+                            features: features.clone(),
                             version,
                             disputed: disputed(it),
                             schema_documents: documents.clone(),

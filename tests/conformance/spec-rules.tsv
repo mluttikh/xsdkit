@@ -1,0 +1,177 @@
+# Every individually named rule in the two XSD 1.1 Recommendations, and what
+# xsdkit does about it.
+#
+# spec  anchor  kind  name  status  site  note
+#
+# The first four columns are generated — they are Appendix B of each REC, where
+# every named rule is a `div.constraintnote` with a stable anchor. Regenerate
+# and diff them with:
+#
+#     scripts/extract-spec-rules.py --check
+#
+# The last three are a judgement about this crate, and are maintained by hand.
+# `tests/spec_rules.rs` is the gate: it holds the row count, requires a site
+# for anything claimed, requires a note for anything not, and — the join that
+# matters — requires every DiagCode to be attributable to a rule here.
+#
+# status:
+#   yes               enforced, at the site named
+#   partial           enforced in part; the note says what is missing
+#   no                not enforced
+#   by-construction   nothing to enforce: the rule constrains the shape of a
+#                     component, and a component built by this loader cannot
+#                     take the other shape
+#
+# A rule's status is about *enforcement*, except for the sixteen Schema
+# Information Set Contributions, which are outputs rather than constraints.
+# For those, `yes` means the contribution reaches a consumer of the PSVI.
+#
+# Coverage of the specification is the point of this file, and it is not the
+# same thing as coverage of the code: 88.9% of regions says nothing about a
+# rule nobody wrote. The counts below are what it says instead.
+#
+# 143 rules: 92 yes, 27 partial, 20 no, 4 by-construction
+#
+datatypes	con-date-day	Constraint	Day-of-month Representations	yes	src/atomic.rs	as above for xs:date
+datatypes	con-date-dayValue	Constraint	Day-of-month Values	yes	src/atomic.rs	as above for xs:date
+datatypes	con-dateTime-day	Constraint	Day-of-month Representations	yes	src/atomic.rs	the lexical form is rejected with it
+datatypes	con-dateTime-dayValue	Constraint	Day-of-month Values	yes	src/atomic.rs	a day that does not exist in its month is not a value
+datatypes	con-gMonthDay-day	Constraint	Day-of-month Representations	yes	src/atomic.rs	as above for xs:gMonthDay
+datatypes	con-gMonthDay-dayValue	Constraint	Day-of-month Values	yes	src/atomic.rs	as above for xs:gMonthDay, which is why --02-29 is a value
+datatypes	cos-applicable-facets	Schema Component Constraint	Applicable Facets	yes	src/facets.rs	every declared facet is one the datatype admits
+datatypes	cos-assertions-restriction	Schema Component Constraint	Valid restriction of assertions	no	-	assertions are not evaluated, so a restriction of them is not checked
+datatypes	cos-pattern-restriction	Schema Component Constraint	Valid restriction of pattern	by-construction	src/validate.rs	patterns intersect down the chain, so a step can only narrow
+datatypes	enumeration-required-notation	Schema Component Constraint	enumeration facet value required for NOTATION	no	-	an xs:NOTATION with no enumeration is accepted
+datatypes	enumeration-valid-restriction	Schema Component Constraint	enumeration valid restriction	partial	src/facets.rs	literals are checked against the base's built-in ancestor, not against the base's own facets
+datatypes	fractionDigits-totalDigits	Schema Component Constraint	fractionDigits less than or equal to totalDigits	yes	src/facets.rs	fractionDigits may not exceed totalDigits
+datatypes	fractionDigits-valid-restriction	Schema Component Constraint	fractionDigits valid restriction	yes	src/facets.rs	narrowing check
+datatypes	length-minLength-maxLength	Schema Component Constraint	length and minLength or maxLength	yes	src/facets.rs	length beside minLength or maxLength
+datatypes	length-valid-restriction	Schema Component Constraint	length valid restriction	yes	src/facets.rs	narrowing check
+datatypes	maxExclusive-valid-restriction	Schema Component Constraint	maxExclusive valid restriction	yes	src/facets.rs	narrowing check
+datatypes	maxInclusive-maxExclusive	Schema Component Constraint	maxInclusive and maxExclusive	yes	src/load.rs	both bounds at one step
+datatypes	maxInclusive-valid-restriction	Schema Component Constraint	maxInclusive valid restriction	yes	src/facets.rs	narrowing check
+datatypes	maxLength-valid-restriction	Schema Component Constraint	maxLength valid restriction	yes	src/facets.rs	narrowing check
+datatypes	minExclusive-less-than-equal-to-maxExclusive	Schema Component Constraint	minExclusive <= maxExclusive	yes	src/load.rs	the pair check
+datatypes	minExclusive-less-than-maxInclusive	Schema Component Constraint	minExclusive < maxInclusive	yes	src/load.rs	the pair check
+datatypes	minExclusive-valid-restriction	Schema Component Constraint	minExclusive valid restriction	yes	src/facets.rs	narrowing check
+datatypes	minInclusive-less-than-equal-to-maxInclusive	Schema Component Constraint	minInclusive <= maxInclusive	yes	src/load.rs	the pair check
+datatypes	minInclusive-less-than-maxExclusive	Schema Component Constraint	minInclusive < maxExclusive	yes	src/load.rs	the pair check
+datatypes	minInclusive-minExclusive	Schema Component Constraint	minInclusive and minExclusive	yes	src/load.rs	both bounds at one step
+datatypes	minInclusive-valid-restriction	Schema Component Constraint	minInclusive valid restriction	yes	src/facets.rs	narrowing check
+datatypes	minLength-less-than-equal-to-maxLength	Schema Component Constraint	minLength <= maxLength	yes	src/facets.rs	the pair check
+datatypes	minLength-valid-restriction	Schema Component Constraint	minLength valid restriction	yes	src/facets.rs	narrowing check
+datatypes	timezone-valid-restriction	Schema Component Constraint	timezone valid restriction	no	src/values.rs	the facet is enforced against values; narrowing it across a restriction step is not checked
+datatypes	totalDigits-valid-restriction	Schema Component Constraint	totalDigits valid restriction	yes	src/facets.rs	narrowing check
+datatypes	whiteSpace-valid-restriction	Schema Component Constraint	whiteSpace valid restriction	no	-	a step may widen whiteSpace from collapse back to preserve
+datatypes	src-enumeration-value	Schema Representation Constraint	Enumeration value	yes	src/facets.rs	each enumerated literal is a value of the base
+datatypes	src-list-itemType-or-simpleType	Schema Representation Constraint	itemType attribute or simpleType child	yes	src/load.rs	itemType beside an inline simpleType
+datatypes	src-pattern-value	Schema Representation Constraint	Pattern value	yes	src/regex.rs	the pattern compiles as an XSD regular expression
+datatypes	src-restriction-base-or-simpleType	Schema Representation Constraint	base attribute or simpleType child	yes	src/load.rs	base beside an inline simpleType
+datatypes	src-union-memberTypes-or-simpleTypes	Schema Representation Constraint	memberTypes attribute or simpleType children	yes	src/load.rs	memberTypes beside inline simpleTypes
+datatypes	cvc-assertions-valid	Validation Rule	Assertions Valid	no	-	assertions are not evaluated
+datatypes	cvc-datatype-valid	Validation Rule	Datatype Valid	yes	src/validate.rs	atomic, list and union varieties
+datatypes	cvc-enumeration-valid	Validation Rule	enumeration valid	yes	src/values.rs	compared in the value space, not as strings
+datatypes	cvc-explicitTimezone-valid	Validation Rule	explicitOffset Valid	yes	src/values.rs	required, prohibited and optional against a value's timezone
+datatypes	cvc-facet-valid	Validation Rule	Facet Valid	yes	src/values.rs	check_facets, against the set src/validate.rs composed up the chain
+datatypes	cvc-fractionDigits-valid	Validation Rule	fractionDigits Valid	yes	src/values.rs	
+datatypes	cvc-length-valid	Validation Rule	Length Valid	yes	src/values.rs	facet_length, which each datatype defines for itself
+datatypes	cvc-maxExclusive-valid	Validation Rule	maxExclusive Valid	yes	src/values.rs	
+datatypes	cvc-maxInclusive-valid	Validation Rule	maxInclusive Valid	yes	src/values.rs	
+datatypes	cvc-maxLength-valid	Validation Rule	maxLength Valid	yes	src/values.rs	
+datatypes	cvc-minExclusive-valid	Validation Rule	minExclusive Valid	yes	src/values.rs	
+datatypes	cvc-minInclusive-valid	Validation Rule	minInclusive Valid	yes	src/values.rs	
+datatypes	cvc-minLength-valid	Validation Rule	minLength Valid	yes	src/values.rs	
+datatypes	cvc-pattern-valid	Validation Rule	pattern valid	yes	src/regex.rs	XSD regular expressions, compiled and matched
+datatypes	cvc-totalDigits-valid	Validation Rule	totalDigits Valid	yes	src/values.rs	
+structures	a-props-correct	Schema Component Constraint	Attribute Declaration Properties Correct	partial	src/declarations.rs	the value-constraint clause, plus the 1.0 ID rule; the property tableau is satisfied by construction
+structures	ag-props-correct	Schema Component Constraint	Attribute Group Definition Properties Correct	partial	src/compile.rs	clause 1 by construction; clause 2, two uses with one expanded name, is not checked
+structures	an-props-correct	Schema Component Constraint	Annotation Correct	by-construction	src/model.rs	property-tableau conformance only; an annotation component cannot be built inconsistent
+structures	as-props-correct	Schema Component Constraint	Assertion Properties Correct	no	-	assertions are stored and never evaluated; needs XPath Valid
+structures	au-props-correct	Schema Component Constraint	Attribute Use Correct	partial	src/declarations.rs	a use's own value constraint is checked as a default; clause 3, a use narrowing a fixed declaration, is not
+structures	c-fields-xpaths	Schema Component Constraint	Fields Value OK	yes	src/identity.rs	as above, with the attribute step a field may end on
+structures	c-props-correct	Schema Component Constraint	Identity-constraint Definition Properties Correct	partial	src/load.rs	clause 1 by construction; clause 2, a keyref's field count matching its key's, is not checked
+structures	c-selector-xpath	Schema Component Constraint	Selector Value OK	yes	src/identity.rs	the Appendix I subset, parsed and rejected when malformed
+structures	cos-all-limited	Schema Component Constraint	All Group Limited	no	-	nothing constrains where an xs:all group may appear
+structures	cos-aw-intersect	Schema Component Constraint	Attribute Wildcard Intersection	yes	src/model.rs	attribute wildcard intersection
+structures	cos-aw-union	Schema Component Constraint	Attribute Wildcard Union	yes	src/model.rs	attribute wildcard union
+structures	cos-choice-range	Schema Component Constraint	Effective Total Range (choice)	yes	src/restriction.rs	as above, for choice
+structures	cos-content-act-restrict	Schema Component Constraint	Content type restricts (Complex Content)	partial	src/restriction.rs	the judgeable cases; see the module header for what is left unjudged
+structures	cos-ct-derived-ok	Schema Component Constraint	Type Derivation OK (Complex)	partial	src/derivation.rs	the final clause; used by xsi:type in src/instance.rs
+structures	cos-ct-extends	Schema Component Constraint	Derivation Valid (Extension)	no	-	Derivation Valid (Extension) is unimplemented as a set rather than half-done (AGENTS.md §7)
+structures	cos-element-consistent	Schema Component Constraint	Element Declarations Consistent	partial	src/instance.rs	the 1.1 dynamic form, reported when a document walks into the clash; the 1.0 static form is not checked
+structures	cos-equiv-derived-ok-rec	Schema Component Constraint	Substitution Group OK (Transitive)	partial	src/compile.rs	the closure honours abstract heads; the type-derivation and disallowed-substitutions clauses are not checked
+structures	cos-group-emptiable	Schema Component Constraint	Particle Emptiable	yes	src/restriction.rs	a definition rather than a constraint, used by the derivation rules
+structures	cos-nonambig	Schema Component Constraint	Unique Particle Attribution	yes	src/content.rs	UPA is automaton determinism; the check is the overlap test on out-transitions
+structures	cos-ns-subset	Schema Component Constraint	Wildcard Subset	yes	src/restriction.rs	Any:Any NSSubset
+structures	cos-particle-extend	Schema Component Constraint	Particle Valid (Extension)	partial	src/restriction.rs	a definition used by Derivation Valid (Extension), which is itself unimplemented
+structures	cos-seq-range	Schema Component Constraint	Effective Total Range (all and sequence)	yes	src/restriction.rs	the effective total range, as the helper Particle Emptiable and the occurrence rules need
+structures	cos-st-derived-ok	Schema Component Constraint	Type Derivation OK (Simple)	partial	src/derivation.rs	the final clause
+structures	cos-st-restricts	Schema Component Constraint	Derivation Valid (Restriction, Simple)	partial	src/facets.rs	the facet clauses; the variety and base clauses only where the loader can see them
+structures	cos-valid-default	Schema Component Constraint	Element Default Valid (Immediate)	yes	src/declarations.rs	an element's default or fixed against its own type
+structures	cos-valid-simple-default	Schema Component Constraint	Simple Default Valid	yes	src/declarations.rs	an attribute's default or fixed against its own type
+structures	ct-props-correct	Schema Component Constraint	Complex Type Definition Properties Correct	partial	src/compile.rs	clause 3, no circular definitions, via check_cycles; the simple-base-implies-extension clause is not checked
+structures	derivation-ok-restriction	Schema Component Constraint	Derivation Valid (Restriction, Complex)	partial	src/restriction.rs	Occurrence Range OK, Elt:Elt, Elt:Any, Any:Any, RecurseAsIfGroup, Recurse and RecurseLax; MapAndSum and NSRecurseCheckCardinality are unjudged and accepted
+structures	e-props-correct	Schema Component Constraint	Element Declaration Properties Correct	partial	src/declarations.rs	the value-constraint clauses; the substitution-group type clause is not checked
+structures	mg-props-correct	Schema Component Constraint	Model Group Correct	yes	src/compile.rs	clause 2, no circular groups, via check_cycles
+structures	mgd-props-correct	Schema Component Constraint	Model Group Definition Properties Correct	by-construction	src/load.rs	property-tableau conformance only, and check_representation rejects a definition that is not exactly one model group
+structures	n-props-correct	Schema Component Constraint	Notation Declaration Correct	by-construction	src/model.rs	property-tableau conformance only
+structures	no-xmlns	Schema Component Constraint	xmlns Not Allowed	no	-	an attribute declaration named xmlns is accepted
+structures	no-xsi	Schema Component Constraint	xsi: Not Allowed	no	-	an attribute declaration in the xsi namespace is accepted
+structures	p-props-correct	Schema Component Constraint	Particle Correct	yes	src/load.rs	minOccurs <= maxOccurs
+structures	sch-props-correct	Schema Component Constraint	Schema Properties Correct	yes	src/load.rs	clause 2, two components sharing a name in one symbol space
+structures	st-props-correct	Schema Component Constraint	Simple Type Definition Properties Correct	partial	src/compile.rs	the circularity clause via check_cycles
+structures	st-restrict-facets	Schema Component Constraint	Simple Type Restriction (Facets)	yes	src/facets.rs	applicable facets, bounds in the base value space, pairs that cannot hold, and narrowing
+structures	ta-props-correct	Schema Component Constraint	Type Alternative Properties Correct	no	-	conditional type assignment is stored and never evaluated; needs XPath Valid
+structures	w-props-correct	Schema Component Constraint	Wildcard Properties Correct	partial	src/load.rs	namespace beside notNamespace is rejected; the disallowed-names clause is not checked
+structures	xpath-valid	Schema Component Constraint	XPath Valid	no	-	full XPath 2.0, for assertions and CTA; the identity-constraint subset is a different rule
+structures	sic-a-outcome	Schema Information Set Contribution	Assessment Outcome (Attribute)	yes	src/instance.rs	as above for attributes
+structures	sic-attr-decl	Schema Information Set Contribution	Attribute Declaration	yes	src/instance.rs	the governing attribute declaration
+structures	sic-attr-error-code	Schema Information Set Contribution	Validation Failure (Attribute)	partial	src/diagnostics.rs	as above
+structures	sic-attrDefault	Schema Information Set Contribution	Attribute Default Value	yes	src/instance.rs	a schema-supplied attribute default, flagged from_schema
+structures	sic-attrType	Schema Information Set Contribution	Attribute Validated by Type	yes	src/instance.rs	the type that governed the attribute
+structures	sic-e-outcome	Schema Information Set Contribution	Assessment Outcome (Element)	yes	src/instance.rs	the ValidationReport says whether each element was assessed and with what result
+structures	sic-elt-decl	Schema Information Set Contribution	Element Declaration	yes	src/instance.rs	the governing element declaration is handed to the consumer
+structures	sic-elt-error-code	Schema Information Set Contribution	Validation Failure (Element)	partial	src/diagnostics.rs	a DiagCode per failure, not yet the Appendix B constraint name
+structures	sic-eltDefault	Schema Information Set Contribution	Element Default Value	yes	src/instance.rs	a schema-supplied element default, flagged from_schema
+structures	sic-eltType	Schema Information Set Contribution	Element Validated by Type	yes	src/instance.rs	the type that governed the element, xsi:type included
+structures	sic-id	Schema Information Set Contribution	ID/IDREF Table	yes	src/instance.rs	the ID/IDREF table, kept for the validation root
+structures	sic-inheritedAttrs	Schema Information Set Contribution	Inherited Attributes	no	-	inheritable attributes are a 1.1 feature CTA needs; not implemented
+structures	sic-key	Schema Information Set Contribution	Identity-constraint Table	yes	src/identity.rs	the identity-constraint table, as the tuples a target settles on
+structures	sic-match-info	Schema Information Set Contribution	Match Information	partial	src/content.rs	the matcher knows whether a declaration or a wildcard matched; it is not surfaced per item
+structures	sic-notation-used	Schema Information Set Contribution	Validated with Notation	no	-	a NOTATION value is validated but the notation declaration is not contributed
+structures	sic-schema	Schema Information Set Contribution	Schema Information	yes	src/model.rs	Schemas is the schema information, and outlives any one validation
+structures	src-attribute	Schema Representation Constraint	Attribute Declaration Representation OK	partial	src/load.rs	default beside fixed, and ref beside a redescription
+structures	src-attribute_group	Schema Representation Constraint	Attribute Group Definition Representation OK	no	-	nothing checks the representation clauses of an attribute group definition
+structures	src-cip	Schema Representation Constraint	Conditional Inclusion Constraints	yes	src/load.rs	the vc: conditional-inclusion attributes, applied at every descend point
+structures	src-ct	Schema Representation Constraint	Complex Type Definition Representation OK	partial	src/load.rs	mixed contradicting itself across xs:complexType and xs:complexContent
+structures	src-element	Schema Representation Constraint	Element Declaration Representation OK	partial	src/load.rs	default beside fixed, ref beside a redescription, and a local targetNamespace
+structures	src-expredef	Schema Representation Constraint	Individual Component Redefinition	partial	src/load.rs	a redefined component must derive from the one it replaces, where the loader can see it
+structures	src-identity-constraint	Schema Representation Constraint	Identity-constraint Definition Representation OK	partial	src/load.rs	the ref form against the named form; the selector and field clauses live in src/identity.rs
+structures	src-import	Schema Representation Constraint	Import Constraints and Semantics	no	src/load.rs	imports are followed, but a document that does not define the namespace named is not reported: XSD1103 is declared and never emitted
+structures	src-include	Schema Representation Constraint	Inclusion Constraints and Semantics	no	src/load.rs	chameleon coercion works, but a conflicting target namespace is not reported: XSD1102 is declared and never emitted
+structures	src-override	Schema Representation Constraint	Override Constraints and Semantics	partial	src/load.rs	the override machinery; not every clause is enforced
+structures	src-redefine	Schema Representation Constraint	Redefinition Constraints and Semantics	partial	src/load.rs	the redefinition machinery; not every clause is enforced
+structures	src-resolve	Schema Representation Constraint	QName resolution (Schema Document)	yes	src/load.rs	a prefixed QName attribute resolved against the document's in-scope bindings
+structures	src-simple-type	Schema Representation Constraint	Simple Type Definition Representation OK	yes	src/load.rs	more than one of restriction/list/union on one simple type
+structures	src-ta	Schema Representation Constraint	Type Alternative Representation OK	no	-	type alternatives are read and never checked
+structures	src-wildcard	Schema Representation Constraint	Wildcard Representation OK	yes	src/load.rs	namespace beside notNamespace, which names no set
+structures	cvc-accept	Validation Rule	Element Sequence Accepted (Particle)	yes	src/content.rs	whether the sequence reaches an accepting state
+structures	cvc-assertion	Validation Rule	Assertion Satisfied	no	-	assertions are stored and never evaluated
+structures	cvc-assess-attr	Validation Rule	Schema-Validity Assessment (Attribute)	yes	src/instance.rs	assessment of an attribute
+structures	cvc-assess-elt	Validation Rule	Schema-Validity Assessment (Element)	yes	src/instance.rs	strict, lax and skip assessment of an element
+structures	cvc-attribute	Validation Rule	Attribute Locally Valid	yes	src/instance.rs	an attribute's value against its type
+structures	cvc-au	Validation Rule	Attribute Locally Valid (Use)	yes	src/instance.rs	required, prohibited and fixed attribute uses
+structures	cvc-complex-content	Validation Rule	Element Sequence Locally Valid (Complex Content)	yes	src/content.rs	the automaton, xs:all counters and open content
+structures	cvc-complex-type	Validation Rule	Element Locally Valid (Complex Type)	yes	src/instance.rs	attributes, content and character data against a complex type
+structures	cvc-elt	Validation Rule	Element Locally Valid (Element)	yes	src/instance.rs	abstract, xsi:type, xsi:nil and the declaration's own value constraint
+structures	cvc-id	Validation Rule	Validation Root Valid (ID/IDREF)	yes	src/instance.rs	xs:ID uniqueness and xs:IDREF resolution over the validation root
+structures	cvc-identity-constraint	Validation Rule	Identity-constraint Satisfied	yes	src/identity.rs	xs:key, xs:keyref and xs:unique, matched against the open-element stack
+structures	cvc-model-group	Validation Rule	Element Sequence Valid	yes	src/content.rs	sequence, choice and all
+structures	cvc-particle	Validation Rule	Element Sequence Locally Valid (Particle)	yes	src/content.rs	one step of the automaton
+structures	cvc-resolve-instance	Validation Rule	QName resolution (Instance)	yes	src/instance.rs	QName and NOTATION values against the instance's namespace stack
+structures	cvc-simple-type	Validation Rule	String Valid	yes	src/validate.rs	a value against a declared simple type, facets composed up the chain
+structures	cvc-type	Validation Rule	Element Locally Valid (Type)	yes	src/instance.rs	abstract types, and the simple-type path into String Valid
+structures	cvc-wildcard	Validation Rule	Item Valid (Wildcard)	yes	src/instance.rs	processContents strict, lax and skip
+structures	cvc-wildcard-name	Validation Rule	Wildcard allows Expanded Name	yes	src/content.rs	wildcard_admits, including notQName
+structures	cvc-wildcard-namespace	Validation Rule	Wildcard allows Namespace Name	yes	src/content.rs	NamespaceConstraint::admits_uri, for names the schema never interned
+structures	cvc-xpath	Validation Rule	XPath Evaluation	no	-	no XPath engine; needed by assertions and CTA

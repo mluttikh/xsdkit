@@ -128,6 +128,19 @@ nothing inside one was checked and those tests passed vacuously on the valid
 side while failing to catch anything on the invalid side. `processContents`
 is now honoured, which is where the jump in this row comes from.
 
+## Which rules, rather than how many cases
+
+A percentage over a test suite is not the same as coverage of the
+specification, and the suite cannot be made to give the second:
+its schema half offers about 220 negative cases per version to share among 66
+Schema Component Constraints. [Which rules of the specification are
+enforced](spec-rules.md) answers that question directly — all 143 named rules,
+generated from Appendix B of each Recommendation, with what `xsdkit` does about
+each one.
+
+For the XSD 1.1 features specifically, the suite ships its own taxonomy and
+`cargo run --example w3c_features` scores against it.
+
 ## Running it yourself
 
 The suite is 231 MB and is not vendored. Point `XSDTESTS` at a clone and it

@@ -143,6 +143,7 @@ nav:
       - Rust API: reference/rust.md
   - Project:
       - Conformance: project/conformance.md
+      - Spec rules: project/spec-rules.md
       - Performance: project/performance.md
       - Security: project/security.md
       - Design: project/design.md
