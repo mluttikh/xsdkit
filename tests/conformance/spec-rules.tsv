@@ -30,7 +30,7 @@
 # same thing as coverage of the code: 88.9% of regions says nothing about a
 # rule nobody wrote. The counts below are what it says instead.
 #
-# 143 rules: 94 yes, 28 partial, 17 no, 4 by-construction
+# 143 rules: 89 yes, 31 partial, 19 no, 4 by-construction
 #
 datatypes	con-date-day	Constraint	Day-of-month Representations	yes	src/atomic.rs	as above for xs:date	-
 datatypes	con-date-dayValue	Constraint	Day-of-month Values	yes	src/atomic.rs	as above for xs:date	-
@@ -124,22 +124,22 @@ structures	st-restrict-facets	Schema Component Constraint	Simple Type Restrictio
 structures	ta-props-correct	Schema Component Constraint	Type Alternative Properties Correct	no	-	conditional type assignment is stored and never evaluated; needs XPath Valid	-
 structures	w-props-correct	Schema Component Constraint	Wildcard Properties Correct	partial	src/load.rs	namespace beside notNamespace is rejected; the disallowed-names clause is not checked	-
 structures	xpath-valid	Schema Component Constraint	XPath Valid	no	-	full XPath 2.0, for assertions and CTA; the identity-constraint subset is a different rule	-
-structures	sic-a-outcome	Schema Information Set Contribution	Assessment Outcome (Attribute)	yes	src/instance.rs	as above for attributes	-
-structures	sic-attr-decl	Schema Information Set Contribution	Attribute Declaration	yes	src/instance.rs	the governing attribute declaration	-
+structures	sic-a-outcome	Schema Information Set Contribution	Assessment Outcome (Attribute)	partial	src/instance.rs	as above for attributes	-
+structures	sic-attr-decl	Schema Information Set Contribution	Attribute Declaration	yes	src/instance.rs	the governing attribute declaration	fixtures
 structures	sic-attr-error-code	Schema Information Set Contribution	Validation Failure (Attribute)	partial	src/diagnostics.rs	as above	-
-structures	sic-attrDefault	Schema Information Set Contribution	Attribute Default Value	yes	src/instance.rs	a schema-supplied attribute default, flagged from_schema	-
-structures	sic-attrType	Schema Information Set Contribution	Attribute Validated by Type	yes	src/instance.rs	the type that governed the attribute	-
-structures	sic-e-outcome	Schema Information Set Contribution	Assessment Outcome (Element)	yes	src/instance.rs	the ValidationReport says whether each element was assessed and with what result	-
-structures	sic-elt-decl	Schema Information Set Contribution	Element Declaration	yes	src/instance.rs	the governing element declaration is handed to the consumer	-
+structures	sic-attrDefault	Schema Information Set Contribution	Attribute Default Value	yes	src/instance.rs	a schema-supplied attribute default, flagged from_schema	fixtures
+structures	sic-attrType	Schema Information Set Contribution	Attribute Validated by Type	partial	src/instance.rs	reachable through the attribute declaration; AttributePsvi carries no type id of its own, so an attribute a wildcard admitted with no declaration has none	-
+structures	sic-e-outcome	Schema Information Set Contribution	Assessment Outcome (Element)	partial	src/instance.rs	the stream says whether an element was assessed — no declaration means it was not — but there is no per-element validity property; a consumer correlates the diagnostics by line	-
+structures	sic-elt-decl	Schema Information Set Contribution	Element Declaration	yes	src/instance.rs	the governing element declaration is handed to the consumer	fixtures
 structures	sic-elt-error-code	Schema Information Set Contribution	Validation Failure (Element)	partial	src/diagnostics.rs	a DiagCode per failure, not yet the Appendix B constraint name	-
-structures	sic-eltDefault	Schema Information Set Contribution	Element Default Value	yes	src/instance.rs	a schema-supplied element default, flagged from_schema	-
-structures	sic-eltType	Schema Information Set Contribution	Element Validated by Type	yes	src/instance.rs	the type that governed the element, xsi:type included	-
-structures	sic-id	Schema Information Set Contribution	ID/IDREF Table	yes	src/instance.rs	the ID/IDREF table, kept for the validation root	-
+structures	sic-eltDefault	Schema Information Set Contribution	Element Default Value	yes	src/instance.rs	a schema-supplied element default, flagged from_schema	fixtures
+structures	sic-eltType	Schema Information Set Contribution	Element Validated by Type	yes	src/instance.rs	the type that governed the element, xsi:type included	fixtures
+structures	sic-id	Schema Information Set Contribution	ID/IDREF Table	no	src/instance.rs	the ID/IDREF table is enforced and not contributed	-
 structures	sic-inheritedAttrs	Schema Information Set Contribution	Inherited Attributes	no	-	inheritable attributes are a 1.1 feature CTA needs; not implemented	-
-structures	sic-key	Schema Information Set Contribution	Identity-constraint Table	yes	src/identity.rs	the identity-constraint table, as the tuples a target settles on	-
+structures	sic-key	Schema Information Set Contribution	Identity-constraint Table	no	src/identity.rs	the constraints are enforced, but the identity-constraint table is pub(crate) in a private module and never reaches a consumer	-
 structures	sic-match-info	Schema Information Set Contribution	Match Information	partial	src/content.rs	the matcher knows whether a declaration or a wildcard matched; it is not surfaced per item	-
 structures	sic-notation-used	Schema Information Set Contribution	Validated with Notation	no	-	a NOTATION value is validated but the notation declaration is not contributed	-
-structures	sic-schema	Schema Information Set Contribution	Schema Information	yes	src/model.rs	Schemas is the schema information, and outlives any one validation	-
+structures	sic-schema	Schema Information Set Contribution	Schema Information	yes	src/model.rs	Schemas is the schema information, and outlives any one validation	fixtures
 structures	src-attribute	Schema Representation Constraint	Attribute Declaration Representation OK	partial	src/load.rs	default beside fixed, and ref beside a redescription	-
 structures	src-attribute_group	Schema Representation Constraint	Attribute Group Definition Representation OK	no	-	nothing checks the representation clauses of an attribute group definition	-
 structures	src-cip	Schema Representation Constraint	Conditional Inclusion Constraints	yes	src/load.rs	the vc: conditional-inclusion attributes, applied at every descend point	-

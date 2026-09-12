@@ -14,12 +14,20 @@
 //! contradiction.
 
 use fxhash::FxHashMap;
-use xsdkit::{Conformance, DiagCode, Diagnostics, Resolver, SchemaSetBuilder, Version};
+use xsdkit::QName;
+use xsdkit::instance::PsviEvent;
+use xsdkit::{Conformance, DiagCode, Diagnostics, Resolver, SchemaSetBuilder, Schemas, Version};
 
 /// The rules with fixtures below, as `spec#anchor`.
 pub const COVERED: &[&str] = &[
     "structures#cos-all-limited",
     "structures#cos-nonambig",
+    "structures#sic-attr-decl",
+    "structures#sic-attrDefault",
+    "structures#sic-elt-decl",
+    "structures#sic-eltDefault",
+    "structures#sic-eltType",
+    "structures#sic-schema",
     "structures#src-import",
     "structures#src-include",
 ];
@@ -84,6 +92,21 @@ fn expect_code(d: &Diagnostics, code: DiagCode) {
         "expected {}, got {found:?}:\n{d}",
         code.as_str()
     );
+}
+
+/// Compiles a schema that must build cleanly, for the fixtures that go on to
+/// validate a document against it.
+fn schema(body: &str) -> Schemas {
+    let xsd = format!(
+        r#"<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema"
+                      targetNamespace="urn:t" xmlns:t="urn:t"
+                      elementFormDefault="qualified">{body}</xs:schema>"#
+    );
+    SchemaSetBuilder::new()
+        .text(xsd, "mem://main.xsd")
+        .compile()
+        .into_result()
+        .unwrap_or_else(|d| panic!("expected a clean build, got:\n{d}"))
 }
 
 #[track_caller]
@@ -645,4 +668,290 @@ fn cos_nonambig_resolves_an_element_against_a_wildcard_only_in_1_1() {
         DiagCode::AmbiguousContentModel,
     );
     expect_clean(&build(Version::Xsd11, body));
+}
+
+// ---------------------------------------------------------------------------
+// Schema Information Set Contributions
+// ---------------------------------------------------------------------------
+//
+// The sixteen contributions are *outputs*, not constraints: the question is
+// not whether a schema is rejected but whether the fact reaches a consumer of
+// the PSVI. The W3C suite cannot ask that at all — it reads one boolean per
+// document — so every one of these rows rested on reading `src/instance.rs`
+// until these fixtures existed. Five of the sixteen turned out to be claiming
+// more than the API delivers, and their rows now say so.
+//
+// Only the contributions that *are* exposed get fixtures; the table's `no`
+// rows are absences, and the gate refuses a fixture for one.
+
+/// *Element Declaration*: the governing declaration reaches the consumer, and
+/// is absent exactly when assessment found none.
+#[test]
+fn sic_elt_decl_hands_over_the_governing_declaration() {
+    let s = schema(
+        r###"<xs:element name="doc">
+               <xs:complexType>
+                 <xs:sequence>
+                   <xs:element name="known" type="xs:string"/>
+                   <xs:any namespace="##other" processContents="skip"/>
+                 </xs:sequence>
+               </xs:complexType>
+             </xs:element>"###,
+    );
+    let mut seen = Vec::new();
+    let r = s.document_validator().validate_with(
+        r#"<t:doc xmlns:t="urn:t" xmlns:o="urn:other">
+             <t:known>x</t:known><o:anything/>
+           </t:doc>"#,
+        |ev| {
+            if let PsviEvent::StartElement {
+                name, declaration, ..
+            } = ev
+            {
+                let shown = if name == QName::UNKNOWN {
+                    "<not in the schema>".to_string()
+                } else {
+                    s.display_name(name)
+                };
+                seen.push((shown, declaration.is_some()));
+            }
+        },
+    );
+    assert!(r.is_valid(), "{}", r.diagnostics);
+    // The root and `known` are assessed; the element under a `skip` wildcard
+    // is not, and says so by having no declaration rather than by being
+    // absent from the stream.
+    //
+    // Its *name* is `UNKNOWN` rather than `{urn:other}anything`: a name the
+    // schema never interned cannot be spelled as a `QName` after compilation.
+    // Writing this fixture is what found the event reporting the parent's name
+    // there instead — `{urn:t}doc`, confidently wrong.
+    assert_eq!(
+        seen,
+        vec![
+            ("{urn:t}doc".to_string(), true),
+            ("{urn:t}known".to_string(), true),
+            ("<not in the schema>".to_string(), false),
+        ]
+    );
+}
+
+/// And the pair balances: a `StartElement` that reports `UNKNOWN` is closed by
+/// an `EndElement` that reports `UNKNOWN`, because a consumer folds the stream
+/// into a tree by matching them.
+#[test]
+fn sic_elt_decl_closes_what_it_opened() {
+    let s = schema(
+        r###"<xs:element name="doc">
+               <xs:complexType>
+                 <xs:sequence>
+                   <xs:any namespace="##other" processContents="skip"/>
+                 </xs:sequence>
+               </xs:complexType>
+             </xs:element>"###,
+    );
+    let mut opened = Vec::new();
+    let mut closed = Vec::new();
+    let r = s.document_validator().validate_with(
+        r#"<t:doc xmlns:t="urn:t" xmlns:o="urn:other"><o:a><o:b/></o:a></t:doc>"#,
+        // `PsviEvent` is `#[non_exhaustive]` on purpose, so a consumer's match
+        // needs the catch-all even when it lists every variant there is today.
+        |ev| match ev {
+            PsviEvent::StartElement { name, .. } => opened.push(name),
+            PsviEvent::EndElement { name, .. } => closed.push(name),
+            _ => {}
+        },
+    );
+    assert!(r.is_valid(), "{}", r.diagnostics);
+    // `o:b` is inside the skipped subtree and never announced, so the stream
+    // is the root and `o:a` only — and it balances.
+    assert_eq!(opened.len(), 2);
+    closed.reverse();
+    assert_eq!(opened, closed);
+}
+
+/// *Attribute Declaration*: the same for attributes, including one a wildcard
+/// admitted and `strict` assessment then found a declaration for.
+#[test]
+fn sic_attr_decl_hands_over_the_governing_declaration() {
+    let s = schema(
+        r#"<xs:attribute name="global" type="xs:integer"/>
+           <xs:element name="doc">
+             <xs:complexType>
+               <xs:attribute name="own" type="xs:string"/>
+               <xs:anyAttribute namespace="urn:t" processContents="strict"/>
+             </xs:complexType>
+           </xs:element>"#,
+    );
+    let mut seen = Vec::new();
+    let r = s.document_validator().validate_with(
+        r#"<t:doc xmlns:t="urn:t" own="a" t:global="7"/>"#,
+        |ev| {
+            if let PsviEvent::StartElement { attributes, .. } = ev {
+                for a in attributes {
+                    seen.push((s.display_name(a.name), a.declaration.is_some()));
+                }
+            }
+        },
+    );
+    assert!(r.is_valid(), "{}", r.diagnostics);
+    seen.sort();
+    assert_eq!(
+        seen,
+        vec![
+            ("own".to_string(), true),
+            ("{urn:t}global".to_string(), true),
+        ]
+    );
+}
+
+/// *Element Validated by Type*: the type actually in force, which `xsi:type`
+/// can replace. The flag beside it is the part a consumer cannot reconstruct —
+/// the same type id could have come from either place.
+#[test]
+fn sic_elt_type_reports_the_type_in_force_and_where_it_came_from() {
+    let s = schema(
+        r#"<xs:complexType name="Base">
+             <xs:sequence><xs:element name="a" type="xs:string"/></xs:sequence>
+           </xs:complexType>
+           <xs:complexType name="Derived">
+             <xs:complexContent>
+               <xs:extension base="t:Base">
+                 <xs:sequence><xs:element name="b" type="xs:string"/></xs:sequence>
+               </xs:extension>
+             </xs:complexContent>
+           </xs:complexType>
+           <xs:element name="doc" type="t:Base"/>"#,
+    );
+    let mut seen = Vec::new();
+    let r = s.document_validator().validate_with(
+        r#"<t:doc xmlns:t="urn:t" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+                 xsi:type="t:Derived"><t:a>x</t:a><t:b>y</t:b></t:doc>"#,
+        |ev| {
+            if let PsviEvent::StartElement {
+                name,
+                type_id,
+                type_from_instance,
+                ..
+            } = ev
+            {
+                if s.display_name(name) == "{urn:t}doc" {
+                    let ty = s[type_id].name().map(|n| s.display_name(n));
+                    seen.push((ty, type_from_instance));
+                }
+            }
+        },
+    );
+    assert!(r.is_valid(), "{}", r.diagnostics);
+    assert_eq!(seen, vec![(Some("{urn:t}Derived".to_string()), true)]);
+}
+
+/// *Element Default Value*: an empty element whose declaration carries a
+/// `default` arrives with the content the schema supplied, flagged as coming
+/// from the schema rather than from the document.
+///
+/// Without the flag a consumer cannot tell a supplied value from a written
+/// one, which is the whole point of the `fixed` idiom.
+#[test]
+fn sic_elt_default_flags_content_the_schema_supplied() {
+    let s = schema(r#"<xs:element name="unit" type="xs:string" default="m"/>"#);
+    let mut seen = Vec::new();
+    let r = s
+        .document_validator()
+        .validate_with(r#"<t:unit xmlns:t="urn:t"/>"#, |ev| {
+            if let PsviEvent::Text {
+                lexical,
+                from_schema,
+                ..
+            } = ev
+            {
+                seen.push((lexical, from_schema));
+            }
+        });
+    assert!(r.is_valid(), "{}", r.diagnostics);
+    assert_eq!(seen, vec![("m".to_string(), true)]);
+
+    // And the near-miss: the same declaration with the value written out is
+    // not from the schema.
+    let mut seen = Vec::new();
+    s.document_validator()
+        .validate_with(r#"<t:unit xmlns:t="urn:t">ft</t:unit>"#, |ev| {
+            if let PsviEvent::Text {
+                lexical,
+                from_schema,
+                ..
+            } = ev
+            {
+                seen.push((lexical, from_schema));
+            }
+        });
+    assert_eq!(seen, vec![("ft".to_string(), false)]);
+}
+
+/// *Attribute Default Value*: the same for an attribute the document leaves
+/// out, which is where it matters most — the attribute is not in the document
+/// at all, so a consumer reading the XML would never see it.
+#[test]
+fn sic_attr_default_supplies_an_absent_attribute() {
+    let s = schema(
+        r#"<xs:element name="doc">
+             <xs:complexType>
+               <xs:attribute name="unit" type="xs:string" fixed="m"/>
+               <xs:attribute name="n" type="xs:integer"/>
+             </xs:complexType>
+           </xs:element>"#,
+    );
+    let mut seen = Vec::new();
+    let r = s
+        .document_validator()
+        .validate_with(r#"<t:doc xmlns:t="urn:t" n="3"/>"#, |ev| {
+            if let PsviEvent::StartElement { attributes, .. } = ev {
+                for a in attributes {
+                    seen.push((s.display_name(a.name), a.lexical.clone(), a.from_schema));
+                }
+            }
+        });
+    assert!(r.is_valid(), "{}", r.diagnostics);
+    seen.sort();
+    assert_eq!(
+        seen,
+        vec![
+            ("n".to_string(), "3".to_string(), false),
+            ("unit".to_string(), "m".to_string(), true),
+        ]
+    );
+}
+
+/// *Schema Information*: the components themselves are part of the
+/// contribution, and here they are the thing the ids in every event above are
+/// indices into. A PSVI of bare ids with no schema to resolve them against
+/// would satisfy none of the rules above.
+#[test]
+fn sic_schema_resolves_the_ids_the_psvi_hands_out() {
+    let s = schema(r#"<xs:element name="doc" type="xs:integer"/>"#);
+    let mut resolved = Vec::new();
+    let r = s
+        .document_validator()
+        .validate_with(r#"<t:doc xmlns:t="urn:t">42</t:doc>"#, |ev| {
+            if let PsviEvent::StartElement {
+                declaration: Some(id),
+                type_id,
+                ..
+            } = ev
+            {
+                // Both ids index back into the schema that produced them.
+                resolved.push((
+                    s.display_name(s[id].name),
+                    s[type_id].name().map(|n| s.display_name(n)),
+                ));
+            }
+        });
+    assert!(r.is_valid(), "{}", r.diagnostics);
+    assert_eq!(
+        resolved,
+        vec![(
+            "{urn:t}doc".to_string(),
+            Some("{http://www.w3.org/2001/XMLSchema}integer".to_string())
+        )]
+    );
 }
