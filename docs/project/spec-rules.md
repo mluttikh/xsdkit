@@ -12,8 +12,8 @@ for what `xsdkit` does about each entry.
 | enforced | rules |
 |---|---|
 | yes | 93 |
-| in part | 28 |
-| no | 18 |
+| in part | 29 |
+| no | 17 |
 | nothing to enforce | 4 |
 
 **This is not code coverage, and the difference is the point.** Region
@@ -36,7 +36,7 @@ name a site and every diagnostic code to be attributable to a row here.
 
 A ✓ in the last column means this crate has its **own** fixtures for the
 rule — the smallest schema that violates it, and a near-miss that must still
-load — in `tests/spec_rules/fixtures.rs`. 2 of 143 rules so far. The W3C
+load — in `tests/spec_rules/fixtures.rs`. 3 of 143 rules so far. The W3C
 suite cannot supply those: it offers about 220 negative schema cases per
 version to share among 66 Schema Component Constraints, so a rule can be
 enforced by a check nobody has ever seen fire.
@@ -49,7 +49,7 @@ enforced by a check nobody has ever seen fire.
 
 | Rule | Enforced | Where, and what is missing | Fixtures |
 |---|---|---|---|
-| [All Group Limited](https://www.w3.org/TR/xmlschema11-1/#cos-all-limited) | **no** | nothing constrains where an xs:all group may appear |  |
+| [All Group Limited](https://www.w3.org/TR/xmlschema11-1/#cos-all-limited) | yes | `src/groups.rs` — both forms: 1.0 confines an all group and caps its members at one occurrence, 1.1 lifts the cap and allows nesting but requires a referenced group to be an all group | ✓ |
 | [Annotation Correct](https://www.w3.org/TR/xmlschema11-1/#an-props-correct) | by construction | `src/model.rs` — property-tableau conformance only; an annotation component cannot be built inconsistent |  |
 | [Assertion Properties Correct](https://www.w3.org/TR/xmlschema11-1/#as-props-correct) | **no** | assertions are stored and never evaluated; needs XPath Valid |  |
 | [Attribute Declaration Properties Correct](https://www.w3.org/TR/xmlschema11-1/#a-props-correct) | partial | `src/declarations.rs` — the value-constraint clause, plus the 1.0 ID rule; the property tableau is satisfied by construction |  |
@@ -84,7 +84,7 @@ enforced by a check nobody has ever seen fire.
 | [Type Alternative Properties Correct](https://www.w3.org/TR/xmlschema11-1/#ta-props-correct) | **no** | conditional type assignment is stored and never evaluated; needs XPath Valid |  |
 | [Type Derivation OK (Complex)](https://www.w3.org/TR/xmlschema11-1/#cos-ct-derived-ok) | partial | `src/derivation.rs` — the final clause; used by xsi:type in src/instance.rs |  |
 | [Type Derivation OK (Simple)](https://www.w3.org/TR/xmlschema11-1/#cos-st-derived-ok) | partial | `src/derivation.rs` — the final clause |  |
-| [Unique Particle Attribution](https://www.w3.org/TR/xmlschema11-1/#cos-nonambig) | yes | `src/content.rs` — UPA is automaton determinism; the check is the overlap test on out-transitions |  |
+| [Unique Particle Attribution](https://www.w3.org/TR/xmlschema11-1/#cos-nonambig) | partial | `src/content.rs` — automaton determinism, so every sequence and choice model; an xs:all gets per-member counters rather than an automaton and is not checked (saxonData/All all240-all243) |  |
 | [Wildcard Properties Correct](https://www.w3.org/TR/xmlschema11-1/#w-props-correct) | partial | `src/load.rs` — namespace beside notNamespace is rejected; the disallowed-names clause is not checked |  |
 | [Wildcard Subset](https://www.w3.org/TR/xmlschema11-1/#cos-ns-subset) | yes | `src/restriction.rs` — Any:Any NSSubset |  |
 | [xmlns Not Allowed](https://www.w3.org/TR/xmlschema11-1/#no-xmlns) | **no** | an attribute declaration named xmlns is accepted |  |

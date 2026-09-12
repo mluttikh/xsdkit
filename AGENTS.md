@@ -438,7 +438,7 @@ over both would be an average of two different languages:
 | | XSD 1.0 | XSD 1.1 |
 |---|---|---|
 | valid schemas accepted | **99.8%** (4,563/4,573) | **99.8%** (5,238/5,248) |
-| invalid schemas rejected | **77.4%** (171/221) | **67.8%** (318/469) |
+| invalid schemas rejected | **77.4%** (171/221) | **68.7%** (322/469) |
 
 The single figure this replaced was 66.5%, and the difference is not a change
 in the code: it was an average over a mix of 1.0 and 1.1 runs, which is a

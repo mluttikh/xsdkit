@@ -113,6 +113,7 @@ pub(crate) mod derivation;
 pub mod diagnostics;
 pub mod encoding;
 pub(crate) mod facets;
+pub(crate) mod groups;
 mod identity;
 pub mod instance;
 // Configuration, not a phase: `Version`, `Conformance`, `Resolver` and

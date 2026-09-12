@@ -118,7 +118,7 @@ Schema Test Suite on every change.
 | | XSD 1.0 | XSD 1.1 |
 |---|---|---|
 | valid schemas accepted | **99.8%** | **99.8%** |
-| invalid schemas rejected | **77.4%** | **67.8%** |
+| invalid schemas rejected | **77.4%** | **68.7%** |
 | documents judged correctly | **99.8%** | **99.0%** |
 
 The gap in the second row is the honest description of what this is.

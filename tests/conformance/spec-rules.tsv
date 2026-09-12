@@ -30,7 +30,7 @@
 # same thing as coverage of the code: 88.9% of regions says nothing about a
 # rule nobody wrote. The counts below are what it says instead.
 #
-# 143 rules: 93 yes, 28 partial, 18 no, 4 by-construction
+# 143 rules: 93 yes, 29 partial, 17 no, 4 by-construction
 #
 datatypes	con-date-day	Constraint	Day-of-month Representations	yes	src/atomic.rs	as above for xs:date	-
 datatypes	con-date-dayValue	Constraint	Day-of-month Values	yes	src/atomic.rs	as above for xs:date	-
@@ -91,7 +91,7 @@ structures	au-props-correct	Schema Component Constraint	Attribute Use Correct	pa
 structures	c-fields-xpaths	Schema Component Constraint	Fields Value OK	yes	src/identity.rs	as above, with the attribute step a field may end on	-
 structures	c-props-correct	Schema Component Constraint	Identity-constraint Definition Properties Correct	partial	src/load.rs	clause 1 by construction; clause 2, a keyref's field count matching its key's, is not checked	-
 structures	c-selector-xpath	Schema Component Constraint	Selector Value OK	yes	src/identity.rs	the Appendix I subset, parsed and rejected when malformed	-
-structures	cos-all-limited	Schema Component Constraint	All Group Limited	no	-	nothing constrains where an xs:all group may appear	-
+structures	cos-all-limited	Schema Component Constraint	All Group Limited	yes	src/groups.rs	both forms: 1.0 confines an all group and caps its members at one occurrence, 1.1 lifts the cap and allows nesting but requires a referenced group to be an all group	fixtures
 structures	cos-aw-intersect	Schema Component Constraint	Attribute Wildcard Intersection	yes	src/model.rs	attribute wildcard intersection	-
 structures	cos-aw-union	Schema Component Constraint	Attribute Wildcard Union	yes	src/model.rs	attribute wildcard union	-
 structures	cos-choice-range	Schema Component Constraint	Effective Total Range (choice)	yes	src/restriction.rs	as above, for choice	-
@@ -101,7 +101,7 @@ structures	cos-ct-extends	Schema Component Constraint	Derivation Valid (Extensio
 structures	cos-element-consistent	Schema Component Constraint	Element Declarations Consistent	partial	src/instance.rs	the 1.1 dynamic form, reported when a document walks into the clash; the 1.0 static form is not checked	-
 structures	cos-equiv-derived-ok-rec	Schema Component Constraint	Substitution Group OK (Transitive)	partial	src/compile.rs	the closure honours abstract heads; the type-derivation and disallowed-substitutions clauses are not checked	-
 structures	cos-group-emptiable	Schema Component Constraint	Particle Emptiable	yes	src/restriction.rs	a definition rather than a constraint, used by the derivation rules	-
-structures	cos-nonambig	Schema Component Constraint	Unique Particle Attribution	yes	src/content.rs	UPA is automaton determinism; the check is the overlap test on out-transitions	-
+structures	cos-nonambig	Schema Component Constraint	Unique Particle Attribution	partial	src/content.rs	automaton determinism, so every sequence and choice model; an xs:all gets per-member counters rather than an automaton and is not checked (saxonData/All all240-all243)	-
 structures	cos-ns-subset	Schema Component Constraint	Wildcard Subset	yes	src/restriction.rs	Any:Any NSSubset	-
 structures	cos-particle-extend	Schema Component Constraint	Particle Valid (Extension)	partial	src/restriction.rs	a definition used by Derivation Valid (Extension), which is itself unimplemented	-
 structures	cos-seq-range	Schema Component Constraint	Effective Total Range (all and sequence)	yes	src/restriction.rs	the effective total range, as the helper Particle Emptiable and the occurrence rules need	-
