@@ -45,7 +45,7 @@ jobs:
         with:
           command: sdist
           args: --out dist
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: dist-sdist
           path: dist
@@ -109,7 +109,7 @@ jobs:
           cd "$RUNNER_TEMP"
           python -c "import xsdkit; print('testing', xsdkit.__version__, 'from', xsdkit.__file__)"
           python -m pytest "$GITHUB_WORKSPACE/python/tests" -q
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: dist-${{ matrix.label }}
           path: dist
@@ -129,7 +129,7 @@ jobs:
       # there is no API token stored anywhere to leak.
       id-token: write
     steps:
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v8
         with:
           pattern: dist-*
           merge-multiple: true
@@ -145,14 +145,14 @@ jobs:
     permissions:
       contents: write
     steps:
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v8
         with:
           pattern: dist-*
           merge-multiple: true
           path: dist
       # `pyproject.toml` advertises this page as the changelog, so it has to
       # exist and has to carry the artifacts.
-      - uses: softprops/action-gh-release@v2
+      - uses: softprops/action-gh-release@v3
         with:
           files: dist/*
           generate_release_notes: true
