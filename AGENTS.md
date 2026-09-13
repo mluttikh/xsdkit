@@ -1079,11 +1079,18 @@ practice, since each was a real complaint:
   and the classes missing one entirely were `Element`, `Type` and `Attribute`,
   the three a reader meets first. `help()` is the documentation most people
   read; the `.pyi` is what their editor reads, and the two say the same thing
-  on purpose.
+  on purpose. `test_stubs.py` also runs every `>>>` example in a runtime
+  docstring against `docs/examples/report.xsd`, and fails on rustdoc markup:
+  a `///` comment reaches `__doc__` verbatim, so an intra-doc link such as
+  ``[`Self::facets`]`` is noise in `help()`. Write plain backticks and the
+  Python name in `#[pymethods]` doc comments.
 
 - Every wrapper is `(Arc<Schemas>, Id)`. **Never copy components into Python
   objects** — handles must stay free so a schema with thousands of globals
-  costs nothing to walk.
+  costs nothing to walk. A method taking a second handle must check
+  `Arc::ptr_eq` before comparing ids: an id is an index into one set's
+  arenas, and `derives_from` once reported derivations between unrelated
+  schema sets whose indices happened to line up.
 - `#[pyclass(frozen)]` everywhere: the model is immutable, and `frozen` gives
   `Sync` and skips runtime borrow checks.
 - **Release the GIL** with `py.detach()` around every `build()`. That is why
@@ -1091,17 +1098,36 @@ practice, since each was a real complaint:
 - Adding a `DiagCode` variant needs no binding change (codes are rendered as
   strings), but adding a **pyclass member** does: `python/xsdkit/_xsdkit.pyi`
   must gain it, and `test_stubs.py` fails if it does not.
-- `SchemaError.diagnostics` has a class-level default so
-  `except SchemaError as e: e.diagnostics` is always safe. The stub test found
-  that; keep it.
+- `SchemaError.diagnostics` and `XsdError.diagnostics` have a class-level
+  default so `except SchemaError as e: e.diagnostics` is always safe. The stub
+  test found that; keep it. Keep it an empty **tuple**: the default is one
+  object shared by every error that sets none, and while it was a list a single
+  `e.diagnostics.append(...)` reached every later error.
 - **Release the GIL only where no Python is called.** `validate()` detaches;
   `read_typed()` cannot, because every event becomes a Python object and
   `on_event` is Python code.
+- **Nothing in the bindings may recurse once per level of a document.** A
+  valid document is allowed to be deep, and a native stack overflow kills the
+  interpreter with no exception to catch. `decode` converts with an explicit
+  stack and takes the `Decoded` tree apart by hand (`dismantle`), because the
+  tree's own drop glue recurses as well. `test_a_deeply_nested_document_decodes`
+  holds it at 50,000 levels, in a subprocess so a regression fails one test
+  rather than the run.
+- **A resolver's exception is kept, not just its message.** The `Resolver`
+  trait reports failure as a string, so `PyResolver` records what the callable
+  raised: the first `Exception` becomes the `SchemaError`'s `__cause__`, and
+  anything that is not an `Exception` — `KeyboardInterrupt`, `SystemExit` —
+  stops Python being called again and is re-raised when the build returns.
 - **Values convert to native types, not strings.** That is most of what the
   binding is for. `xs:duration` and the gregorian fragments stay lexical
   because no lossless Python type exists — months and seconds are not
   commensurable — but everything else maps: `Decimal`, tz-aware `datetime`,
-  `date`, `time`, `timedelta`, `bytes`, `list`.
+  `date`, `time`, `timedelta`, `bytes`, `list`. A date or duration beyond what
+  `datetime` and `timedelta` can hold — XSD allows years past 9999, before 1,
+  and in 1.1 a year zero — stays lexical too, rather than raising a bare
+  `ValueError` out of `decode` for a document `validate` accepted.
+- **A document given as a path is named by its path** in diagnostics, unless
+  `uri=` says otherwise; `<instance>` is only for text and bytes.
 - A pyclass holding `Py<PyAny>` cannot derive `Clone`; write it by hand with
   `Python::attach` and `clone_ref`.
 

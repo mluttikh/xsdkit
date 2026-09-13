@@ -724,3 +724,75 @@ def test_a_schema_set_is_a_mapping_in_full():
     d = dict(s)
     assert len(d) == len(s)
     assert d[f"{{{NS}}}a"] == s[f"{{{NS}}}a"]
+
+
+def test_derives_from_stays_inside_one_schema_set():
+    """A handle is an index into one set's arenas.
+
+    Two unrelated schemas whose indices happen to line up used to report a
+    derivation that does not exist.
+    """
+    a = build(
+        '<xs:complexType name="B"><xs:sequence/></xs:complexType>'
+        '<xs:complexType name="D"><xs:complexContent>'
+        '<xs:extension base="tns:B"/></xs:complexContent></xs:complexType>'
+    )
+    c = build(
+        '<xs:complexType name="X"><xs:sequence/></xs:complexType>'
+        '<xs:complexType name="Y"><xs:sequence/></xs:complexType>'
+    )
+    assert a.type(NS, "D").derives_from(a.type(NS, "B"))
+    assert not a.type(NS, "D").derives_from(c.type(NS, "X"))
+
+
+def test_the_default_diagnostics_cannot_be_polluted():
+    """The class-level default is shared by every error that sets none.
+
+    It was a list, so one `append` reached every later `XsdError`.
+    """
+    for cls in (xsdkit.XsdError, xsdkit.SchemaError):
+        err = cls("raised by hand")
+        assert list(err.diagnostics) == []
+        with pytest.raises(AttributeError):
+            err.diagnostics.append("polluted")
+        assert list(cls("the next one").diagnostics) == []
+
+
+TWO_INCLUDES = (
+    f'<xs:schema xmlns:xs="{XS}" targetNamespace="{NS}">'
+    '<xs:include schemaLocation="one.xsd"/>'
+    '<xs:include schemaLocation="two.xsd"/>'
+    "</xs:schema>"
+)
+
+
+@pytest.mark.parametrize("interrupt", [KeyboardInterrupt, SystemExit])
+def test_interrupting_a_resolver_stops_the_build(interrupt):
+    """Ctrl-C in a slow resolver became a diagnostic, and the build went on."""
+    asked = []
+
+    def resolve(location, base):
+        asked.append(location)
+        raise interrupt
+
+    with pytest.raises(interrupt):
+        xsdkit.SchemaSet.from_string(TWO_INCLUDES, resolver=resolve)
+    assert asked == ["one.xsd"], "nothing more is asked once the build is interrupted"
+
+    # The functions that hand diagnostics back instead of raising do not
+    # swallow it either.
+    with pytest.raises(interrupt):
+        xsdkit.load_string(TWO_INCLUDES, resolver=resolve)
+
+
+def test_a_resolvers_exception_is_the_schema_errors_cause():
+    """Flattened into a message, it lost its type and its traceback."""
+
+    def missing(location, base):
+        raise FileNotFoundError(f"{location} is not in the archive")
+
+    with pytest.raises(xsdkit.SchemaError) as excinfo:
+        xsdkit.SchemaSet.from_string(TWO_INCLUDES, resolver=missing)
+    cause = excinfo.value.__cause__
+    assert isinstance(cause, FileNotFoundError)
+    assert "one.xsd" in str(cause), "the first exception raised is the cause"

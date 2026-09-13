@@ -129,17 +129,28 @@ jobs:
         run: python3 scripts/render-spec-rules.py --check
 
   python:
-    name: Python (${{ matrix.os }})
+    name: Python (${{ matrix.label }})
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
+      # One abi3 wheel serves every Python from the oldest supported one up, so
+      # the two ends are where it can break: the newest on every platform, and
+      # the oldest once. Only 3.12 used to run, and a test file that could not
+      # even be imported on 3.9 went unnoticed.
+      #
+      # `label` keeps the three check names that branch protection requires —
+      # "Python (ubuntu-latest)" and the rest — exactly as they were.
       matrix:
-        os: [ubuntu-latest, macos-latest, windows-latest]
+        include:
+          - { os: ubuntu-latest, python: "3.14", label: ubuntu-latest }
+          - { os: macos-latest, python: "3.14", label: macos-latest }
+          - { os: windows-latest, python: "3.14", label: windows-latest }
+          - { os: ubuntu-latest, python: "3.9", label: "3.9, ubuntu-latest" }
     steps:
       - uses: actions/checkout@v5
       - uses: actions/setup-python@v6
         with:
-          python-version: "3.12"
+          python-version: ${{ matrix.python }}
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
       # `pip install .` goes through the maturin backend, which turns on the

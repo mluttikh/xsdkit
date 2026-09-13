@@ -275,3 +275,98 @@ def test_a_list_of_decimals_keeps_each_scale():
     )
     d = s.decode(f'<p xmlns="{NS}">1.0 2.50 3</p>')
     assert [str(x) for x in d] == ["1.0", "2.50", "3"]
+
+
+def test_a_nil_element_keeps_its_attributes():
+    """`xsi:nil` says there is no value, not that there is nothing.
+
+    A nil price may still carry its currency, and `decode` used to return
+    `None` before it looked at the attributes.
+    """
+    s = build(
+        '<xs:element name="price" nillable="true"><xs:complexType><xs:simpleContent>'
+        '<xs:extension base="xs:decimal">'
+        '<xs:attribute name="currency" type="xs:string"/>'
+        "</xs:extension></xs:simpleContent></xs:complexType></xs:element>"
+    )
+    nil = 'xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:nil="true"'
+    d = s.decode(f'<price xmlns="{NS}" {nil} currency="EUR"/>')
+    assert d == {"@currency": "EUR", "$": None}
+    # With nothing else to say, nil is still just `None`.
+    assert s.decode(f'<price xmlns="{NS}" {nil}/>') is None
+
+
+@pytest.mark.parametrize(
+    "version, xsd_type, lexical",
+    [
+        ("1.0", "date", "10000-01-01"),
+        ("1.0", "date", "-0001-01-01"),
+        ("1.1", "date", "0000-01-01"),
+        ("1.0", "dateTime", "10000-01-01T00:00:00"),
+        ("1.0", "dateTime", "-0400-03-01T12:00:00Z"),
+    ],
+)
+def test_a_date_python_cannot_hold_stays_lexical(version, xsd_type, lexical):
+    """XSD's year is unbounded and 1.1 has a year zero; `datetime` has neither.
+
+    Nine W3C suite documents that `validate` accepts made `decode` and
+    `iter_typed` raise a bare `ValueError`, which `except XsdError` misses.
+    """
+    s = build(f'<xs:element name="d" type="xs:{xsd_type}"/>', version=version)
+    doc = f'<d xmlns="{NS}">{lexical}</d>'
+    assert s.validate(doc).is_valid
+    assert s.decode(doc) == lexical
+    assert [e.value for e in s.iter_typed(doc) if e.kind == "text"] == [lexical]
+
+
+def test_midnight_that_rolls_past_9999_stays_lexical():
+    """`24:00:00` is the next day's midnight, and the next day may be in 10000."""
+    s = build('<xs:element name="d" type="xs:dateTime"/>')
+    assert s.decode(f'<d xmlns="{NS}">9999-12-31T24:00:00</d>') == "10000-01-01T00:00:00"
+
+
+def test_a_deeply_nested_document_decodes():
+    """`decode` recursed once per element, so a valid document about twenty
+    thousand deep overflowed the native stack and killed the interpreter, with
+    nothing to catch. Dropping the decoded tree recursed as well.
+
+    Run in a subprocess, so that a regression fails this test rather than
+    ending the whole run.
+    """
+    import subprocess
+    import sys
+    import textwrap
+
+    depth = 50_000
+    code = textwrap.dedent(
+        '''
+        import sys
+        import xsdkit
+
+        depth = int(sys.argv[1])
+        s = xsdkit.SchemaSet.from_string(
+            '<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema" '
+            'xmlns:tns="urn:example" targetNamespace="urn:example" '
+            'elementFormDefault="qualified">'
+            '<xs:complexType name="N"><xs:sequence>'
+            '<xs:element name="n" type="tns:N" minOccurs="0"/>'
+            '</xs:sequence></xs:complexType>'
+            '<xs:element name="n" type="tns:N"/></xs:schema>'
+        )
+        doc = '<n xmlns="urn:example">' + '<n>' * (depth - 1) + '</n>' * depth
+        d = s.decode(doc)
+        levels = 1
+        while d:
+            d = d["n"]
+            levels += 1
+        print(levels)
+        '''
+    )
+    result = subprocess.run(
+        [sys.executable, "-c", code, str(depth)],
+        capture_output=True,
+        text=True,
+        timeout=300,
+    )
+    assert result.returncode == 0, result.stderr[-2000:]
+    assert result.stdout.strip() == str(depth)

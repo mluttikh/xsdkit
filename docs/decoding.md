@@ -61,7 +61,7 @@ and still prints — and multiplies — the way the document wrote it.
 | element with a simple value, no attributes | the value itself |
 | element with a value *and* attributes | `dict` with the value under `"$"` |
 | attribute | key prefixed with `"@"` |
-| `xsi:nil="true"` | `None` |
+| `xsi:nil="true"` | `None`, or `None` under `"$"` when the element also has attributes |
 | character data in mixed content | `"$"` |
 
 ## A list is a list

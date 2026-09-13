@@ -116,8 +116,11 @@ with zipfile.ZipFile("schemas.zip") as z:
 
 Return `bytes` (best — the encoding is then detected), or `str`, or a
 `(uri, document)` pair to record where it was actually found so diagnostics
-name the right file. Raise to say it could not be resolved; your exception
-message becomes the diagnostic.
+name the right file. Raise to say it could not be resolved: your exception
+message becomes the diagnostic, and the first exception raised becomes the
+`SchemaError`'s `__cause__`, type and traceback intact. `KeyboardInterrupt` and
+`SystemExit` are not reports of a missing document, so they stop the build and
+propagate as themselves — Ctrl-C works in a slow resolver.
 
 !!! warning "A resolver replaces the filesystem"
 

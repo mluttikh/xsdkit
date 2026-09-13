@@ -3,13 +3,16 @@
     >>> import xsdkit
     >>> schemas = xsdkit.SchemaSet.from_file("report.xsd")
     >>> report = schemas.element("urn:example", "report")
-    >>> for child in report.type.children:
-    ...     print(child.local_name, report.type.repeats(child))
+    >>> for child in report.children:
+    ...     print(child.local_name, child.repeats)
+    title False
+    issued False
+    item True
 
 Validating a document, with values arriving as native Python types::
 
-    >>> events, outcome = schemas.read_typed(open("report.xml").read())
-    >>> outcome.is_valid
+    >>> events = schemas.iter_typed(open("report.xml").read())
+    >>> events.report.is_valid
     True
 """
 

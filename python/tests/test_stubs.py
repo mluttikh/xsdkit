@@ -1,7 +1,14 @@
 """The stubs are only useful if they describe what actually exists."""
 
+# Annotations below use `X | None`, which Python 3.9 — the oldest the wheel
+# supports — cannot evaluate. Without this the file failed to import there,
+# and pytest stopped at collection having run nothing.
+from __future__ import annotations
+
 import ast
+import doctest
 import pathlib
+import re
 
 import xsdkit
 
@@ -263,3 +270,53 @@ def test_a_child_answers_everything_an_element_does():
     assert not element - child, f"Element has, Child lacks: {sorted(element - child)}"
     # And what it adds is only the occurrence, which is the point of it.
     assert child - element == {"element", "optional", "repeats"}
+
+
+_RUSTDOC_LINK = re.compile(r"\[`(?:Self::|Py[A-Z])")
+
+
+def _runtime_docstrings():
+    """Every docstring `help()` shows, with where it comes from."""
+    yield "xsdkit", xsdkit.__doc__ or ""
+    for name, cls in _runtime_classes().items():
+        yield name, cls.__doc__ or ""
+        for member, obj in vars(cls).items():
+            doc = getattr(obj, "__doc__", None)
+            if doc and not _is_dunder(member):
+                yield f"{name}.{member}", doc
+    for fn in ("load", "load_string"):
+        yield fn, getattr(xsdkit, fn).__doc__ or ""
+
+
+def test_docstrings_carry_no_rustdoc_markup():
+    """The `///` comments become `__doc__` verbatim.
+
+    An intra-doc link like ``[`Self::read_typed`]`` means something to rustdoc
+    and is noise in `help()`, and seven of them had reached it.
+    """
+    leaked = sorted(where for where, doc in _runtime_docstrings() if _RUSTDOC_LINK.search(doc))
+    assert not leaked, f"rustdoc links in runtime docstrings: {leaked}"
+
+
+def test_docstring_examples_run(monkeypatch):
+    """`help()` is the documentation most people read, so its examples must work.
+
+    Two did not: the package docstring called a `repeats()` method that does
+    not exist, and `Element`'s called `schemas.element_id`. The code is run and
+    the expected output is left to the reader, against the same `report.xsd`
+    every example on the website uses.
+    """
+    examples = pathlib.Path(__file__).resolve().parents[2] / "docs" / "examples"
+    monkeypatch.chdir(examples)
+    schemas = xsdkit.SchemaSet.from_file("report.xsd")
+    parser = doctest.DocTestParser()
+    failures = []
+    for where, doc in _runtime_docstrings():
+        namespace = {"xsdkit": xsdkit, "schemas": schemas}
+        for example in parser.get_examples(doc):
+            try:
+                exec(compile(example.source, f"<{where}>", "exec"), namespace)
+            except Exception as e:  # noqa: BLE001 - every failure is the report
+                failures.append(f"{where}: {example.source.strip()!r} raised {e!r}")
+                break
+    assert not failures, "\n".join(failures)
