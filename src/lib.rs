@@ -141,7 +141,9 @@ pub use content::{
 pub use decode::{Decoded, DecodedAttribute, DecodedContent, Decoding};
 pub use diagnostics::{DiagCode, Diagnostic, Diagnostics, Severity, Span};
 pub use instance::{DocumentValidator, ValidationReport};
-pub use load::{Conformance, DEFAULT_NODES_LIMIT, FileResolver, Resolver, Version};
+pub use load::{
+    Conformance, DEFAULT_MAX_DEPTH, DEFAULT_NODES_LIMIT, FileResolver, Resolver, Version,
+};
 pub use model::{
     Annotation, AppInfo, AttrGroupId, AttributeDecl, AttributeId, AttributeUse, AttributeUseKind,
     ComplexType, ComponentCounts, Compositor, ContentType, DerivationMethod, DerivationSet,
@@ -175,6 +177,7 @@ pub struct SchemaSetBuilder {
     mode: Conformance,
     version: Version,
     nodes_limit: u32,
+    max_depth: u32,
     sources: Vec<Source>,
 }
 
@@ -205,6 +208,7 @@ impl SchemaSetBuilder {
             mode: Conformance::Strict,
             version: Version::default(),
             nodes_limit: DEFAULT_NODES_LIMIT,
+            max_depth: DEFAULT_MAX_DEPTH,
             sources: Vec::new(),
         }
     }
@@ -241,6 +245,18 @@ impl SchemaSetBuilder {
     /// from an untrusted source.
     pub fn nodes_limit(mut self, limit: u32) -> Self {
         self.nodes_limit = limit;
+        self
+    }
+
+    /// Caps how deeply elements may nest in a single schema document.
+    ///
+    /// Defaults to [`DEFAULT_MAX_DEPTH`]. A document nested deeper is refused
+    /// with a diagnostic rather than parsed, because parsing recurses once
+    /// per level and a deep enough document would overflow the stack and
+    /// abort the process. Raise it only for a trusted schema that needs it,
+    /// and mind the stack of the thread that compiles.
+    pub fn max_depth(mut self, limit: u32) -> Self {
+        self.max_depth = limit;
         self
     }
 
@@ -310,6 +326,7 @@ impl SchemaSetBuilder {
         };
         let mut loader = Loader::new(resolver, self.mode);
         loader.set_nodes_limit(self.nodes_limit);
+        loader.set_max_depth(self.max_depth);
         loader.set_version(self.version);
         for s in &self.sources {
             match s {

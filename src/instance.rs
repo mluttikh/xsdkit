@@ -37,6 +37,16 @@ use quick_xml::NsReader;
 use quick_xml::events::Event;
 use quick_xml::name::ResolveResult;
 
+/// How deeply elements may nest in an instance document.
+///
+/// Validation keeps a stack of its own, so this is not about recursion. It is
+/// about what reads the document: `quick-xml`'s namespace resolver counts
+/// nesting in a `u16`, and past 65,535 levels it resolves prefixes against the
+/// wrong scopes, so a valid document nested that deep was reported invalid.
+/// The cap sits well below that, and low enough that a decoded tree's drop
+/// glue, which does recurse, stays within a small stack.
+pub const MAX_INSTANCE_DEPTH: usize = 10_000;
+
 /// One element or attribute after validation: what the schema says it is.
 #[derive(Clone, Debug)]
 #[non_exhaustive]
@@ -79,7 +89,10 @@ pub enum PsviEvent {
 
 #[derive(Clone, Debug)]
 pub struct AttributePsvi {
-    pub name: QName,
+    /// The attribute's expanded name. [`PsviName::Foreign`] for one a wildcard
+    /// admitted under a name the schema never declared, which — as for an
+    /// element — cannot be a `QName`.
+    pub name: PsviName,
     pub declaration: Option<AttributeId>,
     pub value: Option<Value>,
     pub lexical: String,
@@ -391,7 +404,7 @@ impl<'a, S: FnMut(PsviEvent)> Run<'a, '_, S> {
                     continue;
                 };
                 for a in attributes {
-                    if want.is_none_or(|w| w == a.name) {
+                    if want.is_none_or(|w| a.name.qname() == Some(w)) {
                         if let Some(v) = &a.value {
                             self.targets[t].fields[f] = Some(v.clone());
                         }
@@ -626,6 +639,9 @@ impl<'a, S: FnMut(PsviEvent)> Run<'a, '_, S> {
         // rescanning from the start of the document, once per event, made
         // validating an n-byte document cost O(n²).
         let mut counted = 0usize;
+        // Counted here rather than read off `self.stack`, because this is
+        // what the reader's own nesting counter sees.
+        let mut depth = 0usize;
         loop {
             let event = match reader.read_resolved_event() {
                 Ok((ns, event)) => {
@@ -667,6 +683,17 @@ impl<'a, S: FnMut(PsviEvent)> Run<'a, '_, S> {
 
             match event {
                 Event::Start(ref e) | Event::Empty(ref e) => {
+                    if matches!(event, Event::Start(_)) {
+                        depth += 1;
+                        if depth > MAX_INSTANCE_DEPTH {
+                            self.error(
+                                DiagCode::MalformedXml,
+                                line,
+                                format!("elements nest deeper than {MAX_INSTANCE_DEPTH} levels"),
+                            );
+                            return;
+                        }
+                    }
                     let (ns, local) = name.expect("start events always carry a name");
                     let attrs = read_attributes(&mut reader, e);
                     let qname = self.v.schemas.qname(ns.as_deref(), &local);
@@ -676,7 +703,10 @@ impl<'a, S: FnMut(PsviEvent)> Run<'a, '_, S> {
                         self.end(line);
                     }
                 }
-                Event::End(_) => self.end(line),
+                Event::End(_) => {
+                    depth = depth.saturating_sub(1);
+                    self.end(line);
+                }
                 Event::Text(t) => {
                     // References arrive as their own `GeneralRef` events, so
                     // what reaches here is literal text with nothing left to
@@ -1216,6 +1246,20 @@ impl<'a, S: FnMut(PsviEvent)> Run<'a, '_, S> {
                 if let Some(msg) = msg {
                     self.error(DiagCode::AttributeNotAllowed, line, msg);
                 }
+                // Reported either way, as an attribute with an interned name
+                // is. A wildcard exists to admit what the schema does not
+                // declare, and dropping these lost exactly the data the
+                // extension point was for. Untyped: no declaration types it.
+                out.push(AttributePsvi {
+                    name: PsviName::Foreign {
+                        namespace: a.namespace.clone(),
+                        local: a.local.clone(),
+                    },
+                    declaration: None,
+                    value: None,
+                    lexical: a.value.clone(),
+                    from_schema: false,
+                });
                 continue;
             };
 
@@ -1284,7 +1328,7 @@ impl<'a, S: FnMut(PsviEvent)> Run<'a, '_, S> {
                         }
                     }
                     out.push(AttributePsvi {
-                        name: q,
+                        name: PsviName::Known(q),
                         declaration: Some(u.attribute),
                         value,
                         lexical: a.value.clone(),
@@ -1337,7 +1381,7 @@ impl<'a, S: FnMut(PsviEvent)> Run<'a, '_, S> {
                         None => None,
                     };
                     out.push(AttributePsvi {
-                        name: q,
+                        name: PsviName::Known(q),
                         declaration,
                         value,
                         lexical: a.value.clone(),
@@ -1386,7 +1430,7 @@ impl<'a, S: FnMut(PsviEvent)> Run<'a, '_, S> {
             // document it lands in.
             self.record_identifiers(ty, &lexical, self.elements_seen, line);
             out.push(AttributePsvi {
-                name,
+                name: PsviName::Known(name),
                 declaration: Some(u.attribute),
                 value,
                 lexical,

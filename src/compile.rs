@@ -188,7 +188,18 @@ fn resolve_references(l: &mut Loader<'_>, mode: Conformance) {
                         c.base = t;
                     }
                 }
-                None => unresolved.push((SymbolSpace::Type, name, span)),
+                None => {
+                    // The base is unknown, so there is nothing to inherit. The
+                    // type keeps `xs:anyType` as a stand-in, but by
+                    // restriction, so its own content is the whole of it.
+                    // Extending the stand-in would add `xs:anyType`'s wildcard,
+                    // which says nothing about the real base, and report the
+                    // result as ambiguous on top of the missing reference.
+                    if let TypeDefinition::Complex(c) = l.types.get_mut(type_.0) {
+                        c.derivation = DerivationMethod::Restriction;
+                    }
+                    unresolved.push((SymbolSpace::Type, name, span));
+                }
             },
             Fixup::ParticleElementRef {
                 particle,

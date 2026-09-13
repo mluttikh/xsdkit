@@ -73,7 +73,7 @@ fuzz_target!(|data: &str| {
             let _ = declaration.map(|d| s[d].name);
             let _ = s[type_id].name();
             for a in attributes {
-                let _ = s.display_name(a.name);
+                let _ = s.display_psvi_name(&a.name);
                 let _ = a.declaration.map(|d| s[d].name);
                 let _ = a.value.map(|v| v.to_string());
             }

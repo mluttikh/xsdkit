@@ -796,3 +796,41 @@ def test_a_resolvers_exception_is_the_schema_errors_cause():
     cause = excinfo.value.__cause__
     assert isinstance(cause, FileNotFoundError)
     assert "one.xsd" in str(cause), "the first exception raised is the cause"
+
+
+def test_a_schema_nested_too_deeply_is_refused_not_parsed():
+    """Parsing recurses once per level, so a deep enough schema overflowed the
+    native stack and killed the interpreter.
+
+    Run in a subprocess, so that a regression fails this test rather than
+    ending the whole run.
+    """
+    import subprocess
+    import sys
+    import textwrap
+
+    code = textwrap.dedent(
+        '''
+        import xsdkit
+
+        def nested(levels):
+            return (
+                '<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema">'
+                + '<xs:element name="e"><xs:complexType><xs:sequence>' * levels
+                + '</xs:sequence></xs:complexType></xs:element>' * levels
+                + '</xs:schema>'
+            )
+
+        try:
+            xsdkit.SchemaSet.from_string(nested(3000))
+        except xsdkit.SchemaError as e:
+            print(sorted({d.code for d in e.diagnostics}))
+        # The limit is a keyword, for a trusted schema that needs more.
+        print(len(xsdkit.SchemaSet.from_string(nested(100), max_depth=400)))
+        '''
+    )
+    result = subprocess.run(
+        [sys.executable, "-c", code], capture_output=True, text=True, timeout=120
+    )
+    assert result.returncode == 0, result.stderr[-2000:]
+    assert result.stdout.split() == ["['XSD1001']", "1"]

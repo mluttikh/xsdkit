@@ -330,10 +330,11 @@ Schemas arrive from elsewhere as often as documents do.
   own [`Resolver`](https://docs.rs/xsdkit/latest/xsdkit/trait.Resolver.html)
   to opt in.
 - **No external entities.** Not a setting — `roxmltree` performs no I/O, so
-  they cannot be fetched. Internal DTD subsets *are* accepted, because real
-  schemas use them (the W3C's own among them), with entity-reference-loop
-  detection closing the billion-laughs vector.
-- **Bounded work.** A per-document node cap (`nodes_limit`), an
+  they cannot be fetched. Internal DTD subsets *are* accepted in schemas,
+  because real ones use them (the W3C's own among them), with
+  entity-reference-loop detection closing the billion-laughs vector.
+- **Bounded work.** Per-document caps on nodes (`nodes_limit`) and on element
+  nesting (`max_depth`), a nesting cap for instance documents, an
   include-nesting cap, and cycle guards on every graph walk.
 - **Fuzzed.** Four `cargo-fuzz` targets cover the loader, the pattern
   transpiler, value parsing and instance validation, seeded from the W3C

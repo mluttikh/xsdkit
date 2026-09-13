@@ -327,6 +327,22 @@ cannot express this.
 - Network fetching is **opt-in**: `FileResolver` refuses `http(s)://`.
 - Every graph walk needs a bound: `MAX_DEPTH` for includes, `nodes_limit` per
   document, cycle guards in `base_chain` and `check_cycles`.
+- **Anything that recurses per level of XML nesting needs a depth bound in
+  front of it**, because a stack overflow aborts the process. `roxmltree`
+  recurses, and so does the loader. `nesting_depth` measures a schema document
+  before it is parsed — counting start tags its DTD could insert through an
+  entity — against `max_depth` (default 256, sized for a 1 MiB stack in a
+  release build; debug builds spend several times as much per level, so a test
+  that loads anything deep runs on a thread with a large stack). The instance
+  reader caps nesting at `MAX_INSTANCE_DEPTH` (10,000): quick-xml's namespace
+  resolver counts levels in a `u16` and misresolves past 65,535.
+- **`xs:anyType` has a particle**: a sequence holding one lax `##any` wildcard,
+  repeated, in mixed content. The restriction check skips it as a base —
+  everything restricts the ur-type — and an explicit extension of it inherits
+  the wildcard, as XSD 1.0 §3.4.2 says it does. An extension whose base does
+  not resolve is turned into a restriction of the `xs:anyType` stand-in, so it
+  inherits nothing: extending the stand-in reported its wildcard as an
+  ambiguous content model on top of the missing reference.
 
 ## Public API & Compatibility
 

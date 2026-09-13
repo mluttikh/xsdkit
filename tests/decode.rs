@@ -277,3 +277,27 @@ fn an_empty_complex_element_is_not_a_value() {
     assert_eq!(d.value(), None, "empty complex content carries no value");
     assert_eq!(d.attributes.len(), 1);
 }
+
+/// Decoded from the same PSVI, so it had the same gap: an attribute a wildcard
+/// admitted under a name the schema never declared was missing.
+#[test]
+fn a_wildcard_attribute_with_an_undeclared_name_is_decoded() {
+    let s = schema(
+        r###"<xs:element name="r"><xs:complexType>
+               <xs:attribute name="k" type="xs:int"/>
+               <xs:anyAttribute namespace="##other" processContents="skip"/>
+             </xs:complexType></xs:element>"###,
+    );
+    let d = decode(
+        &s,
+        r#"<r xmlns="urn:example" xmlns:o="urn:other" k="1" o:foo="x"/>"#,
+    );
+    assert_eq!(d.attributes.len(), 2);
+    assert!(
+        d.attribute(s.qname(None, "k").unwrap()).is_some(),
+        "a declared name is still found by its QName"
+    );
+    let foo = &d.attributes[1];
+    assert_eq!(s.display_psvi_name(&foo.name), "{urn:other}foo");
+    assert_eq!(foo.lexical, "x");
+}

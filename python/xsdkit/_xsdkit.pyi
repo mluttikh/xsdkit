@@ -537,6 +537,7 @@ class SchemaSet:
         conformance: Conformance = ...,
         version: XsdVersion = ...,
         nodes_limit: int | None = ...,
+        max_depth: int | None = ...,
         resolver: Resolver | None = ...,
     ) -> SchemaSet:
         """Raises `SchemaError` on any error diagnostic.
@@ -544,6 +545,10 @@ class SchemaSet:
         ``version="1.1"`` turns on XSD 1.1: open content, conditional
         inclusion, assertions on wildcards, ``xs:precisionDecimal`` and the
         relaxed Unique Particle Attribution rule.
+
+        ``max_depth`` caps how deeply elements nest in each schema document,
+        256 by default. A deeper document is refused with ``XSD1001`` rather
+        than parsed, because parsing recurses once per level.
         """
     @classmethod
     def from_string(
@@ -555,6 +560,7 @@ class SchemaSet:
         conformance: Conformance = ...,
         version: XsdVersion = ...,
         nodes_limit: int | None = ...,
+        max_depth: int | None = ...,
         resolver: Resolver | None = ...,
     ) -> SchemaSet: ...
     @classmethod
@@ -567,6 +573,7 @@ class SchemaSet:
         conformance: Conformance = ...,
         version: XsdVersion = ...,
         nodes_limit: int | None = ...,
+        max_depth: int | None = ...,
         resolver: Resolver | None = ...,
     ) -> SchemaSet:
         """Detects the encoding: byte-order mark, then the XML declaration,
@@ -673,6 +680,7 @@ def load(
     conformance: Conformance = ...,
     version: XsdVersion = ...,
     nodes_limit: int | None = ...,
+    max_depth: int | None = ...,
     resolver: Resolver | None = ...,
 ) -> tuple[SchemaSet, list[Diagnostic]]:
     """Loads a schema and returns it *with* its diagnostics, rather than
@@ -686,5 +694,6 @@ def load_string(
     conformance: Conformance = ...,
     version: XsdVersion = ...,
     nodes_limit: int | None = ...,
+    max_depth: int | None = ...,
     resolver: Resolver | None = ...,
 ) -> tuple[SchemaSet, list[Diagnostic]]: ...

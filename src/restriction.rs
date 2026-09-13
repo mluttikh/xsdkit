@@ -22,9 +22,16 @@ use crate::names::QName;
 
 pub(crate) fn check_all(schemas: &Schemas) -> Diagnostics {
     let mut diags = Diagnostics::new();
+    // `xs:anyType` accepts any content, so everything is a valid restriction of
+    // it — and every complex type that names no base is one. Comparing each of
+    // them against its wildcard is work with only one possible answer.
+    let any_type = schemas.builtin(crate::datatypes::Builtin::AnyType);
     for (id, def) in schemas.iter_types() {
         let Some(c) = def.as_complex() else { continue };
-        if c.derivation != DerivationMethod::Restriction || c.base == id || c.base.is_placeholder()
+        if c.derivation != DerivationMethod::Restriction
+            || c.base == id
+            || c.base == any_type
+            || c.base.is_placeholder()
         {
             continue;
         }

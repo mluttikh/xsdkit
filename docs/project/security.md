@@ -26,9 +26,11 @@ and own the decision — including the timeout, the allowlist and the cache.
 This is not a setting to get wrong. `roxmltree` performs no I/O, so an external
 entity cannot be fetched no matter what the document asks for.
 
-Internal DTD subsets **are** accepted, because real schemas use them — the
-W3C's own schema for schemas among them — with entity-reference-loop detection
-closing the billion-laughs vector.
+Internal DTD subsets **are** accepted in schema documents, because real schemas
+use them — the W3C's own schema for schemas among them — with
+entity-reference-loop detection closing the billion-laughs vector. Instance
+documents get no DTD processing at all: referencing an entity one declares is
+`XSD1001`, rather than a value quietly missing its text.
 
 ## Bounded work
 
@@ -36,13 +38,30 @@ Every unbounded thing has a bound.
 
 | Bound | Default | What it stops |
 |---|---|---|
-| `nodes_limit` | 10,000,000 | A single document exhausting memory |
-| Include nesting depth | fixed | An include chain that never ends |
+| `nodes_limit` | 10,000,000 | A single schema document exhausting memory |
+| `max_depth` | 256 | A schema document nested deeply enough to overflow the stack |
+| Instance nesting | 10,000, fixed | A document being validated nested past what the reader counts |
+| Include nesting depth | 64, fixed | An include chain that never ends |
 | Cycle guards | — | Circular includes, derivations, substitutions, structural cycles |
 
 ```python,ignore
-schemas = xsdkit.SchemaSet.from_file("untrusted.xsd", nodes_limit=100_000)
+schemas = xsdkit.SchemaSet.from_file("untrusted.xsd", nodes_limit=100_000, max_depth=64)
 ```
+
+Nesting is bounded because parsing recurses. The XML parser descends one native
+stack frame per level, and a stack overflow is not an error anyone can catch —
+it aborts the process. So a schema document's nesting is measured *before* it
+is parsed, counting any markup its internal DTD subset could insert through an
+entity reference, and a document deeper than `max_depth` is refused with
+`XSD1001`. 256 is libxml2's default for the same reason. It leaves room on a
+1 MiB stack in a release build, where the deepest-recursing construct, nested
+anonymous types, reached about 875 levels; an unoptimised build spends several
+times as much stack per level.
+
+Instance documents are validated with a stack of the validator's own and never
+recurse, but the XML reader counts nesting in 16 bits and resolves namespaces
+against the wrong scopes past 65,535 levels. A document nested deeper than
+10,000 is refused rather than misread.
 
 Cycles in a schema are legal and common — a type may contain an element of its
 own type — so they are detected rather than forbidden. Every graph walk in the
