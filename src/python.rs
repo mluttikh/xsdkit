@@ -29,12 +29,12 @@ use crate::refs::{AttributeRef, ElementRef, TypeRef};
 use crate::values::Value;
 use crate::{Compilation, Conformance, FileResolver, SchemaSetBuilder, Version};
 use fxhash::{FxHashMap, FxHashSet};
-use pyo3::exceptions::PyValueError;
+use pyo3::exceptions::{PyException, PyValueError};
 use pyo3::prelude::*;
 use pyo3::types::{PyBytes, PyDict, PyList, PyTuple, PyType};
 use pyo3::{IntoPyObjectExt, create_exception};
 use std::collections::BTreeMap;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 
 create_exception!(
     xsdkit,
@@ -85,18 +85,54 @@ fn document_error(py: Python<'_>, diags: &Diagnostics) -> PyErr {
 /// `xsdkit` — byte-order mark, then the XML declaration, then UTF-8 — which is
 /// the same treatment `from_bytes` gives, and the reason a resolver should not
 /// decode for itself.
+///
+/// The trait reports a failure as a string, which is right for a diagnostic
+/// and wrong for control flow, so what the callable raised is kept as well.
+/// Ctrl-C in a slow resolver used to become a diagnostic reading
+/// `KeyboardInterrupt:` while the build carried on to the next import.
 struct PyResolver {
     callable: Py<PyAny>,
+    raised: Arc<Mutex<Raised>>,
+}
+
+/// What a Python resolver raised during one build.
+#[derive(Default)]
+struct Raised {
+    /// The first ordinary exception, chained as the `SchemaError`'s
+    /// `__cause__` so that its type and traceback survive.
+    first: Option<PyErr>,
+    /// A `KeyboardInterrupt`, `SystemExit` or anything else that is not an
+    /// `Exception`. Once there is one, Python is not called again and the
+    /// build ends by raising it.
+    abort: Option<PyErr>,
+}
+
+fn lock(raised: &Mutex<Raised>) -> MutexGuard<'_, Raised> {
+    raised.lock().unwrap_or_else(PoisonError::into_inner)
 }
 
 impl crate::load::Resolver for PyResolver {
     fn resolve(&self, location: &str, base: Option<&str>) -> Result<(String, Vec<u8>), String> {
         // Reacquires the GIL: `build()` released it, and this is Python code.
         Python::attach(|py| {
-            let out = self
-                .callable
-                .call1(py, (location, base))
-                .map_err(|e| e.to_string())?;
+            if lock(&self.raised).abort.is_some() {
+                return Err("the build was interrupted".to_string());
+            }
+            let out = match self.callable.call1(py, (location, base)) {
+                Ok(out) => out,
+                Err(e) => {
+                    let message = e.to_string();
+                    let mut raised = lock(&self.raised);
+                    if e.is_instance_of::<PyException>(py) {
+                        if raised.first.is_none() {
+                            raised.first = Some(e);
+                        }
+                    } else {
+                        raised.abort = Some(e);
+                    }
+                    return Err(message);
+                }
+            };
             let out = out.bind(py);
 
             // `(uri, document)` when the resolver followed a redirect and
@@ -120,22 +156,23 @@ impl crate::load::Resolver for PyResolver {
     }
 }
 
-/// An instance document given as `str` or as `bytes`.
+/// An instance document given as `str`, as `bytes` or as a path, and the path
+/// when it was one.
 ///
 /// Bytes are decoded the way a schema's are — byte-order mark, then the XML
 /// declaration, then UTF-8 — so a document read with `open(path, "rb")` needs
 /// no guess about its encoding, which is exactly the guess a caller is most
 /// likely to get wrong.
-fn instance_text(obj: &Bound<'_, PyAny>) -> PyResult<String> {
+fn instance_text(obj: &Bound<'_, PyAny>) -> PyResult<(String, Option<String>)> {
     // `str` first, and always as content: a path is a `str` too, so the two
     // cannot be told apart here. What a bare name *does* produce is a clear
     // diagnostic — "document has no root element", with help saying so.
     if let Ok(s) = obj.extract::<String>() {
-        return Ok(s);
+        return Ok((s, None));
     }
     if let Ok(bytes) = obj.extract::<Vec<u8>>() {
         return crate::encoding::decode_document(&bytes, "<instance>")
-            .map(|d| d.text)
+            .map(|d| (d.text, None))
             .map_err(|d| PyValueError::new_err(d.message));
     }
     // A `pathlib.Path`, on the other hand, is never ambiguous: nobody holds
@@ -145,9 +182,22 @@ fn instance_text(obj: &Bound<'_, PyAny>) -> PyResult<String> {
         .map_err(|_| PyValueError::new_err("a document must be str, bytes, or a path"))?;
     let bytes = std::fs::read(&path)
         .map_err(|e| PyValueError::new_err(format!("cannot read {path}: {e}")))?;
-    crate::encoding::decode_document(&bytes, &path)
-        .map(|d| d.text)
-        .map_err(|d| PyValueError::new_err(d.message))
+    match crate::encoding::decode_document(&bytes, &path) {
+        Ok(d) => Ok((d.text, Some(path))),
+        Err(d) => Err(PyValueError::new_err(d.message)),
+    }
+}
+
+/// What diagnostics about a document call it: the `uri` the caller gave, else
+/// the file it was read from, else a placeholder.
+///
+/// The file, because a report on `orders/report.xml` that points at
+/// `<instance>:1` is least useful in exactly the case where the name is known.
+fn instance_uri(given: Option<&str>, path: Option<String>) -> String {
+    given
+        .map(str::to_string)
+        .or(path)
+        .unwrap_or_else(|| "<instance>".to_string())
 }
 
 /// A resolver's document, as `bytes` or as `str`.
@@ -248,7 +298,7 @@ impl PyPsviEvents {
     }
 }
 
-/// Walks the global names of a [`PySchemaSet`].
+/// Walks the global names of a `SchemaSet`.
 ///
 /// A snapshot rather than a live cursor: the model is immutable, so there is
 /// nothing to invalidate, and holding the names costs one allocation against
@@ -323,14 +373,16 @@ impl PySchemaSet {
     }
 }
 
-/// Assembles a builder from the keyword arguments the constructors share.
+/// Assembles a builder from the keyword arguments the constructors share,
+/// with the record of anything a Python resolver raises while it runs.
 fn builder(
     search_paths: Option<Vec<String>>,
     conformance: &str,
     version: &str,
     nodes_limit: Option<u32>,
     resolver: Option<Py<PyAny>>,
-) -> PyResult<SchemaSetBuilder> {
+) -> PyResult<(SchemaSetBuilder, Arc<Mutex<Raised>>)> {
+    let raised = Arc::new(Mutex::new(Raised::default()));
     let mut b = SchemaSetBuilder::new()
         .conformance(conformance_from(conformance)?)
         .version(version_from(version)?);
@@ -338,7 +390,12 @@ fn builder(
     // alternatives rather than layers — a caller serving documents from a zip
     // has no search path to add them to.
     match (resolver, search_paths) {
-        (Some(callable), _) => b = b.resolver(PyResolver { callable }),
+        (Some(callable), _) => {
+            b = b.resolver(PyResolver {
+                callable,
+                raised: raised.clone(),
+            });
+        }
         (None, Some(paths)) => {
             let mut fr = FileResolver::new();
             fr.search_paths = paths.into_iter().map(Into::into).collect();
@@ -349,16 +406,48 @@ fn builder(
     if let Some(limit) = nodes_limit {
         b = b.nodes_limit(limit);
     }
-    Ok(b)
+    Ok((b, raised))
+}
+
+/// Compiles with the GIL released, then raises whatever a resolver raised
+/// that has to end the build.
+///
+/// Hands back the first ordinary exception a resolver raised, for the caller
+/// to chain onto a `SchemaError`.
+fn compile(
+    py: Python<'_>,
+    b: SchemaSetBuilder,
+    raised: &Mutex<Raised>,
+) -> PyResult<(Compilation, Option<PyErr>)> {
+    // Compilation is the only slow part, and `Schemas` is Send + Sync
+    // precisely so this is legal.
+    let compilation = py.detach(|| b.compile());
+    let raised = std::mem::take(&mut *lock(raised));
+    match raised.abort {
+        Some(abort) => Err(abort),
+        None => Ok((compilation, raised.first)),
+    }
+}
+
+/// The compiled set, or a `SchemaError` carrying every diagnostic — and, when
+/// a resolver raised, that exception as its `__cause__`.
+fn schema_set(py: Python<'_>, compiled: (Compilation, Option<PyErr>)) -> PyResult<PySchemaSet> {
+    let (
+        Compilation {
+            schemas,
+            diagnostics,
+        },
+        cause,
+    ) = compiled;
+    if diagnostics.has_errors() {
+        let err = schema_error(py, diagnostics);
+        err.set_cause(py, cause);
+        return Err(err);
+    }
+    Ok(PySchemaSet::wrap(schemas))
 }
 
 impl PySchemaSet {
-    /// The global types this schema set's documents declare.
-    ///
-    /// The XSD built-ins live in the same table — they have to, so that
-    /// `type="xs:int"` resolves like any other reference — but they are not
-    /// part of what a schema *says*, and every Python-facing enumeration
-    /// leaves them out.
     /// The global names, elements before types, each sorted — the order
     /// `keys`, `values`, `items` and iteration all agree on.
     fn names(&self) -> Vec<String> {
@@ -376,6 +465,12 @@ impl PySchemaSet {
         names
     }
 
+    /// The global types this schema set's documents declare.
+    ///
+    /// The XSD built-ins live in the same table — they have to, so that
+    /// `type="xs:int"` resolves like any other reference — but they are not
+    /// part of what a schema *says*, and every Python-facing enumeration
+    /// leaves them out.
     fn declared_types(&self) -> impl Iterator<Item = (&QName, &TypeId)> {
         // By namespace, not by `as_builtin`: that one answers from
         // `SimpleType::builtin` and so cannot see `xs:anyType`, which is
@@ -404,18 +499,8 @@ impl PySchemaSet {
         nodes_limit: Option<u32>,
         resolver: Option<Py<PyAny>>,
     ) -> PyResult<Self> {
-        let b = builder(search_paths, conformance, version, nodes_limit, resolver)?
-            .file(path_from(path)?);
-        // Compilation is the only slow part, and `Schemas` is Send + Sync
-        // precisely so this is legal.
-        let Compilation {
-            schemas,
-            diagnostics: diags,
-        } = py.detach(|| b.compile());
-        if diags.has_errors() {
-            return Err(schema_error(py, diags));
-        }
-        Ok(Self::wrap(schemas))
+        let (b, raised) = builder(search_paths, conformance, version, nodes_limit, resolver)?;
+        schema_set(py, compile(py, b.file(path_from(path)?), &raised)?)
     }
 
     /// Loads a schema from a string. The text must already be decoded.
@@ -432,15 +517,8 @@ impl PySchemaSet {
         nodes_limit: Option<u32>,
         resolver: Option<Py<PyAny>>,
     ) -> PyResult<Self> {
-        let b = builder(search_paths, conformance, version, nodes_limit, resolver)?.text(xsd, uri);
-        let Compilation {
-            schemas,
-            diagnostics: diags,
-        } = py.detach(|| b.compile());
-        if diags.has_errors() {
-            return Err(schema_error(py, diags));
-        }
-        Ok(Self::wrap(schemas))
+        let (b, raised) = builder(search_paths, conformance, version, nodes_limit, resolver)?;
+        schema_set(py, compile(py, b.text(xsd, uri), &raised)?)
     }
 
     /// Loads a schema from raw bytes, detecting the encoding.
@@ -460,16 +538,8 @@ impl PySchemaSet {
         nodes_limit: Option<u32>,
         resolver: Option<Py<PyAny>>,
     ) -> PyResult<Self> {
-        let b =
-            builder(search_paths, conformance, version, nodes_limit, resolver)?.bytes(data, uri);
-        let Compilation {
-            schemas,
-            diagnostics: diags,
-        } = py.detach(|| b.compile());
-        if diags.has_errors() {
-            return Err(schema_error(py, diags));
-        }
-        Ok(Self::wrap(schemas))
+        let (b, raised) = builder(search_paths, conformance, version, nodes_limit, resolver)?;
+        schema_set(py, compile(py, b.bytes(data, uri), &raised)?)
     }
 
     /// The documents this schema set was built from.
@@ -498,8 +568,8 @@ impl PySchemaSet {
     /// The XSD built-in types are excluded. They are present in every schema
     /// set, so counting them would drown a two-element schema in fifty
     /// entries — `len(s)` is meant to answer "how much is in this schema". They
-    /// are still reachable by name through [`Self::type`], which resolves
-    /// rather than enumerates. [`Self::counts`] is the component tally, and
+    /// are still reachable by name through `type()`, which resolves
+    /// rather than enumerates. `counts` is the component tally, and
     /// counts a great deal more than the globals.
     fn __len__(&self) -> usize {
         let g = self.inner.globals();
@@ -616,7 +686,7 @@ impl PySchemaSet {
     /// Every global type definition *this schema* declares, keyed by
     /// Clark-notation name.
     ///
-    /// The XSD built-ins are excluded, for the same reason [`Self::__len__`]
+    /// The XSD built-ins are excluded, for the same reason `len()`
     /// excludes them: they are in every schema set and would bury the ones the
     /// document actually wrote. `type("{...}string")` still resolves them.
     #[getter]
@@ -705,20 +775,24 @@ impl PySchemaSet {
     ///
     /// Never raises for an invalid document — an invalid document is an
     /// answer, not an error. Inspect `.is_valid` and `.diagnostics`.
-    #[pyo3(signature = (xml, *, uri="<instance>"))]
+    ///
+    /// Diagnostics name `uri`, or the file when the document was given as a
+    /// path.
+    #[pyo3(signature = (xml, *, uri=None))]
     fn validate(
         &self,
         py: Python<'_>,
         xml: &Bound<'_, PyAny>,
-        uri: &str,
+        uri: Option<&str>,
     ) -> PyResult<PyValidationReport> {
-        let xml = instance_text(xml)?;
+        let (xml, path) = instance_text(xml)?;
+        let uri = instance_uri(uri, path);
         let schemas = self.inner.clone();
         // No Python is called back into, so the GIL can go.
         let report = py.detach(|| {
             schemas
                 .document_validator()
-                .validate_named(&xml, uri, |_| {})
+                .validate_named(&xml, &uri, |_| {})
         });
         let valid = report.is_valid();
         Ok(PyValidationReport {
@@ -738,65 +812,71 @@ impl PySchemaSet {
     /// Keys are local names, spelled out in Clark notation only where two
     /// names under one parent would otherwise collide. Attributes are
     /// prefixed with `@`, and where an element has both a value and
-    /// attributes the value sits under `$`. `xsi:nil` decodes to `None`.
+    /// attributes the value sits under `$`. `xsi:nil` decodes to `None`, or
+    /// to `None` under `$` when the element carries attributes too.
     ///
     /// Raises `XsdError` if the document is invalid; pass `lax=True` to take
     /// the data anyway. Unlike `validate`, this one raises, because a caller
     /// asking for data has said what it wants and silently handing back data
     /// from a document that does not fit its schema is the trap this is meant
     /// to remove.
-    #[pyo3(signature = (xml, *, uri="<instance>", lax=false))]
+    #[pyo3(signature = (xml, *, uri=None, lax=false))]
     fn decode(
         &self,
         py: Python<'_>,
         xml: &Bound<'_, PyAny>,
-        uri: &str,
+        uri: Option<&str>,
         lax: bool,
     ) -> PyResult<Py<PyAny>> {
-        let xml = instance_text(xml)?;
+        let (xml, path) = instance_text(xml)?;
+        let uri = instance_uri(uri, path);
         let schemas = self.inner.clone();
         // Nothing calls back into Python while the document is read.
-        let decoding = py.detach(|| schemas.decode_named(&xml, uri));
+        let mut decoding = py.detach(|| schemas.decode_named(&xml, &uri));
+        let valid = decoding.is_valid();
+        let tree = decoding.decoded.take();
 
-        if !lax && !decoding.is_valid() {
-            return Err(document_error(py, &decoding.diagnostics));
-        }
-        match &decoding.decoded {
-            Some(d) => {
-                let mut shapes = Shapes::default();
-                Ok(decoded_to_py(py, &self.inner, d, &mut shapes)?.unbind())
+        let out = if !lax && !valid {
+            Err(document_error(py, &decoding.diagnostics))
+        } else {
+            match &tree {
+                Some(d) => {
+                    decoded_to_py(py, &self.inner, d, &mut Shapes::default()).map(Bound::unbind)
+                }
+                None => Ok(py.None()),
             }
-            None => Ok(py.None()),
-        }
+        };
+        // The tree's own drop glue recurses once per level, and overflows the
+        // stack on a deep enough document whether or not it was converted.
+        py.detach(|| dismantle(tree));
+        out
     }
 
-    /// Reads a document into typed PSVI events.
+    /// Reads a document into typed PSVI events, as an iterator.
     ///
-    /// Returns the events as a list, or feeds them to `on_event` and returns
-    /// `None`. Use the callback for documents large enough that holding every
-    /// event defeats the point of streaming.
-    ///
-    /// Validation still runs; `report` carries the diagnostics either way.
-    /// Reads a document into typed PSVI events, one at a time.
-    ///
-    /// The iterator form of [`Self::read_typed`], and the one to reach for:
+    /// The iterator form of `read_typed`, and the one to reach for:
     /// `for ev in schemas.iter_typed(xml)` composes with everything Python
     /// has for iterables, where a callback composes with nothing. The outcome
     /// is on the iterator's `report`, before or after the loop.
-    #[pyo3(signature = (xml, *, uri="<instance>"))]
+    ///
+    /// Every event is built before the first is returned, so memory grows
+    /// with the document. For one too large to hold that way, pass `on_event`
+    /// to `read_typed` instead.
+    #[pyo3(signature = (xml, *, uri=None))]
     fn iter_typed(
         &self,
         py: Python<'_>,
         xml: &Bound<'_, PyAny>,
-        uri: &str,
+        uri: Option<&str>,
     ) -> PyResult<PyPsviEvents> {
-        let xml = instance_text(xml)?;
+        let (xml, path) = instance_text(xml)?;
+        let uri = instance_uri(uri, path);
         let mut events: Vec<Py<PyPsviEvent>> = Vec::new();
         let mut failed: Option<PyErr> = None;
         let report = self
             .inner
             .document_validator()
-            .validate_named(&xml, uri, |ev| {
+            .validate_named(&xml, &uri, |ev| {
                 if failed.is_some() {
                     return;
                 }
@@ -822,15 +902,16 @@ impl PySchemaSet {
     /// expects. This form exists for feeding a callback that already exists,
     /// and returns the events as a list, or `None` in their place when
     /// `on_event` took them.
-    #[pyo3(signature = (xml, *, on_event=None, uri="<instance>"))]
+    #[pyo3(signature = (xml, *, on_event=None, uri=None))]
     fn read_typed(
         &self,
         py: Python<'_>,
         xml: &Bound<'_, PyAny>,
         on_event: Option<Bound<'_, PyAny>>,
-        uri: &str,
+        uri: Option<&str>,
     ) -> PyResult<(Option<Vec<Py<PyPsviEvent>>>, PyValidationReport)> {
-        let xml = instance_text(xml)?;
+        let (xml, path) = instance_text(xml)?;
+        let uri = instance_uri(uri, path);
         let mut collected: Vec<Py<PyPsviEvent>> = Vec::new();
         let mut callback_error: Option<PyErr> = None;
 
@@ -839,7 +920,7 @@ impl PySchemaSet {
         let report = self
             .inner
             .document_validator()
-            .validate_named(&xml, uri, |ev| {
+            .validate_named(&xml, &uri, |ev| {
                 if callback_error.is_some() {
                     return;
                 }
@@ -1077,8 +1158,8 @@ impl PySchemaSet {
 /// ten thousand refcounts. Two handles to the same declaration compare equal
 /// and hash alike, so they work as dict keys and set members.
 ///
-///     >>> report = schemas.element_id("urn:example", "report")
-///     >>> report.type.children          # what may appear inside
+///     >>> report = schemas.element("urn:example", "report")
+///     >>> report.children               # what may appear inside
 ///     >>> report.substitutes            # what may appear *instead*
 #[pyclass(module = "xsdkit", name = "Element", frozen, from_py_object)]
 #[derive(Clone)]
@@ -1523,10 +1604,6 @@ impl PyElement {
     }
 }
 
-/// Finds the named child, accepting a local name as readily as a full one.
-///
-/// Exact first: a local name that happens to look like a Clark-notation one
-/// should not be second-guessed.
 /// The regex-style marker for how often a child may appear.
 fn occurrence_of(c: &PyChild) -> &'static str {
     match (c.repeats, c.optional) {
@@ -1537,6 +1614,10 @@ fn occurrence_of(c: &PyChild) -> &'static str {
     }
 }
 
+/// Finds the named child, accepting a local name as readily as a full one.
+///
+/// Exact first: a local name that happens to look like a Clark-notation one
+/// should not be second-guessed.
 fn pick_child(
     s: &Schemas,
     children: Vec<PyChild>,
@@ -1968,9 +2049,9 @@ impl PyAttributeUse {
 /// values may be (`validate`, `facets`, `variety`). `is_complex` says which
 /// you have.
 ///
-///     >>> t = schemas.type("urn:example", "Measurement")
-///     >>> t.validate("3.14")            # the typed value, or ValueError
-///     >>> t.facets.max_inclusive        # the constraints in force
+///     >>> t = schemas.type("urn:example", "Sku")
+///     >>> t.validate("AB-1042")         # the typed value, or ValueError
+///     >>> t.facets.patterns             # the constraints in force
 #[pyclass(module = "xsdkit", name = "Type", frozen, from_py_object)]
 #[derive(Clone)]
 pub struct PyType_ {
@@ -2040,8 +2121,12 @@ impl PyType_ {
     }
 
     /// Whether this type is, or derives from, `other`.
+    ///
+    /// Always `False` for a type from another `SchemaSet`. A handle is an
+    /// index into one set's arenas, and the same index in another set is an
+    /// unrelated type; comparing them reported derivations that do not exist.
     fn derives_from(&self, other: &PyType_) -> bool {
-        self.s.derives_from(self.id, other.id)
+        Arc::ptr_eq(&self.s, &other.s) && self.s.derives_from(self.id, other.id)
     }
 
     /// The base chain, from this type up to `xs:anyType`.
@@ -2234,7 +2319,7 @@ impl PyType_ {
     /// The facets *this type* declares, without its base's.
     ///
     /// What the restriction step wrote, which is what a tool rendering a
-    /// schema back wants. [`Self::facets`] is what a validator applies.
+    /// schema back wants. `facets` is what a validator applies.
     #[getter]
     fn declared_facets(&self) -> Option<PyFacets> {
         self.s[self.id]
@@ -2245,7 +2330,7 @@ impl PyType_ {
     /// The facets in force, composed down the whole restriction chain.
     ///
     /// Not the ones this type declares — those are on
-    /// [`Self::declared_facets`]. A restriction inherits everything its base
+    /// `declared_facets`. A restriction inherits everything its base
     /// constrained, so a type that says only `maxLength` still has its base's
     /// `minLength`, and reporting the declared set alone disagrees with what
     /// `validate` does.
@@ -2786,11 +2871,6 @@ fn ambiguous_names(names: impl Iterator<Item = QName>, schemas: &Schemas) -> FxH
         .collect()
 }
 
-/// Projects a decoded element onto Python data.
-///
-/// Lossy on purpose, and in exactly two ways: names lose their namespace
-/// where nothing is ambiguous, and the type in force is not carried over.
-/// `Decoded` on the Rust side keeps both for anyone who needs them.
 /// What the schema says about one type, worked out once per decode instead of
 /// once per element.
 ///
@@ -2851,18 +2931,52 @@ fn shape_of(schemas: &Schemas, ty: TypeId, shapes: &mut Shapes) -> std::rc::Rc<T
 /// Lossy on purpose, and in exactly two ways: names lose their namespace
 /// where nothing is ambiguous, and the type in force is not carried over.
 /// `Decoded` on the Rust side keeps both for anyone who needs them.
+///
+/// A loop over a stack of open elements, not recursion. A recursive walk
+/// spent a few hundred bytes of native stack per level, so a valid document
+/// about twenty thousand elements deep overflowed it and killed the
+/// interpreter, with no exception for anyone to catch.
 fn decoded_to_py<'py>(
     py: Python<'py>,
     schemas: &Schemas,
-    d: &Decoded,
+    root: &Decoded,
     shapes: &mut Shapes,
 ) -> PyResult<Bound<'py, PyAny>> {
-    // `xsi:nil` is the document saying there is no value, which is not the
-    // same as an empty one.
-    if d.nil {
-        return Ok(py.None().into_bound(py));
+    let (value, open) = open_element(py, schemas, root, shapes)?;
+    let mut stack: Vec<Open<'_, 'py>> = open.into_iter().collect();
+    while let Some(parent) = stack.last_mut() {
+        if let Some(child) = parent.children.next() {
+            let (child_value, child_open) = open_element(py, schemas, child, shapes)?;
+            insert_child(py, schemas, parent, child, child_value)?;
+            stack.extend(child_open);
+        } else if let Some(done) = stack.pop() {
+            close_element(py, schemas, &done)?;
+        }
     }
+    Ok(value)
+}
 
+/// An element whose dictionary is already in its parent, waiting for the rest
+/// of its children.
+///
+/// Putting a dictionary into its parent before filling it changes nothing a
+/// caller can see: children are converted one at a time, so no sibling's key
+/// can be inserted in between, and the keys keep document order.
+struct Open<'a, 'py> {
+    decoded: &'a Decoded,
+    dict: Bound<'py, PyDict>,
+    shape: std::rc::Rc<TypeShape>,
+    children: std::slice::Iter<'a, Decoded>,
+}
+
+/// Starts converting one element: its value, and the open element that will
+/// receive its children when it has any.
+fn open_element<'a, 'py>(
+    py: Python<'py>,
+    schemas: &Schemas,
+    d: &'a Decoded,
+    shapes: &mut Shapes,
+) -> PyResult<(Bound<'py, PyAny>, Option<Open<'a, 'py>>)> {
     let shape = shape_of(schemas, d.type_id, shapes);
 
     let mut attrs: Vec<(String, Bound<'py, PyAny>)> = Vec::with_capacity(d.attributes.len());
@@ -2877,15 +2991,13 @@ fn decoded_to_py<'py>(
         ));
     }
 
-    let scalar = |py: Python<'py>| -> PyResult<Bound<'py, PyAny>> {
-        match &d.content {
-            DecodedContent::Simple { value, lexical, .. } => match value {
-                Some(v) => value_to_py(py, v),
-                None => Ok(lexical.clone().into_bound_py_any(py)?),
-            },
-            _ => Ok(py.None().into_bound(py)),
-        }
-    };
+    // `xsi:nil` is the document saying there is no value, which is not the
+    // same as an empty one. A nil element may still carry attributes — a nil
+    // price can have a currency — and those are data like any other, so it
+    // is plain `None` only when there is nothing else to say.
+    if d.nil && attrs.is_empty() {
+        return Ok((py.None().into_bound(py), None));
+    }
 
     // Whether this element *has* a value, not whether this document happened
     // to give it children: an element-only type whose children are all absent
@@ -2895,7 +3007,7 @@ fn decoded_to_py<'py>(
     // A simple value with nothing else to say is the value itself, not a
     // dictionary wrapping one.
     if simple && attrs.is_empty() {
-        return scalar(py);
+        return Ok((scalar(py, d)?, None));
     }
 
     let out = PyDict::new(py);
@@ -2903,80 +3015,132 @@ fn decoded_to_py<'py>(
         out.set_item(k, v)?;
     }
 
+    if d.nil {
+        out.set_item("$", py.None())?;
+        return Ok((out.into_any(), None));
+    }
     if simple {
         // Simple content that also carries attributes: the value needs a key
         // of its own to sit beside them.
-        out.set_item("$", scalar(py)?)?;
-        return Ok(out.into_any());
+        out.set_item("$", scalar(py, d)?)?;
+        return Ok((out.into_any(), None));
     }
 
-    // Keys go in document order: a dictionary is printed, compared by eye
-    // and serialised in the order its keys were inserted, and the document's
-    // order is the one its reader already has in mind.
-    for child in d.children() {
-        // A name the schema did not declare here arrived through a wildcard.
-        // Nothing about it is schema-determined, so it keeps its full name
-        // rather than borrowing a short one that a declared sibling might
-        // want, and its occurrence follows what the document shows.
-        // Only an interned name can be looked up in the shape at all; a
-        // foreign one is by definition not declared here.
-        let qn = child.name.qname();
-        let declared = qn.is_some_and(|q| shape.repeats.contains_key(&q));
-        let key = match qn.filter(|_| declared) {
-            Some(q) => decoded_key(schemas, q, &shape.clark),
-            None => schemas.display_psvi_name(&child.name),
-        };
-        let value = decoded_to_py(py, schemas, child, shapes)?;
-        let repeating = qn
-            .and_then(|q| shape.repeats.get(&q).copied())
-            .unwrap_or(false);
-        match out.get_item(&key)? {
-            Some(existing) if repeating => existing.cast::<PyList>()?.append(value)?,
-            Some(existing) => match existing.cast::<PyList>() {
-                // Already promoted by an earlier repeat: append in place.
-                // Rebuilding it each time would make a wildcard carrying n
-                // children of one name cost n² appends.
-                Ok(list) => list.append(value)?,
-                // Seen twice under a wildcard: promote to a list rather than
-                // dropping the first one.
-                Err(_) => {
-                    let list = PyList::empty(py);
-                    list.append(existing)?;
-                    list.append(value)?;
-                    out.set_item(key, list)?;
-                }
-            },
-            None if repeating => {
+    let open = Open {
+        decoded: d,
+        dict: out.clone(),
+        shape,
+        children: d.children().iter(),
+    };
+    Ok((out.into_any(), Some(open)))
+}
+
+/// The value of simple content: typed where it validated, as written where it
+/// did not.
+fn scalar<'py>(py: Python<'py>, d: &Decoded) -> PyResult<Bound<'py, PyAny>> {
+    match &d.content {
+        DecodedContent::Simple { value: Some(v), .. } => value_to_py(py, v),
+        DecodedContent::Simple { lexical, .. } => lexical.clone().into_bound_py_any(py),
+        _ => Ok(py.None().into_bound(py)),
+    }
+}
+
+/// Puts a child's value into its parent's dictionary, under the key the
+/// schema gives it.
+fn insert_child<'py>(
+    py: Python<'py>,
+    schemas: &Schemas,
+    parent: &Open<'_, 'py>,
+    child: &Decoded,
+    value: Bound<'py, PyAny>,
+) -> PyResult<()> {
+    let (shape, out) = (&parent.shape, &parent.dict);
+    // A name the schema did not declare here arrived through a wildcard.
+    // Nothing about it is schema-determined, so it keeps its full name
+    // rather than borrowing a short one that a declared sibling might
+    // want, and its occurrence follows what the document shows.
+    // Only an interned name can be looked up in the shape at all; a
+    // foreign one is by definition not declared here.
+    let qn = child.name.qname();
+    let declared = qn.is_some_and(|q| shape.repeats.contains_key(&q));
+    let key = match qn.filter(|_| declared) {
+        Some(q) => decoded_key(schemas, q, &shape.clark),
+        None => schemas.display_psvi_name(&child.name),
+    };
+    let repeating = qn
+        .and_then(|q| shape.repeats.get(&q).copied())
+        .unwrap_or(false);
+    match out.get_item(&key)? {
+        Some(existing) if repeating => existing.cast::<PyList>()?.append(value)?,
+        Some(existing) => match existing.cast::<PyList>() {
+            // Already promoted by an earlier repeat: append in place.
+            // Rebuilding it each time would make a wildcard carrying n
+            // children of one name cost n² appends.
+            Ok(list) => list.append(value)?,
+            // Seen twice under a wildcard: promote to a list rather than
+            // dropping the first one.
+            Err(_) => {
                 let list = PyList::empty(py);
+                list.append(existing)?;
                 list.append(value)?;
                 out.set_item(key, list)?;
             }
-            None => out.set_item(key, value)?,
+        },
+        None if repeating => {
+            let list = PyList::empty(py);
+            list.append(value)?;
+            out.set_item(key, list)?;
         }
+        None => out.set_item(key, value)?,
     }
+    Ok(())
+}
 
+/// Finishes an element once all of its children are in.
+fn close_element<'py>(py: Python<'py>, schemas: &Schemas, open: &Open<'_, 'py>) -> PyResult<()> {
     // Which children may repeat comes from the schema rather than from this
     // document, so a list is a list whether it holds two entries, one, or
     // none — code written against the shape never asks `isinstance(x, list)`.
     // The ones the document did not carry are added *after* the ones it did:
     // seeding them first used to put every repeating child ahead of its
     // siblings, which is not an order anyone wrote.
-    for name in &shape.repeating {
-        let key = decoded_key(schemas, *name, &shape.clark);
-        if !out.contains(&key)? {
-            out.set_item(key, PyList::empty(py))?;
+    for name in &open.shape.repeating {
+        let key = decoded_key(schemas, *name, &open.shape.clark);
+        if !open.dict.contains(&key)? {
+            open.dict.set_item(key, PyList::empty(py))?;
         }
     }
 
     // Mixed content: the character data around the children.
-    if let DecodedContent::Elements { text, .. } = &d.content {
+    if let DecodedContent::Elements { text, .. } = &open.decoded.content {
         if !text.trim().is_empty() {
-            out.set_item("$", text.clone())?;
+            open.dict.set_item("$", text.clone())?;
         }
     }
-
-    Ok(out.into_any())
+    Ok(())
 }
+
+/// Drops a decoded tree without recursing.
+///
+/// `Decoded` owns its children, so its drop glue descends one native stack
+/// frame per level: a valid document a few hundred thousand elements deep
+/// overflowed the stack in a release build, and fifty thousand in a debug
+/// one. Moving the children onto a heap stack first keeps every drop shallow.
+fn dismantle(tree: Option<Decoded>) {
+    let mut stack: Vec<Decoded> = tree.into_iter().collect();
+    while let Some(mut d) = stack.pop() {
+        if let DecodedContent::Elements { children, .. } = &mut d.content {
+            stack.append(children);
+        }
+    }
+}
+
+/// The years Python's `datetime` can hold.
+const PYTHON_YEARS: std::ops::RangeInclusive<i64> = 1..=9999;
+
+/// `timedelta` holds 999,999,999 days either way and folds hours into days,
+/// so the last whole day is left out.
+const TIMEDELTA_DAYS: i64 = 999_999_999;
 
 /// Converts an XSD value into the closest native Python type.
 ///
@@ -2988,6 +3152,12 @@ fn decoded_to_py<'py>(
 /// forms — `xs:duration` has no lossless Python counterpart, since months and
 /// seconds are not commensurable. `xs:dayTimeDuration` alone becomes a
 /// `timedelta`, because there it is.
+///
+/// A date or a duration beyond what `datetime` and `timedelta` can hold keeps
+/// its canonical lexical form the same way. XSD's year is unbounded in both
+/// directions and XSD 1.1 has a year zero, and handing one of those to
+/// `datetime.date` raised a bare `ValueError` out of `decode` for a document
+/// `validate` had accepted.
 fn value_to_py<'py>(py: Python<'py>, v: &Value) -> PyResult<Bound<'py, PyAny>> {
     match v {
         Value::String(s) | Value::AnyUri(s) => s.into_bound_py_any(py),
@@ -3004,7 +3174,7 @@ fn value_to_py<'py>(py: Python<'py>, v: &Value) -> PyResult<Bound<'py, PyAny>> {
             .getattr("Decimal")?
             .call1((d.as_written().to_string(),)),
         Value::HexBinary(b) | Value::Base64Binary(b) => PyBytes::new(py, b).into_bound_py_any(py),
-        Value::DateTime(dt) => {
+        Value::DateTime(dt) if PYTHON_YEARS.contains(&dt.year()) => {
             let (sec, micro) = split_seconds(&dt.second().to_string());
             py.import("datetime")?.getattr("datetime")?.call1((
                 dt.year(),
@@ -3017,11 +3187,10 @@ fn value_to_py<'py>(py: Python<'py>, v: &Value) -> PyResult<Bound<'py, PyAny>> {
                 tzinfo(py, dt.timezone_offset().map(|t| t.minutes()))?,
             ))
         }
-        Value::Date(d) => {
-            py.import("datetime")?
-                .getattr("date")?
-                .call1((d.year(), d.month(), d.day()))
-        }
+        Value::Date(d) if PYTHON_YEARS.contains(&d.year()) => py
+            .import("datetime")?
+            .getattr("date")?
+            .call1((d.year(), d.month(), d.day())),
         Value::Time(t) => {
             let (sec, micro) = split_seconds(&t.second().to_string());
             py.import("datetime")?.getattr("time")?.call1((
@@ -3032,7 +3201,7 @@ fn value_to_py<'py>(py: Python<'py>, v: &Value) -> PyResult<Bound<'py, PyAny>> {
                 tzinfo(py, t.timezone_offset().map(|t| t.minutes()))?,
             ))
         }
-        Value::DayTimeDuration(d) => {
+        Value::DayTimeDuration(d) if d.days().abs() < TIMEDELTA_DAYS => {
             // By name, not by position. `timedelta`'s positional order is
             // (days, seconds, microseconds, milliseconds, minutes, hours,
             // weeks) — seventh is *weeks*, and putting days there multiplied
@@ -3060,7 +3229,9 @@ fn value_to_py<'py>(py: Python<'py>, v: &Value) -> PyResult<Bound<'py, PyAny>> {
         // API: `schemas["{urn:example}report"]`. The prefix is deliberately
         // gone — it is a document detail, not part of the value.
         Value::QName(q) => q.to_string().into_bound_py_any(py),
-        // No lossless Python type; the canonical lexical form is exact.
+        // No lossless Python type — durations with months in them, the
+        // gregorian fragments, and dates or durations out of Python's range —
+        // so the canonical lexical form, which is exact.
         other => other.to_string().into_bound_py_any(py),
     }
 }
@@ -3371,6 +3542,19 @@ impl PyPsviEvent {
 // Module-level functions
 // ---------------------------------------------------------------------------
 
+/// A compiled set with its diagnostics, for the functions that hand them back
+/// rather than raise.
+fn loaded(compilation: Compilation) -> (PySchemaSet, Vec<PyDiagnostic>) {
+    let Compilation {
+        schemas,
+        diagnostics,
+    } = compilation;
+    (
+        PySchemaSet::wrap(schemas),
+        diagnostics.into_iter().map(PyDiagnostic).collect(),
+    )
+}
+
 /// Loads a schema and returns it **with** its diagnostics, rather than
 /// raising.
 ///
@@ -3387,16 +3571,9 @@ fn load(
     nodes_limit: Option<u32>,
     resolver: Option<Py<PyAny>>,
 ) -> PyResult<(PySchemaSet, Vec<PyDiagnostic>)> {
-    let b =
-        builder(search_paths, conformance, version, nodes_limit, resolver)?.file(path_from(path)?);
-    let Compilation {
-        schemas,
-        diagnostics: diags,
-    } = py.detach(|| b.compile());
-    Ok((
-        PySchemaSet::wrap(schemas),
-        diags.into_iter().map(PyDiagnostic).collect(),
-    ))
+    let (b, raised) = builder(search_paths, conformance, version, nodes_limit, resolver)?;
+    let (compilation, _) = compile(py, b.file(path_from(path)?), &raised)?;
+    Ok(loaded(compilation))
 }
 
 /// The same, from a string.
@@ -3412,15 +3589,9 @@ fn load_string(
     nodes_limit: Option<u32>,
     resolver: Option<Py<PyAny>>,
 ) -> PyResult<(PySchemaSet, Vec<PyDiagnostic>)> {
-    let b = builder(search_paths, conformance, version, nodes_limit, resolver)?.text(xsd, uri);
-    let Compilation {
-        schemas,
-        diagnostics: diags,
-    } = py.detach(|| b.compile());
-    Ok((
-        PySchemaSet::wrap(schemas),
-        diags.into_iter().map(PyDiagnostic).collect(),
-    ))
+    let (b, raised) = builder(search_paths, conformance, version, nodes_limit, resolver)?;
+    let (compilation, _) = compile(py, b.text(xsd, uri), &raised)?;
+    Ok(loaded(compilation))
 }
 
 #[pymodule]
@@ -3431,12 +3602,17 @@ fn xsdkit_module(m: &Bound<'_, PyModule>) -> PyResult<()> {
     // The same class-level default as `SchemaError` below, so
     // `except XsdError as e: e.diagnostics` is safe whichever of them was
     // raised, and on paths that attach none.
-    xsd_error.setattr("diagnostics", PyList::empty(m.py()))?;
+    //
+    // A tuple, not a list. Every instance that sets no list of its own shares
+    // this one object, and a list let one `e.diagnostics.append(...)` reach
+    // every `XsdError` created after it.
+    xsd_error.setattr("diagnostics", PyTuple::empty(m.py()))?;
     m.add("XsdError", xsd_error)?;
     let schema_error = m.py().get_type::<SchemaError>();
     // A class-level default so `except SchemaError as e: e.diagnostics` is
-    // always safe, even for an error raised on a path that set none.
-    schema_error.setattr("diagnostics", PyList::empty(m.py()))?;
+    // always safe, even for an error raised on a path that set none. A tuple,
+    // for the same reason as above.
+    schema_error.setattr("diagnostics", PyTuple::empty(m.py()))?;
     m.add("SchemaError", schema_error)?;
     m.add_class::<PySchemaSet>()?;
     m.add_class::<PyNameIter>()?;

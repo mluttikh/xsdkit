@@ -314,3 +314,38 @@ def test_daytimeduration_days_are_days(lexical, expected):
     assert xs.type(
         "http://www.w3.org/2001/XMLSchema", "dayTimeDuration"
     ).validate(lexical) == expected
+
+
+def test_diagnostics_name_the_file_a_document_was_read_from(schemas, tmp_path):
+    """A report on `reading.xml` used to point at `<instance>`."""
+    p = tmp_path / "reading.xml"
+    p.write_text(DOC.replace("<count>42</count>", "<count>nope</count>"))
+
+    def where(report):
+        return {span.uri for d in report.errors for span in d.spans}
+
+    assert where(schemas.validate(p)) == {str(p)}
+    assert where(schemas.iter_typed(p).report) == {str(p)}
+    assert where(schemas.read_typed(p)[1]) == {str(p)}
+    with pytest.raises(xsdkit.XsdError) as excinfo:
+        schemas.decode(p)
+    assert {span.uri for d in excinfo.value.diagnostics for span in d.spans} == {str(p)}
+
+    # A `uri` given explicitly still wins, and text keeps the placeholder.
+    assert where(schemas.validate(p, uri="orders/reading.xml")) == {"orders/reading.xml"}
+    assert where(schemas.validate(p.read_text())) == {"<instance>"}
+
+
+@pytest.mark.parametrize(
+    "lexical, expected",
+    [
+        ("P999999998D", datetime.timedelta(days=999_999_998)),
+        ("P999999999D", "P999999999D"),
+        ("-P99999999999D", "-P99999999999D"),
+    ],
+)
+def test_a_duration_timedelta_cannot_hold_stays_lexical(lexical, expected):
+    """`P99999999999D` raised `OverflowError` on its way to `timedelta`."""
+    xs = build('<xs:element name="e" type="xs:string"/>')
+    t = xs.type("http://www.w3.org/2001/XMLSchema", "dayTimeDuration")
+    assert t.validate(lexical) == expected

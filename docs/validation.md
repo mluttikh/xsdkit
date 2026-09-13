@@ -54,8 +54,8 @@ error[XSD2004]: attribute `currency`: enumeration: `CHF` is not one of the 3 per
 Every error, with a line number, not just the first. `report.diagnostics` has
 the warnings and notes too; `report.errors` is the errors alone.
 
-Pass `uri="orders/report.xml"` to have the spans name the file instead of
-`<instance>`.
+A document given as a path is named by that path. One given as text or bytes
+is called `<instance>` unless you pass `uri="orders/report.xml"`.
 
 === "Rust"
 
@@ -137,12 +137,18 @@ said and `datetime.strptime` does not implement `xs:date`.
 | `xs:time` | `datetime.time` |
 | `xs:dayTimeDuration` | `datetime.timedelta` |
 | `xs:duration`, `xs:gYear`, `xs:gMonthDay`, … | `str`, canonical form |
+| a date or duration Python cannot hold | `str`, canonical form |
 | list types | `list` of the item type |
 
 `xs:duration` stays a string on purpose: months and seconds are not
 commensurable, so no `timedelta` can represent `P1M` faithfully. Guessing 30
 days would be a silent, plausible, wrong answer. `xs:dayTimeDuration` has no
 such problem, so it becomes a `timedelta`.
+
+XSD's year is unbounded in both directions, and XSD 1.1 has a year zero;
+`datetime` stops at 1 and 9999. A value outside that range — `10000-01-01`,
+`-0001-01-01`, or a `dayTimeDuration` of a billion days — keeps its canonical
+lexical form rather than failing to convert.
 
 ### The outcome is on the iterator
 

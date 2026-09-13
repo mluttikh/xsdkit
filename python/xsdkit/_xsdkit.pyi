@@ -30,7 +30,9 @@ Name = str | tuple[str | None, str]
 #: leaving the encoding to xsdkit, which reads the byte-order mark and the XML
 #: declaration — or as ``str``, or as ``(uri, document)`` to say where it was
 #: actually found. Raise to report that it could not be resolved; the exception
-#: becomes the diagnostic.
+#: becomes the diagnostic, and the first one raised is the ``SchemaError``'s
+#: ``__cause__``. ``KeyboardInterrupt`` and ``SystemExit`` end the build and
+#: propagate as themselves.
 #:
 #: Replaces the filesystem rather than adding to it, so it is an alternative to
 #: ``search_paths``, not a layer on top.
@@ -47,6 +49,8 @@ told apart once both are strings — so pass ``pathlib.Path`` for a file."""
 #: Durations and gregorian fragments stay as their canonical lexical strings —
 #: ``xs:duration`` has no lossless Python counterpart, since months and seconds
 #: are not commensurable. ``xs:dayTimeDuration`` alone becomes a ``timedelta``.
+#: A date or duration Python cannot hold stays lexical too: a year after 9999
+#: or before 1, or 999,999,999 days or more.
 #:
 #: An ``xs:QName`` arrives as Clark notation (``{namespace}local``) with its
 #: prefix already resolved against the document, since the prefix is a spelling
@@ -69,12 +73,13 @@ EventKind = Literal["start", "text", "end"]
 class XsdError(Exception):
     #: Every diagnostic behind the error — from a failed build, or from a
     #: document `decode` refused. Empty rather than absent where a path
-    #: raised without any, so reading it is always safe.
-    diagnostics: list[Diagnostic]
+    #: raised without any, so reading it is always safe. That empty default
+    #: is one tuple shared by every such error, so it cannot be appended to.
+    diagnostics: Sequence[Diagnostic]
 
 class SchemaError(XsdError):
     #: Every diagnostic from the failed build, not just the first.
-    diagnostics: list[Diagnostic]
+    diagnostics: Sequence[Diagnostic]
 
 class Span:
     @property
@@ -370,7 +375,9 @@ class Type:
     def base(self) -> Type | None: ...
     @property
     def derivation(self) -> Literal["extension", "restriction"] | None: ...
-    def derives_from(self, other: Type, /) -> bool: ...
+    def derives_from(self, other: Type, /) -> bool:
+        """Whether this type is, or derives from, ``other``. Always ``False``
+        for a type from another ``SchemaSet``."""
     @property
     def base_chain(self) -> list[Type]: ...
     @property
@@ -604,10 +611,13 @@ class SchemaSet:
     def element(self, namespace: Name | None, local: str | None = ..., /) -> Element | None: ...
     def type(self, namespace: Name | None, local: str | None = ..., /) -> Type | None: ...
     def attribute(self, namespace: Name | None, local: str | None = ..., /) -> Attribute | None: ...
-    def validate(self, xml: Instance, *, uri: str = ...) -> ValidationReport:
+    def validate(self, xml: Instance, *, uri: str | None = ...) -> ValidationReport:
         """Validates a document. Never raises for an invalid one — that is an
-        answer, not an error."""
-    def decode(self, xml: Instance, *, uri: str = ..., lax: bool = ...) -> Any:
+        answer, not an error.
+
+        Diagnostics name ``uri``, or the file when ``xml`` is a path.
+        """
+    def decode(self, xml: Instance, *, uri: str | None = ..., lax: bool = ...) -> Any:
         """Decodes a document into Python data.
 
         Elements become dictionaries and values arrive in their value space::
@@ -625,13 +635,14 @@ class SchemaSet:
         Keys are local names, in Clark notation only where two names under one
         parent would collide. Attributes carry an ``@``; where an element has
         both a value and attributes the value sits under ``$``; ``xsi:nil``
-        decodes to ``None``.
+        decodes to ``None``, or to ``None`` under ``$`` when the element also
+        carries attributes.
 
         Raises ``XsdError`` if the document is invalid. Pass ``lax=True`` to
         take the data anyway.
         """
-    def iter_typed(self, xml: Instance, *, uri: str = ...) -> PsviEvents:
-        """Reads a document into typed PSVI events, one at a time.
+    def iter_typed(self, xml: Instance, *, uri: str | None = ...) -> PsviEvents:
+        """Reads a document into typed PSVI events, as an iterator.
 
         The iterator form of ``read_typed``, and the one to reach for::
 
@@ -639,13 +650,15 @@ class SchemaSet:
                 ...
 
         The outcome is on the iterator's ``report``, before or after the loop.
+        Every event is built before the first is returned; for a document too
+        large to hold that way, pass ``on_event`` to ``read_typed``.
         """
     def read_typed(
         self,
         xml: Instance,
         *,
         on_event: Callable[[PsviEvent], None] | None = ...,
-        uri: str = ...,
+        uri: str | None = ...,
     ) -> tuple[list[PsviEvent] | None, ValidationReport]:
         """Reads a document into typed PSVI events.
 
