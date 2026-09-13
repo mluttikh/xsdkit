@@ -39,7 +39,7 @@ ask for.
 
 ```toml
 [dependencies]
-xsdkit = "0.1"
+xsdkit = "0.2"
 ```
 
 ```rust
@@ -95,7 +95,7 @@ every component it holds — serializable, so a large schema set is compiled
 once and loaded thereafter:
 
 ```toml
-xsdkit = { version = "0.1", features = ["serde"] }
+xsdkit = { version = "0.2", features = ["serde"] }
 ```
 
 ```rust
@@ -227,13 +227,18 @@ cargo run --example inspect -- schemas/report.xsd --lax
   typed PSVI: values arrive as `Value::Integer(42)`, not `"42"`. Handles
   `xsi:type` — prefix, derivation, `block` and abstractness — `xsi:nil`,
   substitution groups and wildcards.
+- **Identity constraints** — `xs:key`, `xs:keyref` and `xs:unique` over their
+  XPath subset, with keys compared in the value space — and `xs:ID` / `xs:IDREF`
+  uniqueness and resolution, enforced in that same pass.
 - **Content models** compiled to Glushkov position automata, with
   **Unique Particle Attribution** checking falling out of the same structure.
   Extension appends to the base's content; restriction replaces it.
   `xs:all` gets per-member counters rather than `n!` regex paths.
 - **XSD 1.1**, opt-in via `Version::Xsd11`: `openContent`,
-  `defaultOpenContent`, `defaultAttributes`, and the relaxed UPA rule where an
-  element particle beats a competing wildcard.
+  `defaultOpenContent`, `defaultAttributes`, `vc:` conditional inclusion,
+  `notNamespace` / `notQName`, `xs:precisionDecimal`, the relaxed `xs:all`
+  rules, and the relaxed UPA rule where an element particle beats a competing
+  wildcard.
 - **Diagnostics** with stable codes, source spans and help text. Every error
   is reported, not just the first.
 
@@ -247,8 +252,8 @@ cargo run --example inspect -- schemas/report.xsd --lax
 | ✅ | Instance validation, typed reading (PSVI) | done |
 | ✅ | `redefine` / `override` | done |
 | ✅ | XSD 1.1 open content, default attributes, relaxed UPA | done |
+| ✅ | Identity constraints, `xs:ID` / `xs:IDREF` | done |
 | → | **XSD 1.1 assertions and conditional type assignment** | next |
-| | Identity constraint enforcement | |
 
 Code generation is permanently out of scope.
 
@@ -293,8 +298,9 @@ versions read as each, 10,511 runs in all:
 | invalid schemas rejected | **77.4%** (171 / 221) | **69.7%** (327 / 469) |
 
 The gap is the honest description of what this is. `xsdkit` reads real
-schemas well; it does not yet enforce most of the specification's *validity
-constraints*, so a schema it accepts is not thereby a valid schema. If you
+schemas well; it enforces some of the specification's *validity constraints*
+and not others — [which ones](https://mluttikh.github.io/xsdkit/project/spec-rules/),
+rule by rule — so a schema it accepts is not thereby a valid schema. If you
 need a conformance checker, use Xerces or Saxon; if you need to read a schema
 that already works, this is built for that.
 
@@ -309,7 +315,7 @@ documents:
 ```bash
 git clone --depth 1 https://github.com/w3c/xsdtests /tmp/xsdtests
 export XSDTESTS=/tmp/xsdtests
-cargo test --test w3c_suite -- --nocapture   # both halves, ~20 seconds
+cargo test --test w3c_suite -- --nocapture   # both halves, ~35 seconds
 ```
 
 Both halves score against a committed per-case baseline in

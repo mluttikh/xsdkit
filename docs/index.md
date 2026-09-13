@@ -122,10 +122,11 @@ Schema Test Suite on every change.
 | documents judged correctly | **99.8%** | **99.0%** |
 
 The gap in the second row is the honest description of what this is.
-`xsdkit` reads real schemas well; it does not yet enforce most of the
-specification's *validity constraints*, so a schema it accepts is not thereby
-a valid schema. If you need a conformance checker, reach for Xerces or Saxon.
-If you need to read a schema that already works, this is built for that.
+`xsdkit` reads real schemas well; it enforces some of the specification's
+*validity constraints* and not others — [which ones](project/spec-rules.md),
+rule by rule — so a schema it accepts is not thereby a valid schema. If you
+need a conformance checker, reach for Xerces or Saxon. If you need to read a
+schema that already works, this is built for that.
 
 [:octicons-arrow-right-24: The full conformance picture](project/conformance.md)
 

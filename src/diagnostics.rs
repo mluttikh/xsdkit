@@ -119,7 +119,9 @@ pub enum DiagCode {
     // 1300-1399 — component constraints
     /// A simple type declares more than one of restriction/list/union.
     ConflictingSimpleTypeVariety,
-    /// `minOccurs` exceeds `maxOccurs`.
+    /// A particle's occurrence is not legal: `minOccurs` exceeds `maxOccurs`,
+    /// or an `xs:all` group appears where, or as often as, *All Group
+    /// Limited* forbids.
     InvalidOccurrence,
     /// An element declaration has both a `type` attribute and inline content.
     ConflictingTypeDefinition,

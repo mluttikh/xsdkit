@@ -83,6 +83,25 @@ document, so a schema family can be made extensible in one line.
 every complex type in the document — the version-stamp-on-everything pattern,
 without repeating it on all two hundred types.
 
+### `xs:all`, relaxed
+
+XSD 1.0 confines an `xs:all` group tightly: it may only be a complex type's
+whole content model or a named group's, and each member occurs at most once.
+1.1 lets members repeat, lets an `xs:all` nest inside another at exactly one
+occurrence, and lets one reference a named group — provided that group is an
+`xs:all` too.
+
+```xml
+<xs:all>
+  <xs:element name="tag" type="xs:string" maxOccurs="unbounded"/>
+  <xs:element name="title" type="xs:string"/>
+</xs:all>
+```
+
+Rejected under 1.0 (`XSD1302`); legal under 1.1. Unique Particle Attribution
+applies inside an `xs:all` in both versions: two members that could match the
+same element are ambiguous (`XSD1304`).
+
 ### Relaxed Unique Particle Attribution
 
 XSD 1.0 rejects a content model where a wildcard and an element could both
