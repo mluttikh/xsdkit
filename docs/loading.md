@@ -218,6 +218,7 @@ Every loader takes the same set.
 | `conformance` | `strict` | `lax` downgrades some errors — see below |
 | `version` | `"1.0"` | `"1.1"` turns on XSD 1.1 — see [XSD 1.1](xsd11.md) |
 | `nodes_limit` | 10,000,000 | Cap on XML nodes per document |
+| `max_depth` | 256 | Cap on element nesting per document — see [Security](project/security.md#bounded-work) |
 
 ### Strict and lax
 

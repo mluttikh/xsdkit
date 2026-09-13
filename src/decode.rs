@@ -58,7 +58,9 @@ pub struct Decoded {
 /// One attribute, with its value in the value space of its type.
 #[derive(Clone, Debug, PartialEq)]
 pub struct DecodedAttribute {
-    pub name: QName,
+    /// [`PsviName::Foreign`] for an attribute a wildcard admitted under a name
+    /// the schema never declared.
+    pub name: PsviName,
     /// `None` when the value did not validate, or when no declaration was
     /// matched to give it a type.
     pub value: Option<Value>,
@@ -136,8 +138,14 @@ impl Decoded {
     }
 
     /// An attribute by qualified name.
+    ///
+    /// One a wildcard admitted under a name the schema never declared has no
+    /// `QName` to be found by, and is reached through
+    /// [`Decoded::attributes`].
     pub fn attribute(&self, name: QName) -> Option<&DecodedAttribute> {
-        self.attributes.iter().find(|a| a.name == name)
+        self.attributes
+            .iter()
+            .find(|a| a.name.qname() == Some(name))
     }
 }
 

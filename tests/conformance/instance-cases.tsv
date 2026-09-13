@@ -4,19 +4,19 @@
 #
 # runs                      41994
 # not scored                64
-# as XSD 1.0   valid accepted 11300/11325   invalid rejected 9057/9083
-# as XSD 1.1   valid accepted 11845/11906   invalid rejected 9524/9680
+# as XSD 1.0   valid accepted 11308/11325   invalid rejected 9057/9083
+# as XSD 1.1   valid accepted 11862/11906   invalid rejected 9515/9680
 #
 # Re-bless with XSDKIT_BLESS=1; see tests/w3c_suite.rs.
 
-AGroupDef/ag_attrusens00101m1_p/AG_attrUseNS00101m1.xml@1.0	valid	reject	XSD2002+XSD2003
-AGroupDef/ag_attrusens00101m1_p/AG_attrUseNS00101m1.xml@1.1	valid	reject	XSD2002+XSD2003
-AGroupDef/ag_attrwcard00101m1/AG_attrWCard00101m1_p.xml@1.0	valid	reject	XSD2002+XSD2003
-AGroupDef/ag_attrwcard00101m1/AG_attrWCard00101m1_p.xml@1.1	valid	reject	XSD2002+XSD2003
-AGroupDef/ag_name00101m1_p/AG_name00101m1.xml@1.0	valid	reject	XSD2002+XSD2003
-AGroupDef/ag_name00101m1_p/AG_name00101m1.xml@1.1	valid	reject	XSD2002+XSD2003
-AGroupDef/ag_targetns00101m1_p/AG_targetNS00101m1.xml@1.0	valid	reject	XSD2002+XSD2003
-AGroupDef/ag_targetns00101m1_p/AG_targetNS00101m1.xml@1.1	valid	reject	XSD2002+XSD2003
+AGroupDef/ag_attrusens00101m1_p/AG_attrUseNS00101m1.xml@1.0	valid	accept	-
+AGroupDef/ag_attrusens00101m1_p/AG_attrUseNS00101m1.xml@1.1	valid	accept	-
+AGroupDef/ag_attrwcard00101m1/AG_attrWCard00101m1_p.xml@1.0	valid	accept	-
+AGroupDef/ag_attrwcard00101m1/AG_attrWCard00101m1_p.xml@1.1	valid	accept	-
+AGroupDef/ag_name00101m1_p/AG_name00101m1.xml@1.0	valid	accept	-
+AGroupDef/ag_name00101m1_p/AG_name00101m1.xml@1.1	valid	accept	-
+AGroupDef/ag_targetns00101m1_p/AG_targetNS00101m1.xml@1.0	valid	accept	-
+AGroupDef/ag_targetns00101m1_p/AG_targetNS00101m1.xml@1.1	valid	accept	-
 AGroupDef/annotation00101m1/annotation00101m1_p.xml@1.0	valid	accept	-
 AGroupDef/annotation00101m1/annotation00101m1_p.xml@1.1	valid	accept	-
 AGroupDef/annotation00101m4/annotation00101m4_p.xml@1.0	valid	accept	-
@@ -332,8 +332,8 @@ AttrDecl/ad_name00115/AD_name00115_p.xml@1.0	valid	accept	-
 AttrDecl/ad_name00115/AD_name00115_p.xml@1.1	valid	accept	-
 AttrDecl/ad_name00118/AD_name00118_p.xml@1.0	valid	accept	-
 AttrDecl/ad_name00118/AD_name00118_p.xml@1.1	valid	accept	-
-AttrDecl/ad_scope00101m1/AD_scope00101m1_p.xml@1.0	valid	reject	XSD2002+XSD2003
-AttrDecl/ad_scope00101m1/AD_scope00101m1_p.xml@1.1	valid	reject	XSD2002+XSD2003
+AttrDecl/ad_scope00101m1/AD_scope00101m1_p.xml@1.0	valid	accept	-
+AttrDecl/ad_scope00101m1/AD_scope00101m1_p.xml@1.1	valid	accept	-
 AttrDecl/ad_targetns00101m/AD_targetNS00101m1_n.xml@1.0	invalid	reject	XSD2005
 AttrDecl/ad_targetns00101m/AD_targetNS00101m1_n.xml@1.1	invalid	reject	XSD2005
 AttrDecl/ad_targetns00101m/AD_targetNS00101m1_p.xml@1.0	valid	accept	-
@@ -370,12 +370,12 @@ AttrDecl/ad_valconstr00101m/AD_valConstr00101m2_p.xml@1.0	valid	accept	-
 AttrDecl/ad_valconstr00101m/AD_valConstr00101m2_p.xml@1.1	valid	accept	-
 AttrDecl/ad_valconstr00201m3/AD_valConstr00201m3_p.xml@1.0	valid	accept	-
 AttrDecl/ad_valconstr00201m3/AD_valConstr00201m3_p.xml@1.1	valid	accept	-
-AttrUse/au_attrdecl00101m1_p/AU_attrDecl00101m1.xml@1.0	valid	reject	XSD2002+XSD2003
-AttrUse/au_attrdecl00101m1_p/AU_attrDecl00101m1.xml@1.1	valid	reject	XSD2002+XSD2003
-AttrUse/au_required00101m1/AU_required00101m1_n.xml@1.0	invalid	reject	XSD2002+XSD2003
-AttrUse/au_required00101m1/AU_required00101m1_n.xml@1.1	invalid	reject	XSD2002+XSD2003
-AttrUse/au_required00101m1/AU_required00101m1_p.xml@1.0	valid	reject	XSD2002+XSD2003
-AttrUse/au_required00101m1/AU_required00101m1_p.xml@1.1	valid	reject	XSD2002+XSD2003
+AttrUse/au_attrdecl00101m1_p/AU_attrDecl00101m1.xml@1.0	valid	accept	-
+AttrUse/au_attrdecl00101m1_p/AU_attrDecl00101m1.xml@1.1	valid	accept	-
+AttrUse/au_required00101m1/AU_required00101m1_n.xml@1.0	invalid	reject	XSD2006
+AttrUse/au_required00101m1/AU_required00101m1_n.xml@1.1	invalid	reject	XSD2006
+AttrUse/au_required00101m1/AU_required00101m1_p.xml@1.0	valid	accept	-
+AttrUse/au_required00101m1/AU_required00101m1_p.xml@1.1	valid	accept	-
 AttrUse/au_valconstr00101m1/AU_valConstr00101m1_n.xml@1.0	invalid	reject	XSD2004
 AttrUse/au_valconstr00101m1/AU_valConstr00101m1_n.xml@1.1	invalid	reject	XSD2004
 AttrUse/au_valconstr00101m1/AU_valConstr00101m1_p.xml@1.0	valid	accept	-
@@ -426,24 +426,24 @@ CTA/cta0005/cta0003.n01.xml@1.1	invalid	accept	-
 CTA/cta0005/cta0003.v01.xml@1.1	valid	accept	-
 CTA/cta0008/cta0008.n01.xml@1.1	invalid	reject	XSD2002+XSD2003
 CTA/cta0008/cta0008.v01.xml@1.1	valid	reject	XSD2002+XSD2003
-CTA/cta0009/cta0009.n01.xml@1.1	invalid	reject	XSD2002+XSD2003
-CTA/cta0009/cta0009.n02.xml@1.1	invalid	reject	XSD2002+XSD2003
-CTA/cta0009/cta0009.v01.xml@1.1	valid	reject	XSD2002+XSD2003
-CTA/cta0009/cta0009.v02.xml@1.1	valid	reject	XSD2002+XSD2003
-CTA/cta0010/cta0010.n01.xml@1.1	invalid	reject	XSD2002+XSD2003
-CTA/cta0010/cta0010.n02.xml@1.1	invalid	reject	XSD2002+XSD2003
-CTA/cta0010/cta0010.v01.xml@1.1	valid	reject	XSD2002+XSD2003
-CTA/cta0010/cta0010.v02.xml@1.1	valid	reject	XSD2002+XSD2003
-CTA/cta0011/cta0009.n01.xml@1.1	invalid	reject	XSD2002+XSD2003
-CTA/cta0011/cta0009.n02.xml@1.1	invalid	reject	XSD2002+XSD2003
-CTA/cta0011/cta0009.v01.xml@1.1	valid	reject	XSD2002+XSD2003
-CTA/cta0011/cta0009.v02.xml@1.1	valid	reject	XSD2002+XSD2003
-CTA/cta0012/cta0012.n01.xml@1.1	invalid	reject	XSD2002+XSD2003
-CTA/cta0012/cta0012.v01.xml@1.1	valid	reject	XSD2002+XSD2003
-CTA/cta0013/cta0013.n01.xml@1.1	invalid	reject	XSD2002+XSD2003
-CTA/cta0013/cta0013.n02.xml@1.1	invalid	reject	XSD2002+XSD2003
-CTA/cta0013/cta0013.v01.xml@1.1	valid	reject	XSD2002+XSD2003
-CTA/cta0013/cta0013.v02.xml@1.1	valid	reject	XSD2002+XSD2003
+CTA/cta0009/cta0009.n01.xml@1.1	invalid	accept	-
+CTA/cta0009/cta0009.n02.xml@1.1	invalid	accept	-
+CTA/cta0009/cta0009.v01.xml@1.1	valid	accept	-
+CTA/cta0009/cta0009.v02.xml@1.1	valid	accept	-
+CTA/cta0010/cta0010.n01.xml@1.1	invalid	accept	-
+CTA/cta0010/cta0010.n02.xml@1.1	invalid	accept	-
+CTA/cta0010/cta0010.v01.xml@1.1	valid	accept	-
+CTA/cta0010/cta0010.v02.xml@1.1	valid	accept	-
+CTA/cta0011/cta0009.n01.xml@1.1	invalid	accept	-
+CTA/cta0011/cta0009.n02.xml@1.1	invalid	accept	-
+CTA/cta0011/cta0009.v01.xml@1.1	valid	accept	-
+CTA/cta0011/cta0009.v02.xml@1.1	valid	accept	-
+CTA/cta0012/cta0012.n01.xml@1.1	invalid	accept	-
+CTA/cta0012/cta0012.v01.xml@1.1	valid	accept	-
+CTA/cta0013/cta0013.n01.xml@1.1	invalid	accept	-
+CTA/cta0013/cta0013.n02.xml@1.1	invalid	accept	-
+CTA/cta0013/cta0013.v01.xml@1.1	valid	accept	-
+CTA/cta0013/cta0013.v02.xml@1.1	valid	accept	-
 CTA/cta0014/cta0014.n01.xml@1.1	invalid	reject	XSD2004
 CTA/cta0014/cta0014.n02.xml@1.1	invalid	reject	XSD2004
 CTA/cta0014/cta0014.v01.xml@1.1	valid	accept	-
@@ -41868,8 +41868,8 @@ suntest/xsd002/xsd002.n02.xml@1.0	invalid	reject	XSD2002+XSD2003
 suntest/xsd002/xsd002.n02.xml@1.1	invalid	reject	XSD2002+XSD2003
 suntest/xsd002/xsd002.v00.xml@1.0	valid	accept	-
 suntest/xsd002/xsd002.v00.xml@1.1	valid	accept	-
-suntest/xsd002/xsd002.v01.xml@1.0	valid	reject	XSD2002+XSD2003
-suntest/xsd002/xsd002.v01.xml@1.1	valid	reject	XSD2002+XSD2003
+suntest/xsd002/xsd002.v01.xml@1.0	valid	accept	-
+suntest/xsd002/xsd002.v01.xml@1.1	valid	accept	-
 suntest/xsd003a/xsd003a.v00.xml@1.0	valid	accept	-
 suntest/xsd003a/xsd003a.v00.xml@1.1	valid	accept	-
 suntest/xsd003b/xsd003b.n00.xml@1.0	invalid	reject	XSD2004

@@ -287,6 +287,9 @@ pub(crate) struct Loader<'r> {
     seen: FxHashSet<(String, Option<Namespace>)>,
     depth: usize,
     nodes_limit: u32,
+    /// How deeply a schema document's elements may nest; see
+    /// [`DEFAULT_MAX_DEPTH`].
+    max_depth: u32,
     /// Which XSD version to process as; see [`Version`].
     version: Version,
     /// Names this crate installed itself: the built-in types and the `xml:`
@@ -313,6 +316,16 @@ const MAX_DEPTH: usize = 64;
 /// document cannot exhaust memory before the first component is built.
 pub const DEFAULT_NODES_LIMIT: u32 = 10_000_000;
 
+/// Default cap on how deeply elements may nest in a schema document.
+///
+/// The XML parser and the loader both descend a native stack frame per level
+/// of nesting, so without a cap a document nested a few thousand deep
+/// overflows the stack and aborts the process. 256 is libxml2's default for
+/// the same reason. It leaves room to spare on a 1 MiB stack in a release
+/// build, where the deepest recursion — nested anonymous types — reached about
+/// 875 levels; an unoptimised build spends several times as much per level.
+pub const DEFAULT_MAX_DEPTH: u32 = 256;
+
 impl<'r> Loader<'r> {
     pub(crate) fn new(resolver: &'r dyn Resolver, mode: Conformance) -> Self {
         let mut l = Self {
@@ -336,6 +349,7 @@ impl<'r> Loader<'r> {
             seen: FxHashSet::default(),
             depth: 0,
             nodes_limit: DEFAULT_NODES_LIMIT,
+            max_depth: DEFAULT_MAX_DEPTH,
             version: Version::default(),
             predeclared: FxHashSet::default(),
             in_redefine: false,
@@ -363,11 +377,37 @@ impl<'r> Loader<'r> {
                 local,
             };
             let id = if b == Builtin::AnyType {
+                // Any attributes and any content: mixed, over one lax `##any`
+                // wildcard that may repeat, so a child with a global
+                // declaration is validated against it and any other is
+                // accepted. Built as mixed with no particle, it validated text
+                // and attributes and rejected every child element.
+                let any = ParticleId(self.particles.push(Particle {
+                    min_occurs: 0,
+                    max_occurs: MaxOccurs::Unbounded,
+                    term: Term::Wildcard(Wildcard {
+                        namespace: NamespaceConstraint::Any,
+                        process_contents: ProcessContents::Lax,
+                        not_qname: Vec::new(),
+                        not_defined: false,
+                        not_defined_sibling: false,
+                    }),
+                    span: span.clone(),
+                }));
+                let content = ParticleId(self.particles.push(Particle {
+                    min_occurs: 1,
+                    max_occurs: MaxOccurs::Bounded(1),
+                    term: Term::Group(ModelGroup {
+                        compositor: Compositor::Sequence,
+                        particles: vec![any],
+                    }),
+                    span: span.clone(),
+                }));
                 let t = ComplexType {
                     name: Some(name),
                     base: TypeId::PLACEHOLDER,
                     derivation: DerivationMethod::Restriction,
-                    content: ContentType::Mixed(ParticleId::PLACEHOLDER),
+                    content: ContentType::Mixed(content),
                     attribute_uses: Vec::new(),
                     attribute_group_refs: Vec::new(),
                     attribute_wildcard: Some(Wildcard {
@@ -492,6 +532,10 @@ impl<'r> Loader<'r> {
         self.nodes_limit = limit;
     }
 
+    pub(crate) fn set_max_depth(&mut self, limit: u32) {
+        self.max_depth = limit;
+    }
+
     pub(crate) fn set_version(&mut self, v: Version) {
         self.version = v;
     }
@@ -527,6 +571,25 @@ impl<'r> Loader<'r> {
                 DiagCode::CircularDefinition,
                 format!("schema include/import nesting exceeded {MAX_DEPTH} levels"),
             ));
+            return;
+        }
+
+        // The parser descends a native stack frame per level of nesting, and so
+        // does the loader after it, so a deep enough document overflows the
+        // stack and aborts the process: nothing returns and nothing can be
+        // caught. Measured before parsing, because after is too late.
+        if nesting_depth(text) > self.max_depth as usize {
+            self.diags.push(
+                Diagnostic::error(
+                    DiagCode::MalformedXml,
+                    format!(
+                        "elements nest deeper than the limit of {} levels",
+                        self.max_depth
+                    ),
+                )
+                .at(Span::new(uri, 0))
+                .with_help("a trusted schema that needs more can raise `max_depth`"),
+            );
             return;
         }
 
@@ -3114,9 +3177,123 @@ fn escape_attr(s: &str) -> String {
         .replace('"', "&quot;")
 }
 
+/// How deeply a document's elements nest — or more, never less.
+///
+/// Run before `roxmltree`, whose parser descends a native stack frame per
+/// level. A scanner rather than a parser: it knows start and end tags,
+/// comments, CDATA sections, processing instructions, doctypes and quoted
+/// attribute values, and where it cannot tell, it counts high.
+///
+/// Markup in an internal DTD subset reaches the tree through entity
+/// references, and an entity's replacement text may reference another. Every
+/// start tag inside the subset's quoted literals is added on top of the depth
+/// the document itself reaches, which bounds whatever a chain of references
+/// could build: a chain visits each entity at most once, or it is a loop.
+pub(crate) fn nesting_depth(text: &str) -> usize {
+    let b = text.as_bytes();
+    let (mut i, mut open, mut deepest, mut hidden) = (0, 0usize, 0usize, 0usize);
+    while i < b.len() {
+        if b[i] != b'<' {
+            i += 1;
+            continue;
+        }
+        let rest = &b[i..];
+        if rest.starts_with(b"<!--") {
+            i = past(b, i + 4, b"-->");
+        } else if rest.starts_with(b"<![CDATA[") {
+            i = past(b, i + 9, b"]]>");
+        } else if rest.starts_with(b"<?") {
+            i = past(b, i + 2, b"?>");
+        } else if rest.starts_with(b"<!") {
+            let (end, tags) = doctype_extent(b, i + 2);
+            hidden += tags;
+            i = end;
+        } else if rest.starts_with(b"</") {
+            open = open.saturating_sub(1);
+            i = past(b, i + 2, b">");
+        } else if rest.get(1).is_some_and(|c| starts_name(*c)) {
+            let end = tag_end(b, i + 1);
+            // An empty-element tag is as deep as a start tag while it lasts,
+            // and leaves nothing open behind it.
+            deepest = deepest.max(open + 1);
+            if !(end < b.len() && b[end - 1] == b'/') {
+                open += 1;
+            }
+            i = end + 1;
+        } else {
+            i += 1;
+        }
+    }
+    deepest + hidden
+}
+
+/// The index just past the first `needle` at or after `from`, or the end.
+fn past(b: &[u8], from: usize, needle: &[u8]) -> usize {
+    let from = from.min(b.len());
+    b[from..]
+        .windows(needle.len())
+        .position(|w| w == needle)
+        .map_or(b.len(), |p| from + p + needle.len())
+}
+
+/// The index of the `>` that closes a tag, skipping over quoted attribute
+/// values, or the end of the text.
+fn tag_end(b: &[u8], from: usize) -> usize {
+    let mut quote = None;
+    for (j, &c) in b.iter().enumerate().skip(from) {
+        match quote {
+            Some(q) if c == q => quote = None,
+            Some(_) => {}
+            None if c == b'"' || c == b'\'' => quote = Some(c),
+            None if c == b'>' => return j,
+            None => {}
+        }
+    }
+    b.len()
+}
+
+/// Where a `<!DOCTYPE …>` ends, and how many start tags sit inside the quoted
+/// literals of its internal subset.
+fn doctype_extent(b: &[u8], from: usize) -> (usize, usize) {
+    let (mut j, mut tags, mut subset, mut quote) = (from, 0, false, None);
+    while j < b.len() {
+        let c = b[j];
+        if let Some(q) = quote {
+            if c == q {
+                quote = None;
+            } else if c == b'<' && b.get(j + 1).is_some_and(|d| starts_name(*d)) {
+                tags += 1;
+            }
+            j += 1;
+            continue;
+        }
+        match c {
+            b'"' | b'\'' => quote = Some(c),
+            b'[' => subset = true,
+            b']' => subset = false,
+            b'>' if !subset => return (j + 1, tags),
+            // A comment may hold a lone quote, which would otherwise swallow
+            // the rest of the subset.
+            b'<' if b[j..].starts_with(b"<!--") => {
+                j = past(b, j + 4, b"-->");
+                continue;
+            }
+            _ => {}
+        }
+        j += 1;
+    }
+    (b.len(), tags)
+}
+
+/// Whether a byte can begin an XML name. Any byte of a multi-byte character
+/// counts, which is the generous reading.
+fn starts_name(c: u8) -> bool {
+    c.is_ascii_alphabetic() || c == b'_' || c == b':' || c >= 0x80
+}
+
 #[cfg(test)]
 mod tests {
-    use super::LineIndex;
+    use super::{LineIndex, nesting_depth};
 
     /// `LineIndex` replaced `roxmltree::Document::text_pos_at` for speed, so it
     /// has to agree with it everywhere — including the awkward offsets: the
@@ -3154,5 +3331,50 @@ mod tests {
         assert_eq!(LineIndex::build("<a/>").line(3), 1);
         assert_eq!(LineIndex::build("\n").line(0), 1);
         assert_eq!(LineIndex::build("\n").line(1), 2);
+    }
+
+    /// The scan decides whether `roxmltree` runs at all, and `roxmltree`
+    /// recurses per level, so it may count high but never low.
+    #[test]
+    fn nesting_depth_counts_what_the_parser_will_descend() {
+        assert_eq!(nesting_depth("<a><b><c/></b></a>"), 3);
+        assert_eq!(nesting_depth("<a/>"), 1);
+        assert_eq!(
+            nesting_depth("<a><b></b><b></b></a>"),
+            2,
+            "siblings do not add up"
+        );
+        assert_eq!(
+            nesting_depth("<a><!-- <b><c> --><![CDATA[<d><e>]]><?pi <f>?></a>"),
+            1,
+            "comments, CDATA and processing instructions do not nest"
+        );
+        assert_eq!(
+            nesting_depth(r#"<a x="1>2" y='/'><b z="/>"/></a>"#),
+            2,
+            "a `>` or `/` in an attribute value does not end a tag"
+        );
+    }
+
+    #[test]
+    fn nesting_depth_counts_markup_an_entity_could_insert() {
+        let doc =
+            r#"<!DOCTYPE a [<!ENTITY e "<b><c></c></b>"> <!-- "a lone quote --> ]><a>&e;</a>"#;
+        let opts = roxmltree::ParsingOptions {
+            allow_dtd: true,
+            ..Default::default()
+        };
+        let parsed = roxmltree::Document::parse_with_options(doc, opts).expect("valid XML");
+        let reached = parsed
+            .descendants()
+            .map(|n| n.ancestors().filter(|a| a.is_element()).count())
+            .max()
+            .unwrap_or(0);
+        assert_eq!(reached, 3, "the entity really does nest two more levels");
+        assert!(
+            nesting_depth(doc) >= reached,
+            "counted {}",
+            nesting_depth(doc)
+        );
     }
 }

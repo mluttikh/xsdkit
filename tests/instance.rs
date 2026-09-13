@@ -1783,7 +1783,7 @@ fn attributes_reach_the_psvi_typed() {
     );
     let names: Vec<_> = attrs
         .iter()
-        .map(|a| s.names().resolve(a.name.local).to_string())
+        .map(|a| a.name.local(s.names()).to_string())
         .collect();
     assert!(names.contains(&"id".to_string()));
     assert!(names.contains(&"lang".to_string()));
@@ -2276,4 +2276,113 @@ fn every_element_announced_is_also_closed() {
     assert!(report.is_valid(), "{}", report.diagnostics);
     assert_eq!(depth, 0, "every start needs its end");
     assert_eq!(lowest, 0, "and no end may arrive before its start");
+}
+
+// ---------------------------------------------------------------------------
+// xs:anyType, attribute wildcards and nesting
+// ---------------------------------------------------------------------------
+
+/// `xs:anyType` is mixed content over a lax `##any` wildcard. It was built with
+/// no particle at all, so text and attributes validated and every child
+/// element was rejected.
+#[test]
+fn an_any_type_element_accepts_any_children() {
+    let s = schema(
+        r#"<xs:element name="free"/>
+           <xs:element name="typed" type="xs:anyType"/>
+           <xs:element name="count" type="xs:int"/>"#,
+    );
+    for root in ["free", "typed"] {
+        valid(
+            &s,
+            &format!(
+                r#"<{root} xmlns="urn:example">text<k a="1">v<deeper/></k><k xmlns=""/><count>3</count></{root}>"#
+            ),
+        );
+        // Lax, not skip: a child with a global declaration is checked against it.
+        invalid(
+            &s,
+            &format!(r#"<{root} xmlns="urn:example"><count>nope</count></{root}>"#),
+            DiagCode::InvalidValue,
+        );
+    }
+}
+
+/// Every complex type that names no base restricts `xs:anyType`, and none may
+/// start failing the restriction check now that it has a particle.
+#[test]
+fn giving_any_type_a_particle_makes_no_restriction_of_it_invalid() {
+    let s = schema(
+        r#"<xs:complexType name="T"><xs:sequence>
+             <xs:element name="a" type="xs:string"/>
+           </xs:sequence></xs:complexType>
+           <xs:complexType name="R"><xs:complexContent>
+             <xs:restriction base="xs:anyType"><xs:sequence>
+               <xs:element name="b" type="xs:string" maxOccurs="unbounded"/>
+             </xs:sequence></xs:restriction>
+           </xs:complexContent></xs:complexType>
+           <xs:element name="t" type="tns:T"/>"#,
+    );
+    valid(&s, r#"<t xmlns="urn:example"><a>x</a></t>"#);
+}
+
+/// A wildcard exists to admit what the schema does not declare, and an
+/// attribute it admitted under a name the schema never interned used to vanish
+/// from the PSVI entirely.
+#[test]
+fn a_wildcard_attribute_with_an_undeclared_name_is_reported() {
+    let s = schema(
+        r###"<xs:element name="r"><xs:complexType>
+               <xs:attribute name="k" type="xs:int"/>
+               <xs:anyAttribute namespace="##any" processContents="lax"/>
+             </xs:complexType></xs:element>"###,
+    );
+    let mut attributes = Vec::new();
+    let report = s.document_validator().validate_with(
+        r#"<r xmlns="urn:example" xmlns:o="urn:other" k="1" o:foo="x" bar="y"/>"#,
+        |ev| {
+            if let PsviEvent::StartElement { attributes: a, .. } = ev {
+                attributes = a;
+            }
+        },
+    );
+    assert!(report.is_valid(), "{}", report.diagnostics);
+    let names: Vec<String> = attributes
+        .iter()
+        .map(|a| s.display_psvi_name(&a.name))
+        .collect();
+    assert_eq!(names, ["k", "{urn:other}foo", "bar"]);
+
+    let foo = &attributes[1];
+    assert!(
+        matches!(&foo.name, PsviName::Foreign { namespace: Some(ns), local } if ns == "urn:other" && local == "foo")
+    );
+    assert!(foo.declaration.is_none() && foo.value.is_none());
+    assert_eq!(foo.lexical, "x");
+}
+
+/// `quick-xml` counts nesting in a `u16` and resolves namespaces against the
+/// wrong scopes past 65,535 levels, so a valid document nested that deep was
+/// reported invalid. Past the cap a document is refused outright.
+#[test]
+fn nesting_is_capped_below_where_namespace_resolution_breaks() {
+    let s = schema(
+        r#"<xs:complexType name="N"><xs:sequence>
+             <xs:element name="n" type="tns:N" minOccurs="0"/>
+           </xs:sequence></xs:complexType>
+           <xs:element name="n" type="tns:N"/>"#,
+    );
+    let nested = |depth: usize| {
+        format!(
+            r#"<n xmlns="urn:example">{}{}</n>"#,
+            "<n>".repeat(depth - 1),
+            "</n>".repeat(depth - 1)
+        )
+    };
+    valid(&s, &nested(instance::MAX_INSTANCE_DEPTH));
+    invalid(
+        &s,
+        &nested(instance::MAX_INSTANCE_DEPTH + 1),
+        DiagCode::MalformedXml,
+    );
 }

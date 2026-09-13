@@ -349,3 +349,42 @@ def test_a_duration_timedelta_cannot_hold_stays_lexical(lexical, expected):
     xs = build('<xs:element name="e" type="xs:string"/>')
     t = xs.type("http://www.w3.org/2001/XMLSchema", "dayTimeDuration")
     assert t.validate(lexical) == expected
+
+
+def test_an_anytype_element_accepts_any_children():
+    """`xs:anyType` is mixed content over a lax wildcard.
+
+    It was built with no particle at all, so text and attributes validated
+    and every child element was rejected.
+    """
+    s = build(
+        '<xs:element name="free"/>'
+        '<xs:element name="typed" type="xs:anyType"/>'
+        '<xs:element name="count" type="xs:int"/>'
+    )
+    for root in ("free", "typed"):
+        doc = f'<{root} xmlns="{NS}">text<k a="1">v<deeper/></k><k xmlns=""/></{root}>'
+        assert s.validate(doc).is_valid, [str(d) for d in s.validate(doc).errors]
+        # Lax, not skip: a child with a global declaration is still checked.
+        bad = s.validate(f'<{root} xmlns="{NS}"><count>nope</count></{root}>')
+        assert any(d.code == "XSD2004" for d in bad.errors), [str(d) for d in bad.errors]
+
+
+def test_attributes_a_wildcard_admits_under_undeclared_names_are_kept():
+    """They were dropped from the events and from `decode` alike."""
+    s = build(
+        '<xs:element name="r"><xs:complexType>'
+        '<xs:attribute name="k" type="xs:int"/>'
+        '<xs:anyAttribute namespace="##any" processContents="lax"/>'
+        "</xs:complexType></xs:element>"
+    )
+    doc = f'<r xmlns="{NS}" xmlns:o="urn:other" k="1" o:foo="x" bar="y"/>'
+    assert s.validate(doc).is_valid
+
+    attrs = {a.name: a for a in next(iter(s.iter_typed(doc))).attributes}
+    assert set(attrs) == {(None, "k"), ("urn:other", "foo"), (None, "bar")}
+    assert attrs[(None, "k")].value == 1
+    foo = attrs[("urn:other", "foo")]
+    assert (foo.lexical, foo.value, foo.declaration) == ("x", None, None)
+
+    assert s.decode(doc) == {"@k": 1, "@{urn:other}foo": "x", "@bar": "y"}

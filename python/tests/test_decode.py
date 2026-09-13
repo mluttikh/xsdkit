@@ -330,20 +330,20 @@ def test_a_deeply_nested_document_decodes():
     thousand deep overflowed the native stack and killed the interpreter, with
     nothing to catch. Dropping the decoded tree recursed as well.
 
-    Run in a subprocess, so that a regression fails this test rather than
-    ending the whole run.
+    Instance documents are now capped at 10,000 levels, so the recursion is
+    pinned where stacks are small instead: a thread with 1 MiB, which the
+    recursive conversion overflowed well before the cap. In a subprocess, so
+    that a regression fails this test rather than ending the whole run.
     """
     import subprocess
     import sys
     import textwrap
 
-    depth = 50_000
     code = textwrap.dedent(
         '''
-        import sys
+        import threading
         import xsdkit
 
-        depth = int(sys.argv[1])
         s = xsdkit.SchemaSet.from_string(
             '<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema" '
             'xmlns:tns="urn:example" targetNamespace="urn:example" '
@@ -353,20 +353,36 @@ def test_a_deeply_nested_document_decodes():
             '</xs:sequence></xs:complexType>'
             '<xs:element name="n" type="tns:N"/></xs:schema>'
         )
-        doc = '<n xmlns="urn:example">' + '<n>' * (depth - 1) + '</n>' * depth
-        d = s.decode(doc)
-        levels = 1
-        while d:
-            d = d["n"]
-            levels += 1
-        print(levels)
+
+        def nested(depth):
+            return '<n xmlns="urn:example">' + '<n>' * (depth - 1) + '</n>' * depth
+
+        out = []
+
+        def run():
+            d = s.decode(nested(10_000))
+            levels = 1
+            while d:
+                d = d["n"]
+                levels += 1
+            out.append(levels)
+            try:
+                s.decode(nested(10_001))
+            except xsdkit.XsdError as e:
+                out.append(sorted({x.code for x in e.diagnostics}))
+
+        threading.stack_size(1 << 20)
+        t = threading.Thread(target=run)
+        t.start()
+        t.join()
+        print(*out)
         '''
     )
     result = subprocess.run(
-        [sys.executable, "-c", code, str(depth)],
+        [sys.executable, "-c", code],
         capture_output=True,
         text=True,
         timeout=300,
     )
     assert result.returncode == 0, result.stderr[-2000:]
-    assert result.stdout.strip() == str(depth)
+    assert result.stdout.strip() == "10000 ['XSD1001']"

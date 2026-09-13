@@ -112,7 +112,9 @@ all, which is how `note` behaves above:
 Keys are local names. Clark notation appears only where two names under one
 parent would otherwise collide — and whether they collide is decided by the
 **schema**, so a key does not change shape because a particular document left
-a sibling out.
+a sibling out. A child or attribute that a wildcard admitted under a name the
+schema never declares is not the schema's to shorten, so it keeps its full
+name — `"@{urn:other}foo"` — whenever it has a namespace.
 
 Namespaces are the one thing the dictionary form gives up. Where that matters,
 the Rust [`Decoded`](reference/rust.md) tree keeps every qualified name, the

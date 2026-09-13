@@ -783,7 +783,7 @@ fn sic_attr_decl_hands_over_the_governing_declaration() {
         |ev| {
             if let PsviEvent::StartElement { attributes, .. } = ev {
                 for a in attributes {
-                    seen.push((s.display_name(a.name), a.declaration.is_some()));
+                    seen.push((s.display_psvi_name(&a.name), a.declaration.is_some()));
                 }
             }
         },
@@ -901,7 +901,11 @@ fn sic_attr_default_supplies_an_absent_attribute() {
         .validate_with(r#"<t:doc xmlns:t="urn:t" n="3"/>"#, |ev| {
             if let PsviEvent::StartElement { attributes, .. } = ev {
                 for a in attributes {
-                    seen.push((s.display_name(a.name), a.lexical.clone(), a.from_schema));
+                    seen.push((
+                        s.display_psvi_name(&a.name),
+                        a.lexical.clone(),
+                        a.from_schema,
+                    ));
                 }
             }
         });

@@ -769,8 +769,9 @@ fn content_stats_summarise_the_whole_schema() {
     assert!(stats.empty >= 1);
     assert_eq!(stats.approximated, 0);
     // `positions` counts automaton positions; xs:all members are not among
-    // them, so type T's single element is the only one here.
-    assert_eq!(stats.positions, 1);
+    // them. Type T's single element is one, and the lax wildcard that every
+    // schema's built-in `xs:anyType` holds is the other.
+    assert_eq!(stats.positions, 2);
 }
 
 // ---------------------------------------------------------------------------
@@ -884,4 +885,23 @@ fn an_attribute_only_extension_keeps_the_bases_children() {
         "an empty own-particle is not an empty model"
     );
     assert!(accepts(&s, t, "a"));
+}
+
+/// An extension whose base does not resolve inherits nothing from the
+/// `xs:anyType` it falls back to. Once `xs:anyType` had its wildcard, extending
+/// the stand-in put that wildcard ahead of the extension's own content, and the
+/// result was reported as an ambiguous content model on top of the missing
+/// reference.
+#[test]
+fn an_unresolved_extension_base_adds_no_ambiguity() {
+    let d = diagnostics(
+        r###"<xs:complexType name="T"><xs:complexContent>
+               <xs:extension base="tns:Missing"><xs:sequence>
+                 <xs:any namespace="##any"/>
+               </xs:sequence></xs:extension>
+             </xs:complexContent></xs:complexType>"###,
+    );
+    let codes: Vec<&str> = d.iter().map(|x| x.code.as_str()).collect();
+    assert!(codes.contains(&"XSD1201"), "{codes:?}");
+    assert!(!codes.contains(&"XSD1304"), "{codes:?}");
 }

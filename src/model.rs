@@ -411,8 +411,8 @@ impl ContentType {
     /// The content particle, if this type has one.
     ///
     /// `Mixed` without a particle is a legitimate state — character data and
-    /// nothing else, which is what `xs:anyType` starts as — so a placeholder
-    /// here means "no particle", not "unresolved".
+    /// nothing else, which is what `mixed="true"` over no content means — so a
+    /// placeholder here means "no particle", not "unresolved".
     pub fn particle(self) -> Option<ParticleId> {
         match self {
             ContentType::ElementOnly(p) | ContentType::Mixed(p) if !p.is_placeholder() => Some(p),

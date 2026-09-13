@@ -380,6 +380,7 @@ fn builder(
     conformance: &str,
     version: &str,
     nodes_limit: Option<u32>,
+    max_depth: Option<u32>,
     resolver: Option<Py<PyAny>>,
 ) -> PyResult<(SchemaSetBuilder, Arc<Mutex<Raised>>)> {
     let raised = Arc::new(Mutex::new(Raised::default()));
@@ -405,6 +406,9 @@ fn builder(
     }
     if let Some(limit) = nodes_limit {
         b = b.nodes_limit(limit);
+    }
+    if let Some(limit) = max_depth {
+        b = b.max_depth(limit);
     }
     Ok((b, raised))
 }
@@ -488,7 +492,7 @@ impl PySchemaSet {
 impl PySchemaSet {
     /// Loads a schema from a file, following its includes and imports.
     #[classmethod]
-    #[pyo3(signature = (path, *, search_paths=None, conformance="strict", version="1.0", nodes_limit=None, resolver=None))]
+    #[pyo3(signature = (path, *, search_paths=None, conformance="strict", version="1.0", nodes_limit=None, max_depth=None, resolver=None))]
     fn from_file(
         _cls: &Bound<'_, PyType>,
         py: Python<'_>,
@@ -497,15 +501,23 @@ impl PySchemaSet {
         conformance: &str,
         version: &str,
         nodes_limit: Option<u32>,
+        max_depth: Option<u32>,
         resolver: Option<Py<PyAny>>,
     ) -> PyResult<Self> {
-        let (b, raised) = builder(search_paths, conformance, version, nodes_limit, resolver)?;
+        let (b, raised) = builder(
+            search_paths,
+            conformance,
+            version,
+            nodes_limit,
+            max_depth,
+            resolver,
+        )?;
         schema_set(py, compile(py, b.file(path_from(path)?), &raised)?)
     }
 
     /// Loads a schema from a string. The text must already be decoded.
     #[classmethod]
-    #[pyo3(signature = (xsd, *, uri="<string>", search_paths=None, conformance="strict", version="1.0", nodes_limit=None, resolver=None))]
+    #[pyo3(signature = (xsd, *, uri="<string>", search_paths=None, conformance="strict", version="1.0", nodes_limit=None, max_depth=None, resolver=None))]
     fn from_string(
         _cls: &Bound<'_, PyType>,
         py: Python<'_>,
@@ -515,9 +527,17 @@ impl PySchemaSet {
         conformance: &str,
         version: &str,
         nodes_limit: Option<u32>,
+        max_depth: Option<u32>,
         resolver: Option<Py<PyAny>>,
     ) -> PyResult<Self> {
-        let (b, raised) = builder(search_paths, conformance, version, nodes_limit, resolver)?;
+        let (b, raised) = builder(
+            search_paths,
+            conformance,
+            version,
+            nodes_limit,
+            max_depth,
+            resolver,
+        )?;
         schema_set(py, compile(py, b.text(xsd, uri), &raised)?)
     }
 
@@ -526,7 +546,7 @@ impl PySchemaSet {
     /// Prefer this over `from_string` when the encoding is not known to be
     /// UTF-8: a byte-order mark or the XML declaration decides it.
     #[classmethod]
-    #[pyo3(signature = (data, *, uri="<bytes>", search_paths=None, conformance="strict", version="1.0", nodes_limit=None, resolver=None))]
+    #[pyo3(signature = (data, *, uri="<bytes>", search_paths=None, conformance="strict", version="1.0", nodes_limit=None, max_depth=None, resolver=None))]
     fn from_bytes(
         _cls: &Bound<'_, PyType>,
         py: Python<'_>,
@@ -536,9 +556,17 @@ impl PySchemaSet {
         conformance: &str,
         version: &str,
         nodes_limit: Option<u32>,
+        max_depth: Option<u32>,
         resolver: Option<Py<PyAny>>,
     ) -> PyResult<Self> {
-        let (b, raised) = builder(search_paths, conformance, version, nodes_limit, resolver)?;
+        let (b, raised) = builder(
+            search_paths,
+            conformance,
+            version,
+            nodes_limit,
+            max_depth,
+            resolver,
+        )?;
         schema_set(py, compile(py, b.bytes(data, uri), &raised)?)
     }
 
@@ -1068,7 +1096,7 @@ impl PySchemaSet {
                         None => None,
                     };
                     attrs.push(PyAttributeValue {
-                        name: name_of(a.name),
+                        name: psvi_name_of(&a.name),
                         declaration: a.declaration.map(|id| PyAttribute {
                             s: self.inner.clone(),
                             id,
@@ -2985,10 +3013,13 @@ fn open_element<'a, 'py>(
             Some(v) => value_to_py(py, v)?,
             None => a.lexical.clone().into_bound_py_any(py)?,
         };
-        attrs.push((
-            format!("@{}", decoded_key(schemas, a.name, &shape.attr_clark)),
-            value,
-        ));
+        // A name the schema never declared arrived through a wildcard, and
+        // keeps its full name for the same reason a child element does.
+        let key = match a.name.qname() {
+            Some(q) => decoded_key(schemas, q, &shape.attr_clark),
+            None => schemas.display_psvi_name(&a.name),
+        };
+        attrs.push((format!("@{key}"), value));
     }
 
     // `xsi:nil` is the document saying there is no value, which is not the
@@ -3561,7 +3592,7 @@ fn loaded(compilation: Compilation) -> (PySchemaSet, Vec<PyDiagnostic>) {
 /// Use this when a schema is expected to be imperfect — a vendor schema with
 /// dangling imports, say — and you want the components anyway.
 #[pyfunction]
-#[pyo3(signature = (path, *, search_paths=None, conformance="lax", version="1.0", nodes_limit=None, resolver=None))]
+#[pyo3(signature = (path, *, search_paths=None, conformance="lax", version="1.0", nodes_limit=None, max_depth=None, resolver=None))]
 fn load(
     py: Python<'_>,
     path: &Bound<'_, PyAny>,
@@ -3569,16 +3600,24 @@ fn load(
     conformance: &str,
     version: &str,
     nodes_limit: Option<u32>,
+    max_depth: Option<u32>,
     resolver: Option<Py<PyAny>>,
 ) -> PyResult<(PySchemaSet, Vec<PyDiagnostic>)> {
-    let (b, raised) = builder(search_paths, conformance, version, nodes_limit, resolver)?;
+    let (b, raised) = builder(
+        search_paths,
+        conformance,
+        version,
+        nodes_limit,
+        max_depth,
+        resolver,
+    )?;
     let (compilation, _) = compile(py, b.file(path_from(path)?), &raised)?;
     Ok(loaded(compilation))
 }
 
 /// The same, from a string.
 #[pyfunction]
-#[pyo3(signature = (xsd, *, uri="<string>", search_paths=None, conformance="lax", version="1.0", nodes_limit=None, resolver=None))]
+#[pyo3(signature = (xsd, *, uri="<string>", search_paths=None, conformance="lax", version="1.0", nodes_limit=None, max_depth=None, resolver=None))]
 fn load_string(
     py: Python<'_>,
     xsd: String,
@@ -3587,9 +3626,17 @@ fn load_string(
     conformance: &str,
     version: &str,
     nodes_limit: Option<u32>,
+    max_depth: Option<u32>,
     resolver: Option<Py<PyAny>>,
 ) -> PyResult<(PySchemaSet, Vec<PyDiagnostic>)> {
-    let (b, raised) = builder(search_paths, conformance, version, nodes_limit, resolver)?;
+    let (b, raised) = builder(
+        search_paths,
+        conformance,
+        version,
+        nodes_limit,
+        max_depth,
+        resolver,
+    )?;
     let (compilation, _) = compile(py, b.text(xsd, uri), &raised)?;
     Ok(loaded(compilation))
 }

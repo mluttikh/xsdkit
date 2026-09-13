@@ -66,10 +66,17 @@ automata. It does not build a DOM, so memory is proportional to nesting depth
 rather than document size, and a large document does not have to fit in memory
 twice.
 
-`iter_typed` costs essentially nothing beyond `validate`: the validator already
-computed the type and value of everything it checked, so the typed events are
-work you are being given rather than work being done again. Reading a document
-for its values and validating it are the same pass.
+In Rust, typed events cost little beyond validating: the validator already
+computed the type and value of everything it checked, so `validate_with`'s
+events are work you are being given rather than work being done again. Reading
+a document for its values and validating it are the same pass.
+
+From Python each event becomes an object, and that is not free. On a 5.9 MB
+document `read_typed(on_event=...)` took 2.0× as long as `validate`, and
+`iter_typed` 2.1×. `iter_typed` also builds every event before returning the
+first, so it holds all of them at once: 648 MB for a 23.6 MB document, against
+16 MB for `validate` or for the `on_event` callback. Use the callback for large
+documents.
 
 ## Where the remaining time goes
 
