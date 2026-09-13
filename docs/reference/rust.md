@@ -28,6 +28,7 @@ re-exported there, it is not part of the compatibility promise.
 | [`refs`](../rust/xsdkit/refs/index.html) | The navigable view: `ElementRef`, `TypeRef`, `ChildRef` |
 | [`content`](../rust/xsdkit/content/index.html) | Content models, matching, UPA |
 | [`instance`](../rust/xsdkit/instance/index.html) | Streaming validation and the PSVI |
+| [`decode`](../rust/xsdkit/decode/index.html) | A validated document as a typed tree, every qualified name kept |
 | [`values`](../rust/xsdkit/values/index.html) | Typed values and facet checking |
 | [`atomic`](../rust/xsdkit/atomic/index.html) | The 14 datatypes implemented from the specification |
 | [`datatypes`](../rust/xsdkit/datatypes/index.html) | The 50 built-ins and their derivation graph |

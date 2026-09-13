@@ -136,7 +136,7 @@ in.
 | Code | Meaning |
 |---|---|
 | `XSD1301` | A simple type is `list` and `union` and `restriction` at once |
-| `XSD1302` | `minOccurs` / `maxOccurs` are not a legal range |
+| `XSD1302` | An illegal occurrence: `minOccurs` above `maxOccurs`, or an `xs:all` group where, or as often as, it may not appear |
 | `XSD1303` | A type is defined two incompatible ways |
 | `XSD1304` | The content model violates Unique Particle Attribution |
 | `XSD1305` | A facet that does not apply to this type |

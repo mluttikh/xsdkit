@@ -68,10 +68,13 @@
 //! `import`, `redefine` and `override` (chameleon includes included),
 //! reference resolution, attribute group flattening, substitution-group
 //! closure, content-model automata with UPA, and streaming instance
-//! validation with a typed PSVI.
+//! validation with a typed PSVI — identity constraints and `xs:ID` /
+//! `xs:IDREF` included.
 //!
 //! XSD 1.1 is opt-in via [`Version::Xsd11`]: `openContent`,
-//! `defaultAttributes` and the relaxed UPA rule.
+//! `defaultAttributes`, `vc:` conditional inclusion, `notNamespace` and
+//! `notQName`, `xs:precisionDecimal`, the relaxed `xs:all` rules and the
+//! relaxed UPA rule.
 //!
 //! Not yet: XSD 1.1 assertions and conditional type assignment, both of
 //! which need an XPath 2.0 evaluator.

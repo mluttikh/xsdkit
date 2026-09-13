@@ -118,19 +118,24 @@ to a value satisfies both, so this follows the specification and reports the
 duplicate. Both are 1.1-only groups, which is why that row is empty in the 1.0
 column.
 
-The false *acceptances* are what is left of the same measurement, taken by
-test set rather than assumed. Identity constraints (`xs:key`, `xs:keyref`,
-`xs:unique`, and `xs:ID` uniqueness) are the largest group, at about 80; they
-are read into the model and not enforced. XSD 1.1 **assertions** account for
-around 70 and **conditional type assignment** for 13 — both stored,
-unevaluated, and both waiting on an XPath 2.0 subset.
+The false *acceptances* — invalid documents we pass — are 26 as 1.0 and 156
+as 1.1, and by test set they are mostly the two features this version stores
+and never evaluates. XSD 1.1 **assertions** are 67 of them (`Assert` 43,
+`assertion` 24) and **conditional type assignment** 15 (`CTA` 10,
+`TypeAlternativeTests` 5), both waiting on an XPath 2.0 subset. After those
+come `vc:` conditional inclusion (13) and open content (11), which are
+implemented and whose remaining misses have not been examined.
 
-Until recently the biggest group was none of those: 150 documents from the
-NIST datatype sets, which wrap the element under test in
-`<xs:any processContents="strict"/>`. Every wildcard behaved as `skip`, so
-nothing inside one was checked and those tests passed vacuously on the valid
-side while failing to catch anything on the invalid side. `processContents`
-is now honoured, which is where the jump in this row comes from.
+Identity constraints used to lead this list, at about 80 documents, when they
+were read into the model and not enforced. They are enforced now: three
+`xs:key`/`xs:unique` documents remain in each version, and six `xs:ID` cases
+in 1.1.
+
+Before that, the biggest group was 150 documents from the NIST datatype sets,
+which wrap the element under test in `<xs:any processContents="strict"/>`.
+Every wildcard behaved as `skip`, so nothing inside one was checked and those
+tests passed vacuously on the valid side while failing to catch anything on
+the invalid side. `processContents` is now honoured.
 
 ## Which rules, rather than how many cases
 
@@ -178,6 +183,9 @@ doing — which is a decision you can only make with the numbers in front of you
 - **Fuzzing** — four `cargo-fuzz` targets covering the loader, the pattern
   transpiler, value parsing and instance validation, seeded from the W3C
   corpus. Every finding has a named regression test.
+- **One fixture pair per rule.** For each rule in [the spec-rule
+  table](spec-rules.md) that has them, the smallest schema that breaks it and a
+  near-miss that must still load — the half the suite cannot supply.
 - **The schema for schemas.** XSD's own schema is a fixture, because it uses
   nearly every feature and no synthetic test exercises the combinations it
   does.

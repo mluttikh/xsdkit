@@ -183,6 +183,12 @@ absorbed into its includer's namespace. The same file included by two
 different namespaces yields two distinct sets of components, which is the
 behaviour the specification requires and a classic source of bugs.
 
+The namespace rules around that are enforced as well. An `xs:include` of a
+document that declares a *different* target namespace is an error
+(`XSD1102`) — pulling in another namespace is what `xs:import` is for — and an
+`xs:import` whose document does not declare the namespace it named is another
+(`XSD1103`), which is usually a `schemaLocation` pointing at the wrong file.
+
 ```python
 for d in schemas.documents:
     print(d.uri, d.target_namespace, "chameleon" if d.chameleon else "")
@@ -266,7 +272,7 @@ Python interpreter started per request — the `serde` feature makes a compiled
 is a load.
 
 ```toml
-xsdkit = { version = "0.1", features = ["serde"] }
+xsdkit = { version = "0.2", features = ["serde"] }
 ```
 
 ```rust

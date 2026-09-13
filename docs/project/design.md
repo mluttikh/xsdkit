@@ -98,5 +98,5 @@ consumer can be written against it — `Annotation::appinfo` verbatim, the
 | ✅ | Instance validation, typed reading (PSVI) | done |
 | ✅ | `redefine` / `override` | done |
 | ✅ | XSD 1.1 open content, default attributes, relaxed UPA | done |
+| ✅ | Identity constraints, `xs:ID` / `xs:IDREF` | done |
 | → | **XSD 1.1 assertions and conditional type assignment** | next |
-| | Identity constraint enforcement | |

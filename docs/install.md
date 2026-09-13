@@ -1,12 +1,5 @@
 # Installation
 
-!!! note "Not yet published"
-
-    `xsdkit` has not been released to [crates.io](https://crates.io) or
-    [PyPI](https://pypi.org) yet. The commands in the first tab of each block
-    are what installation *will* look like; until then, install from the
-    repository.
-
 ## Python
 
 === "From PyPI"
@@ -21,7 +14,7 @@
     pip install "git+https://github.com/mluttikh/xsdkit"
     ```
 
-    A Rust toolchain is needed to build from source; wheels will not require one.
+    A Rust toolchain is needed to build from source; the published wheels do not need one.
 
 Python 3.9 and newer. The extension is built against the stable ABI
 (`abi3`), so one wheel per platform serves every supported Python — upgrading
@@ -81,7 +74,7 @@ at a clone and the suite runs; leave it unset and those tests skip.
 git clone --depth 1 https://github.com/w3c/xsdtests /tmp/xsdtests
 export XSDTESTS=/tmp/xsdtests
 
-cargo test --test w3c_suite -- --nocapture   # both halves, ~20 seconds
+cargo test --test w3c_suite -- --nocapture   # both halves, ~35 seconds
 ```
 
 Both halves are scored against a committed per-case baseline in
