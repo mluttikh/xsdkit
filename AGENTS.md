@@ -1071,9 +1071,9 @@ practice, since each was a real complaint:
   path-shaped goes through `os.fspath`. A caller has a `Path` and a file read
   in binary; refusing either is friction with no upside.
 - **Iterators, not callbacks.** `iter_typed` composes with `enumerate`,
-  `itertools` and generator expressions; `on_event=` composes with nothing.
-  A return type that changes with an argument — `list | None` decided by a
-  keyword — is worse still.
+  `itertools` and generator expressions, where a callback composes with
+  nothing, so `read_typed` takes none. A return type that changes with an
+  argument — `list | None` decided by a keyword — is worse still.
 - **Every Rust knob needs a keyword.** `version=` was missing for a long time,
   which made the whole XSD 1.1 implementation unreachable from Python without
   anyone noticing.
@@ -1153,8 +1153,18 @@ practice, since each was a real complaint:
   through the decimal's digits, never a float. `xs:float` widens through its
   shortest decimal.
 - **Release the GIL only where no Python is called.** `validate()` detaches;
-  `read_typed()` cannot, because every event becomes a Python object and
-  `on_event` is Python code.
+  `read_typed()` cannot, because every event becomes a Python object as it
+  arrives. `iter_typed()` validates on a worker thread that never touches
+  Python, and `__next__` waits for its next batch detached — without holding
+  the iteration's lock, which a second thread would otherwise block on while
+  holding the GIL the first one needs back.
+- **`iter_typed` streams through a worker thread.** The validator pushes events
+  into a callback, and an iterator pulls: the worker runs `validate_until` and
+  sends events over a bounded channel 256 at a time, and `__next__` makes the
+  Python objects. Memory stays flat. When the iterator is dropped the next send
+  fails, the sink breaks, and the worker stops rather than validating the rest
+  for nobody. `report` raises until the stream has ended, because validity is
+  only known at the end of a document.
 - **Nothing in the bindings may recurse once per level of a document.** A
   valid document is allowed to be deep, and a native stack overflow kills the
   interpreter with no exception to catch. `decode` converts with an explicit

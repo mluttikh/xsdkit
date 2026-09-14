@@ -171,8 +171,9 @@ for ev in schemas.iter_typed(open("report.xml").read()):
 ```
 
 Values arrive as native Python types, not strings to re-parse. `iter_typed`
-composes with `enumerate`, `itertools` and generator expressions, and carries
-the outcome on its `.report` — before the loop as well as after.
+composes with `enumerate`, `itertools` and generator expressions, reads the
+document as it validates it so memory stays flat, and carries the outcome on
+its `.report` once the loop has ended.
 
 XSD 1.1 is opt-in, as it is in Rust, and documents may be bytes whose encoding
 is detected rather than assumed:

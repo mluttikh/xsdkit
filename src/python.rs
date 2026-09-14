@@ -293,58 +293,170 @@ fn conformance_from(s: &str) -> PyResult<Conformance> {
     }
 }
 
-/// Walks the PSVI events of one document.
+/// How many events the worker behind `iter_typed` sends at a time.
 ///
-/// The events are produced eagerly and handed out one at a time. Validation is
-/// a single pass that has to reach the end of the document to know whether the
-/// content model was satisfied, so there is nothing to gain by deferring it.
-/// What this buys is the *shape* Python expects — `for ev in ...` rather than a
-/// callback — so `enumerate`, `zip`, `itertools` and generator expressions all
-/// work on it.
-#[pyclass(name = "PsviEvents", module = "xsdkit")]
+/// One at a time, every event would cost a wake-up on each side and a trip
+/// through the GIL; a batch keeps that off the per-event path, and still holds
+/// only a few hundred events between the validator and the loop.
+const EVENT_BATCH: usize = 256;
+
+/// What the worker behind `iter_typed` sends: events, then the outcome.
+enum Streamed {
+    Events(Vec<RustPsvi>),
+    Done(PyValidationReport),
+}
+
+/// Where an iteration stands.
+enum Stream {
+    /// Validation is running on its worker thread.
+    Reading {
+        batches: std::sync::mpsc::Receiver<Streamed>,
+        worker: std::thread::JoinHandle<()>,
+    },
+    /// Another thread is waiting in `__next__` for the next batch.
+    Busy,
+    /// Every event has been handed out.
+    Finished(PyValidationReport),
+    /// The worker panicked, so there is no outcome to give.
+    Failed(String),
+}
+
+struct Iteration {
+    /// Events received and not yet handed out.
+    pending: std::collections::VecDeque<RustPsvi>,
+    stream: Stream,
+}
+
+/// Walks the PSVI events of one document, as it is validated.
+///
+/// The validator pushes events into a callback, and Python wants to pull them
+/// in a `for` loop, so validation runs on a thread of its own and sends events
+/// over a bounded channel. Memory stays flat however large the document is,
+/// where building every event first held 718 MB for a 26 MB document. When
+/// the iterator goes away the worker's next send fails and it stops reading,
+/// rather than validating the rest of the document for nobody.
+#[pyclass(name = "PsviEvents", module = "xsdkit", frozen)]
 pub struct PyPsviEvents {
-    events: Vec<Py<PyPsviEvent>>,
-    at: usize,
-    valid: bool,
-    diagnostics: Vec<PyDiagnostic>,
+    schemas: PySchemaSet,
+    iteration: Mutex<Iteration>,
+}
+
+impl PyPsviEvents {
+    /// An iteration with nothing to read, only an outcome.
+    fn finished(schemas: PySchemaSet, report: PyValidationReport) -> Self {
+        Self {
+            schemas,
+            iteration: Mutex::new(Iteration {
+                pending: std::collections::VecDeque::new(),
+                stream: Stream::Finished(report),
+            }),
+        }
+    }
+
+    fn state(&self) -> MutexGuard<'_, Iteration> {
+        self.iteration
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+    }
+}
+
+/// What a panicking worker said, as far as it can be read.
+fn panic_message(payload: &(dyn std::any::Any + Send)) -> String {
+    payload
+        .downcast_ref::<&str>()
+        .map(|s| s.to_string())
+        .or_else(|| payload.downcast_ref::<String>().cloned())
+        .unwrap_or_else(|| "validation panicked".to_string())
 }
 
 #[pymethods]
 impl PyPsviEvents {
-    fn __iter__(slf: PyRef<'_, Self>) -> PyRef<'_, Self> {
+    fn __iter__(slf: Py<Self>) -> Py<Self> {
         slf
     }
 
-    fn __next__(mut slf: PyRefMut<'_, Self>) -> Option<Py<PyPsviEvent>> {
-        let at = slf.at;
-        let out = Python::attach(|py| slf.events.get(at).map(|e| e.clone_ref(py)));
-        slf.at += 1;
-        out
+    fn __next__<'py>(&self, py: Python<'py>) -> PyResult<Option<Bound<'py, PyPsviEvent>>> {
+        loop {
+            let (batches, worker) = {
+                let mut state = self.state();
+                if let Some(event) = state.pending.pop_front() {
+                    drop(state);
+                    return self.schemas.psvi_to_py(py, event).map(Some);
+                }
+                match std::mem::replace(&mut state.stream, Stream::Busy) {
+                    Stream::Reading { batches, worker } => (batches, worker),
+                    Stream::Busy => {
+                        return Err(PyValueError::new_err(
+                            "these events are already being read in another thread",
+                        ));
+                    }
+                    done => {
+                        state.stream = done;
+                        return Ok(None);
+                    }
+                }
+            };
+            // The lock is not held while waiting: a second thread calling
+            // `__next__` would block on it holding the GIL, which this thread
+            // needs back to finish.
+            let (batches, received) = py.detach(move || {
+                let received = batches.recv();
+                (batches, received)
+            });
+            let mut state = self.state();
+            match received {
+                Ok(Streamed::Events(events)) => {
+                    state.pending.extend(events);
+                    state.stream = Stream::Reading { batches, worker };
+                }
+                Ok(Streamed::Done(report)) => {
+                    let _ = worker.join();
+                    state.stream = Stream::Finished(report);
+                    return Ok(None);
+                }
+                // The worker hung up without an outcome, which it only does by
+                // panicking.
+                Err(_) => {
+                    let why = match worker.join() {
+                        Err(payload) => panic_message(&*payload),
+                        Ok(()) => "validation ended without an outcome".to_string(),
+                    };
+                    state.stream = Stream::Failed(why.clone());
+                    return Err(pyo3::panic::PanicException::new_err(why));
+                }
+            }
+        }
     }
 
-    /// How many events are left.
-    fn __len__(&self) -> usize {
-        self.events.len().saturating_sub(self.at)
-    }
-
-    /// The outcome, available before the events are consumed as well as after.
+    /// The outcome, once every event has been read.
     ///
-    /// A document can be read for its values and still be invalid, so this is
-    /// not something to discover only once the loop has ended.
+    /// Whether a document is valid is only known at its end, which is where
+    /// this is too. Raises `RuntimeError` before then; to know first, call
+    /// `validate`.
     #[getter]
-    fn report(&self) -> PyValidationReport {
-        PyValidationReport {
-            valid: self.valid,
-            diagnostics: self.diagnostics.clone(),
+    fn report(&self) -> PyResult<PyValidationReport> {
+        match &self.state().stream {
+            Stream::Finished(report) => Ok(PyValidationReport {
+                valid: report.valid,
+                diagnostics: report.diagnostics.clone(),
+            }),
+            Stream::Failed(why) => Err(pyo3::exceptions::PyRuntimeError::new_err(format!(
+                "validation did not finish: {why}"
+            ))),
+            _ => Err(pyo3::exceptions::PyRuntimeError::new_err(
+                "the report is ready once every event has been read; to know whether a \
+                 document is valid before reading it, call validate()",
+            )),
         }
     }
 
     fn __repr__(&self) -> String {
-        format!(
-            "<PsviEvents {} remaining, {}>",
-            self.__len__(),
-            if self.valid { "valid" } else { "invalid" }
-        )
+        match &self.state().stream {
+            Stream::Finished(r) if r.valid => "<PsviEvents finished, valid>".to_string(),
+            Stream::Finished(_) => "<PsviEvents finished, invalid>".to_string(),
+            Stream::Failed(_) => "<PsviEvents failed>".to_string(),
+            _ => "<PsviEvents reading>".to_string(),
+        }
     }
 }
 
@@ -1333,118 +1445,120 @@ impl PySchemaSet {
         out
     }
 
-    /// Reads a document into typed PSVI events, as an iterator.
+    /// Reads a document into typed PSVI events, as it is validated.
     ///
-    /// The iterator form of `read_typed`, and the one to reach for:
-    /// `for ev in schemas.iter_typed(xml)` composes with everything Python
-    /// has for iterables, where a callback composes with nothing. The outcome
-    /// is on the iterator's `report`, before or after the loop.
+    /// `for ev in schemas.iter_typed(xml)` composes with everything Python has
+    /// for iterables. Validation runs on a thread of its own and hands events
+    /// over a batch at a time, so memory stays flat however large the
+    /// document is, and an iterator dropped part way stops the reading.
     ///
-    /// Every event is built before the first is returned, so memory grows
-    /// with the document. For one too large to hold that way, pass `on_event`
-    /// to `read_typed` instead.
+    /// The outcome is on `report` once every event has been read. To know
+    /// whether a document is valid before reading it, call `validate`.
     #[pyo3(signature = (xml, *, uri=None))]
-    fn iter_typed(
+    fn iter_typed(&self, xml: &Bound<'_, PyAny>, uri: Option<&str>) -> PyResult<PyPsviEvents> {
+        let doc = read_instance(xml, uri)?;
+        let schemas = PySchemaSet {
+            inner: self.inner.clone(),
+        };
+        let text = match doc.text {
+            Ok(text) => text,
+            // Nothing to read: finished before it starts, with the diagnostic
+            // saying why.
+            Err(d) => {
+                return Ok(PyPsviEvents::finished(
+                    schemas,
+                    PyValidationReport::undecodable(d),
+                ));
+            }
+        };
+        let inner = self.inner.clone();
+        let uri = doc.uri;
+        let (sender, batches) = std::sync::mpsc::sync_channel(1);
+        let worker = std::thread::Builder::new()
+            .name("xsdkit-iter-typed".to_string())
+            .spawn(move || {
+                let mut batch = Vec::with_capacity(EVENT_BATCH);
+                let report = inner
+                    .document_validator()
+                    .validate_until(&text, &uri, |event| {
+                        batch.push(event);
+                        if batch.len() < EVENT_BATCH {
+                            return std::ops::ControlFlow::Continue(());
+                        }
+                        let full = std::mem::replace(&mut batch, Vec::with_capacity(EVENT_BATCH));
+                        // A send fails only once the iterator is gone, and
+                        // then nobody is reading: stop.
+                        match sender.send(Streamed::Events(full)) {
+                            Ok(()) => std::ops::ControlFlow::Continue(()),
+                            Err(_) => std::ops::ControlFlow::Break(()),
+                        }
+                    });
+                if !batch.is_empty() && sender.send(Streamed::Events(batch)).is_err() {
+                    return;
+                }
+                let valid = report.is_valid();
+                let _ = sender.send(Streamed::Done(PyValidationReport {
+                    valid,
+                    diagnostics: report.diagnostics.into_iter().map(PyDiagnostic).collect(),
+                }));
+            })
+            .map_err(|e| {
+                PyOSError::new_err(format!("cannot start a thread to read the document: {e}"))
+            })?;
+        Ok(PyPsviEvents {
+            schemas,
+            iteration: Mutex::new(Iteration {
+                pending: std::collections::VecDeque::new(),
+                stream: Stream::Reading { batches, worker },
+            }),
+        })
+    }
+
+    /// Reads a document into typed PSVI events, all at once.
+    ///
+    /// Returns `(events, report)`: every event, as a list, and the outcome.
+    /// Memory grows with the document; `iter_typed` reads one of any size.
+    #[pyo3(signature = (xml, *, uri=None))]
+    fn read_typed<'py>(
         &self,
-        py: Python<'_>,
+        py: Python<'py>,
         xml: &Bound<'_, PyAny>,
         uri: Option<&str>,
-    ) -> PyResult<PyPsviEvents> {
+    ) -> PyResult<(Vec<Bound<'py, PyPsviEvent>>, PyValidationReport)> {
         let doc = read_instance(xml, uri)?;
         let text = match doc.text {
             Ok(text) => text,
-            Err(d) => {
-                return Ok(PyPsviEvents {
-                    events: Vec::new(),
-                    at: 0,
-                    valid: false,
-                    diagnostics: vec![PyDiagnostic(d)],
-                });
-            }
+            Err(d) => return Ok((Vec::new(), PyValidationReport::undecodable(d))),
         };
-        let mut events: Vec<Py<PyPsviEvent>> = Vec::new();
+        let mut events = Vec::new();
         let mut failed: Option<PyErr> = None;
+        // The GIL is held throughout, because each event becomes a Python
+        // object as it arrives: collecting the Rust events first would hold
+        // the whole document's worth twice.
         let report = self
             .inner
             .document_validator()
-            .validate_named(&text, &doc.uri, |ev| {
-                if failed.is_some() {
-                    return;
+            .validate_until(&text, &doc.uri, |event| match self.psvi_to_py(py, event) {
+                Ok(obj) => {
+                    events.push(obj);
+                    std::ops::ControlFlow::Continue(())
                 }
-                match self.psvi_to_py(py, ev) {
-                    Ok(obj) => events.push(obj.unbind()),
-                    Err(e) => failed = Some(e),
+                Err(e) => {
+                    failed = Some(e);
+                    std::ops::ControlFlow::Break(())
                 }
             });
         if let Some(e) = failed {
             return Err(e);
         }
-        Ok(PyPsviEvents {
-            events,
-            at: 0,
-            valid: report.is_valid(),
-            diagnostics: report.diagnostics.into_iter().map(PyDiagnostic).collect(),
-        })
-    }
-
-    /// Reads a document into typed PSVI events, collected or streamed.
-    ///
-    /// Prefer `iter_typed`, which is the same thing in the shape Python
-    /// expects. This form exists for feeding a callback that already exists,
-    /// and returns the events as a list, or `None` in their place when
-    /// `on_event` took them.
-    #[pyo3(signature = (xml, *, on_event=None, uri=None))]
-    fn read_typed(
-        &self,
-        py: Python<'_>,
-        xml: &Bound<'_, PyAny>,
-        on_event: Option<Bound<'_, PyAny>>,
-        uri: Option<&str>,
-    ) -> PyResult<(Option<Vec<Py<PyPsviEvent>>>, PyValidationReport)> {
-        let doc = read_instance(xml, uri)?;
-        let text = match doc.text {
-            Ok(text) => text,
-            Err(d) => {
-                return Ok((
-                    on_event.is_none().then(Vec::new),
-                    PyValidationReport::undecodable(d),
-                ));
-            }
-        };
-        let mut collected: Vec<Py<PyPsviEvent>> = Vec::new();
-        let mut callback_error: Option<PyErr> = None;
-
-        // The GIL is held throughout: every event becomes a Python object,
-        // and `on_event` is Python code.
-        let report = self
-            .inner
-            .document_validator()
-            .validate_named(&text, &doc.uri, |ev| {
-                if callback_error.is_some() {
-                    return;
-                }
-                match self.psvi_to_py(py, ev) {
-                    Ok(obj) => match &on_event {
-                        Some(f) => {
-                            if let Err(e) = f.call1((obj,)) {
-                                callback_error = Some(e);
-                            }
-                        }
-                        None => collected.push(obj.unbind()),
-                    },
-                    Err(e) => callback_error = Some(e),
-                }
-            });
-        if let Some(e) = callback_error {
-            return Err(e);
-        }
-
         let valid = report.is_valid();
-        let py_report = PyValidationReport {
-            valid,
-            diagnostics: report.diagnostics.into_iter().map(PyDiagnostic).collect(),
-        };
-        Ok((on_event.is_none().then_some(collected), py_report))
+        Ok((
+            events,
+            PyValidationReport {
+                valid,
+                diagnostics: report.diagnostics.into_iter().map(PyDiagnostic).collect(),
+            },
+        ))
     }
 
     /// Component counts, for diagnostics and smoke tests.

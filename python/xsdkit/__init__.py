@@ -9,9 +9,12 @@
     issued False
     item True
 
-Validating a document, with values arriving as native Python types::
+Reading a document as it is validated, with values arriving as native Python
+types::
 
     >>> events = schemas.iter_typed(open("report.xml").read())
+    >>> [ev.value for ev in events if ev.kind == "text"][:2]
+    ['November orders', datetime.date(2024, 12, 1)]
     >>> events.report.is_valid
     True
 """

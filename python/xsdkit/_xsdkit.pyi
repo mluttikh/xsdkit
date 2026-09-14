@@ -505,16 +505,17 @@ class PsviEvent:
     def line(self) -> int: ...
 
 class PsviEvents:
-    """An iterator over one document's typed events."""
+    """An iterator over one document's typed events, read as it is validated."""
 
     def __iter__(self) -> Iterator[PsviEvent]: ...
     def __next__(self) -> PsviEvent: ...
-    def __len__(self) -> int:
-        """How many events are left."""
     @property
     def report(self) -> ValidationReport:
-        """The outcome, available before the events are consumed as well as
-        after — a document can be read for its values and still be invalid."""
+        """The outcome, once every event has been read.
+
+        Raises ``RuntimeError`` before then. To know whether a document is
+        valid before reading it, call ``SchemaSet.validate``.
+        """
 
 class Tree:
     """Rendered text that knows how to show itself.
@@ -755,29 +756,20 @@ class SchemaSet:
         element the document was.
         """
     def iter_typed(self, xml: Instance, *, uri: str | None = None) -> PsviEvents:
-        """Reads a document into typed PSVI events, as an iterator.
-
-        The iterator form of ``read_typed``, and the one to reach for::
+        """Reads a document into typed PSVI events, as it is validated::
 
             for ev in schemas.iter_typed(xml):
                 ...
 
-        The outcome is on the iterator's ``report``, before or after the loop.
-        Every event is built before the first is returned; for a document too
-        large to hold that way, pass ``on_event`` to ``read_typed``.
+        Memory stays flat however large the document is, and an iterator
+        dropped part way stops the reading. The outcome is on the iterator's
+        ``report`` once every event has been read.
         """
     def read_typed(
-        self,
-        xml: Instance,
-        *,
-        on_event: Callable[[PsviEvent], None] | None = None,
-        uri: str | None = None,
-    ) -> tuple[list[PsviEvent] | None, ValidationReport]:
-        """Reads a document into typed PSVI events.
-
-        Returns the events as a list, or feeds them to ``on_event`` and
-        returns ``None`` in their place.
-        """
+        self, xml: Instance, *, uri: str | None = None
+    ) -> tuple[list[PsviEvent], ValidationReport]:
+        """Reads a document into typed PSVI events, all at once: every event,
+        as a list, and the outcome. Memory grows with the document."""
 
 def load(
     path: str | os.PathLike[str],
