@@ -1116,7 +1116,9 @@ def test_a_root_key_is_spelled_out_when_another_global_shares_its_name(tmp_path)
     assert s.decode('<r xmlns="urn:a">1</r>', root=True) == {"{urn:a}r": 1}
 
 
-@pytest.mark.parametrize("not_xml", ["<a", "report.xml", ""])
+@pytest.mark.parametrize(
+    "not_xml", ["<a", "report.xml", "", f'<a xmlns="{NS}">1</a><a/>', f'<a xmlns="{NS}">1</a>junk']
+)
 def test_lax_decoding_still_refuses_what_is_not_xml(not_xml):
     """`lax=True` returned `None` for text that was not XML at all."""
     s = build('<xs:element name="a" type="xs:int"/>')
