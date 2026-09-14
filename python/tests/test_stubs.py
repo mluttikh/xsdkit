@@ -10,6 +10,8 @@ import doctest
 import pathlib
 import re
 
+import pytest
+
 import xsdkit
 
 STUB = pathlib.Path(xsdkit.__file__).with_name("_xsdkit.pyi")
@@ -327,3 +329,62 @@ def test_docstring_examples_run(monkeypatch):
                 failures.append(f"{where}: {example.source.strip()!r} raised {e!r}")
                 break
     assert not failures, "\n".join(failures)
+
+
+ALIASES = [
+    "Conformance",
+    "ContentKind",
+    "EventKind",
+    "Instance",
+    "ModelKind",
+    "Name",
+    "Resolver",
+    "Severity",
+    "Use",
+    "Variety",
+    "XsdValue",
+    "XsdVersion",
+]
+
+
+def test_the_type_aliases_can_be_imported():
+    """They lived only in the stub: a type checker could read `XsdValue`, and
+    no program could import it to annotate its own code."""
+    from xsdkit import typing as aliases
+
+    assert sorted(aliases.__all__) == ALIASES
+    for name in ALIASES:
+        assert getattr(aliases, name) is not None, name
+
+    # One definition: the stub imports them, and defines none of its own.
+    tree = _stub_tree()
+    assigned = {
+        target.id
+        for node in tree.body
+        if isinstance(node, ast.Assign)
+        for target in node.targets
+        if isinstance(target, ast.Name)
+    }
+    assert not assigned & set(ALIASES), "defined in the stub again"
+    imported = {
+        alias.name
+        for node in tree.body
+        if isinstance(node, ast.ImportFrom) and node.module == "typing" and node.level == 1
+        for alias in node.names
+    }
+    assert imported == set(ALIASES)
+
+
+def test_classes_that_cannot_be_subclassed_are_final():
+    """A type checker allowed `class Mine(xsdkit.Element)`, which fails at import."""
+    finals = {
+        name
+        for name, node in _stub_classes().items()
+        if any(isinstance(d, ast.Name) and d.id == "final" for d in node.decorator_list)
+    }
+    for name, cls in _runtime_classes().items():
+        if issubclass(cls, BaseException):
+            continue
+        with pytest.raises(TypeError):
+            type("Sub", (cls,), {})
+        assert name in finals, f"{name} cannot be subclassed, but the stub does not say so"

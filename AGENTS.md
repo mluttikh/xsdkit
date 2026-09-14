@@ -1092,6 +1092,17 @@ practice, since each was a real complaint:
   `itertools` and generator expressions, where a callback composes with
   nothing, so `read_typed` takes none. A return type that changes with an
   argument — `list | None` decided by a keyword — is worse still.
+- **The stub is checked by stubtest, not only by `test_stubs.py`.** CI runs
+  `python -m mypy.stubtest xsdkit` against the installed wheel. The home-grown
+  test compares names and parameters; stubtest reads the stub the way a type
+  checker does, and found 62 disagreements it had let through. So a class
+  compiled from a `#[pyclass]` without `subclass` is `@final` in the stub, a
+  parameter the stub makes positional-only is positional-only in the
+  `#[pyo3(signature)]` too, and a type alias lives in `xsdkit/typing.py` —
+  a runtime module, so annotated code can import it — which the stub imports
+  without re-exporting. `python/stubtest-allowlist.txt` holds what stubtest
+  gets wrong, with the reason; stubtest fails on an entry that no longer
+  matches, so it cannot outlive the reason.
 - **Every Rust knob needs a keyword.** `version=` was missing for a long time,
   which made the whole XSD 1.1 implementation unreachable from Python without
   anyone noticing.

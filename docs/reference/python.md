@@ -82,3 +82,15 @@ Everything importable from `xsdkit`. Types come from the shipped stubs, so
 ::: xsdkit.ChildIterator
 
 ::: xsdkit.NameIterator
+
+---
+
+## Type aliases
+
+The names the signatures above use, importable for annotating your own code:
+`from xsdkit.typing import XsdValue`.
+
+::: xsdkit.typing
+    options:
+      show_root_heading: false
+      members_order: source
