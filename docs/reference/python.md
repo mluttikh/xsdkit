@@ -19,7 +19,11 @@ Everything importable from `xsdkit`. Types come from the shipped stubs, so
 
 ::: xsdkit.load
 
+::: xsdkit.load_files
+
 ::: xsdkit.load_string
+
+::: xsdkit.load_bytes
 
 ::: xsdkit.Document
 
@@ -61,9 +65,13 @@ Everything importable from `xsdkit`. Types come from the shipped stubs, so
 
 ::: xsdkit.Span
 
+::: xsdkit.XsdError
+
 ::: xsdkit.SchemaError
 
-::: xsdkit.XsdError
+::: xsdkit.DocumentError
+
+::: xsdkit.InvalidValueError
 
 ---
 

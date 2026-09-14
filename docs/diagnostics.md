@@ -86,6 +86,21 @@ report.errors        # errors only
 report.diagnostics   # warnings and notes as well
 ```
 
+### What raises what
+
+| Exception | Raised by |
+|---|---|
+| `SchemaError` | `SchemaSet.from_file`, `from_files`, `from_string` and `from_bytes`, for a schema with errors |
+| `DocumentError` | `decode`, for a document that does not satisfy its schema |
+| `InvalidValueError` | `Type.validate`, for a value its type does not admit; also a `ValueError` |
+| `TypeError` | An argument of the wrong type, such as `schemas.validate(42)` |
+| `OSError` | A document path that cannot be read, such as a missing file |
+
+The first three are `XsdError`s, and `SchemaError` and `DocumentError` carry
+every diagnostic on `.diagnostics`. Bytes that cannot be decoded are an invalid
+document like any other: a diagnostic in the report, and a `DocumentError` from
+`decode`.
+
 ## Strict and lax
 
 `Conformance::Strict` — the default — refuses to hand back a schema that had

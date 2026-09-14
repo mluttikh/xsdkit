@@ -1125,6 +1125,14 @@ practice, since each was a real complaint:
   test found that; keep it. Keep it an empty **tuple**: the default is one
   object shared by every error that sets none, and while it was a list a single
   `e.diagnostics.append(...)` reached every later error.
+- **Errors follow Python's split.** `XsdError` is the base of what is wrong
+  with a schema, a document or a value: `SchemaError`, `DocumentError` from
+  `decode`, and `InvalidValueError` from `Type.validate` — which is also a
+  `ValueError`, built with `type(...)` at module initialisation because
+  `create_exception!` takes one base. A wrong argument type is a `TypeError`,
+  and a document path that cannot be read an `OSError` with its errno and
+  filename, as anywhere else in Python. Bytes that cannot be decoded are an
+  invalid document — a diagnostic in the report — not an exception.
 - **Release the GIL only where no Python is called.** `validate()` detaches;
   `read_typed()` cannot, because every event becomes a Python object and
   `on_event` is Python code.

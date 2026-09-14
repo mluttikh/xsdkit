@@ -39,7 +39,7 @@ Name = str | tuple[str | None, str]
 Resolver = Callable[[str, str | None], bytes | str | tuple[str, bytes | str]]
 
 #: A document to validate: text, or bytes whose encoding xsdkit detects.
-Instance = str | bytes | os.PathLike[str]
+Instance = str | bytes | bytearray | os.PathLike[str]
 """A document: XML as text, as bytes whose encoding is detected, or a path to
 read it from. A ``str`` is always content — a path and a document cannot be
 told apart once both are strings — so pass ``pathlib.Path`` for a file."""
@@ -71,6 +71,12 @@ XsdValue = (
 EventKind = Literal["start", "text", "end"]
 
 class XsdError(Exception):
+    """The base of the errors about schemas, documents and values.
+
+    A wrong argument type raises ``TypeError``, and a document path that cannot
+    be read raises ``OSError``, as they would anywhere else.
+    """
+
     #: Every diagnostic behind the error — from a failed build, or from a
     #: document `decode` refused. Empty rather than absent where a path
     #: raised without any, so reading it is always safe. That empty default
@@ -78,8 +84,20 @@ class XsdError(Exception):
     diagnostics: Sequence[Diagnostic]
 
 class SchemaError(XsdError):
+    """Raised when a schema cannot be built."""
+
     #: Every diagnostic from the failed build, not just the first.
     diagnostics: Sequence[Diagnostic]
+
+class DocumentError(XsdError):
+    """Raised by ``decode`` for a document that does not satisfy its schema."""
+
+    #: Every diagnostic that made the document invalid.
+    diagnostics: Sequence[Diagnostic]
+
+class InvalidValueError(XsdError, ValueError):
+    """Raised by ``Type.validate`` for a lexical form its type does not admit.
+    Also a ``ValueError``."""
 
 class Span:
     @property
@@ -248,7 +266,7 @@ class Element:
         """The attributes this element may carry, with how it may carry them."""
     def _repr_html_(self) -> str:
         """Shows the tree in a notebook, shallower than ``tree()``."""
-    def tree(self, depth: int = ...) -> Tree:
+    def tree(self, depth: int = 3) -> Tree:
         """A readable tree of what may appear inside.
 
         ``?`` optional, ``+`` one or more, ``*`` any number, nothing for
@@ -351,13 +369,13 @@ class Child:
     def __len__(self) -> int: ...
     def __iter__(self) -> Iterator[Child]: ...
     def __getitem__(self, name: Name, /) -> Child: ...
-    def tree(self, depth: int = ...) -> Tree: ...
+    def tree(self, depth: int = 3) -> Tree: ...
     def _repr_html_(self) -> str: ...
 
 class Type:
     """A type definition, simple or complex."""
 
-    def tree(self, depth: int = ...) -> Tree:
+    def tree(self, depth: int = 3) -> Tree:
         """A readable tree of what may appear inside this type."""
     def _repr_html_(self) -> str: ...
 
@@ -396,7 +414,8 @@ class Type:
     def content_model(self) -> ModelKind | None: ...
     def accepts(self, names: Iterable[Name], /) -> bool: ...
     def validate(self, lexical: str, /) -> XsdValue:
-        """Raises ``ValueError`` with the reason when not valid."""
+        """Raises ``InvalidValueError``, also a ``ValueError``, with the reason
+        when not valid."""
     def is_valid(self, lexical: str, /) -> bool: ...
     @property
     def variety(self) -> Variety | None: ...
@@ -540,7 +559,7 @@ class NamedComponents(Generic[_C]):
         """The components, in the same order as ``keys``."""
     def items(self) -> list[tuple[str, _C]]:
         """``(name, component)`` pairs, in the same order as ``keys``."""
-    def get(self, name: Name, default: Any = ...) -> _C | Any:
+    def get(self, name: Name, default: Any = None) -> _C | Any:
         """The component of that name, or ``default`` when there is none."""
 
 class ChildIterator:
@@ -574,12 +593,12 @@ class SchemaSet:
         cls,
         path: str | os.PathLike[str],
         *,
-        search_paths: Sequence[str] | None = ...,
-        conformance: Conformance = ...,
-        version: XsdVersion = ...,
-        nodes_limit: int | None = ...,
-        max_depth: int | None = ...,
-        resolver: Resolver | None = ...,
+        search_paths: Sequence[str | os.PathLike[str]] | None = None,
+        conformance: Conformance = "strict",
+        version: XsdVersion = "1.0",
+        nodes_limit: int | None = None,
+        max_depth: int | None = None,
+        resolver: Resolver | None = None,
     ) -> SchemaSet:
         """Raises `SchemaError` on any error diagnostic.
 
@@ -596,29 +615,45 @@ class SchemaSet:
         cls,
         xsd: str,
         *,
-        uri: str = ...,
-        search_paths: Sequence[str] | None = ...,
-        conformance: Conformance = ...,
-        version: XsdVersion = ...,
-        nodes_limit: int | None = ...,
-        max_depth: int | None = ...,
-        resolver: Resolver | None = ...,
-    ) -> SchemaSet: ...
+        uri: str = "<string>",
+        search_paths: Sequence[str | os.PathLike[str]] | None = None,
+        conformance: Conformance = "strict",
+        version: XsdVersion = "1.0",
+        nodes_limit: int | None = None,
+        max_depth: int | None = None,
+        resolver: Resolver | None = None,
+    ) -> SchemaSet:
+        """Relative ``schemaLocation`` hints resolve against ``uri``; with the
+        default, against the working directory and ``search_paths``."""
     @classmethod
     def from_bytes(
         cls,
         data: bytes,
         *,
-        uri: str = ...,
-        search_paths: Sequence[str] | None = ...,
-        conformance: Conformance = ...,
-        version: XsdVersion = ...,
-        nodes_limit: int | None = ...,
-        max_depth: int | None = ...,
-        resolver: Resolver | None = ...,
+        uri: str = "<bytes>",
+        search_paths: Sequence[str | os.PathLike[str]] | None = None,
+        conformance: Conformance = "strict",
+        version: XsdVersion = "1.0",
+        nodes_limit: int | None = None,
+        max_depth: int | None = None,
+        resolver: Resolver | None = None,
     ) -> SchemaSet:
         """Detects the encoding: byte-order mark, then the XML declaration,
         then UTF-8."""
+    @classmethod
+    def from_files(
+        cls,
+        paths: Iterable[str | os.PathLike[str]],
+        *,
+        search_paths: Sequence[str | os.PathLike[str]] | None = None,
+        conformance: Conformance = "strict",
+        version: XsdVersion = "1.0",
+        nodes_limit: int | None = None,
+        max_depth: int | None = None,
+        resolver: Resolver | None = None,
+    ) -> SchemaSet:
+        """Loads a schema from several root documents into one set. Refuses a
+        single path, and an empty list."""
     def __len__(self) -> int:
         """How many global elements *this schema* declares.
 
@@ -634,7 +669,7 @@ class SchemaSet:
         ordinary answer rather than a mistake."""
     def __iter__(self) -> Iterator[str]:
         """The global element names in Clark notation, sorted."""
-    def get(self, name: Name, default: Any = ...) -> Element | Any:
+    def get(self, name: Name, default: Any = None) -> Element | Any:
         """The global element of that name, or ``default`` when there is none."""
     def keys(self) -> list[str]:
         """The global element names, sorted."""
@@ -662,16 +697,16 @@ class SchemaSet:
     def counts(self) -> dict[str, int]:
         """Component tallies — types, elements, particles and the rest. Counts
         a great deal more than the globals ``len()`` reports."""
-    def element(self, namespace: Name | None, local: str | None = ..., /) -> Element | None: ...
-    def type(self, namespace: Name | None, local: str | None = ..., /) -> Type | None: ...
-    def attribute(self, namespace: Name | None, local: str | None = ..., /) -> Attribute | None: ...
-    def validate(self, xml: Instance, *, uri: str | None = ...) -> ValidationReport:
+    def element(self, namespace: Name | None, local: str | None = None, /) -> Element | None: ...
+    def type(self, namespace: Name | None, local: str | None = None, /) -> Type | None: ...
+    def attribute(self, namespace: Name | None, local: str | None = None, /) -> Attribute | None: ...
+    def validate(self, xml: Instance, *, uri: str | None = None) -> ValidationReport:
         """Validates a document. Never raises for an invalid one — that is an
         answer, not an error.
 
         Diagnostics name ``uri``, or the file when ``xml`` is a path.
         """
-    def decode(self, xml: Instance, *, uri: str | None = ..., lax: bool = ...) -> Any:
+    def decode(self, xml: Instance, *, uri: str | None = None, lax: bool = False) -> Any:
         """Decodes a document into Python data.
 
         Elements become dictionaries and values arrive in their value space::
@@ -692,10 +727,10 @@ class SchemaSet:
         decodes to ``None``, or to ``None`` under ``$`` when the element also
         carries attributes.
 
-        Raises ``XsdError`` if the document is invalid. Pass ``lax=True`` to
-        take the data anyway.
+        Raises ``DocumentError`` if the document is invalid. Pass ``lax=True``
+        to take the data anyway.
         """
-    def iter_typed(self, xml: Instance, *, uri: str | None = ...) -> PsviEvents:
+    def iter_typed(self, xml: Instance, *, uri: str | None = None) -> PsviEvents:
         """Reads a document into typed PSVI events, as an iterator.
 
         The iterator form of ``read_typed``, and the one to reach for::
@@ -711,8 +746,8 @@ class SchemaSet:
         self,
         xml: Instance,
         *,
-        on_event: Callable[[PsviEvent], None] | None = ...,
-        uri: str | None = ...,
+        on_event: Callable[[PsviEvent], None] | None = None,
+        uri: str | None = None,
     ) -> tuple[list[PsviEvent] | None, ValidationReport]:
         """Reads a document into typed PSVI events.
 
@@ -723,24 +758,49 @@ class SchemaSet:
 def load(
     path: str | os.PathLike[str],
     *,
-    search_paths: Sequence[str] | None = ...,
-    conformance: Conformance = ...,
-    version: XsdVersion = ...,
-    nodes_limit: int | None = ...,
-    max_depth: int | None = ...,
-    resolver: Resolver | None = ...,
+    search_paths: Sequence[str | os.PathLike[str]] | None = None,
+    conformance: Conformance = "lax",
+    version: XsdVersion = "1.0",
+    nodes_limit: int | None = None,
+    max_depth: int | None = None,
+    resolver: Resolver | None = None,
 ) -> tuple[SchemaSet, list[Diagnostic]]:
     """Loads a schema and returns it *with* its diagnostics, rather than
     raising. For schemas expected to be imperfect."""
 
+def load_files(
+    paths: Iterable[str | os.PathLike[str]],
+    *,
+    search_paths: Sequence[str | os.PathLike[str]] | None = None,
+    conformance: Conformance = "lax",
+    version: XsdVersion = "1.0",
+    nodes_limit: int | None = None,
+    max_depth: int | None = None,
+    resolver: Resolver | None = None,
+) -> tuple[SchemaSet, list[Diagnostic]]:
+    """The same, from several root documents at once."""
+
 def load_string(
     xsd: str,
     *,
-    uri: str = ...,
-    search_paths: Sequence[str] | None = ...,
-    conformance: Conformance = ...,
-    version: XsdVersion = ...,
-    nodes_limit: int | None = ...,
-    max_depth: int | None = ...,
-    resolver: Resolver | None = ...,
+    uri: str = "<string>",
+    search_paths: Sequence[str | os.PathLike[str]] | None = None,
+    conformance: Conformance = "lax",
+    version: XsdVersion = "1.0",
+    nodes_limit: int | None = None,
+    max_depth: int | None = None,
+    resolver: Resolver | None = None,
 ) -> tuple[SchemaSet, list[Diagnostic]]: ...
+
+def load_bytes(
+    data: bytes,
+    *,
+    uri: str = "<bytes>",
+    search_paths: Sequence[str | os.PathLike[str]] | None = None,
+    conformance: Conformance = "lax",
+    version: XsdVersion = "1.0",
+    nodes_limit: int | None = None,
+    max_depth: int | None = None,
+    resolver: Resolver | None = None,
+) -> tuple[SchemaSet, list[Diagnostic]]:
+    """The same, from bytes whose encoding is detected."""
