@@ -17,22 +17,8 @@ runs, every dual-version group read as both languages — takes **2.4 s**.
 
 Measured on an Apple M-series laptop with a release build. What matters is the
 shape rather than the absolute numbers: doubling the input doubles the time.
-
-??? note "It used to be quadratic"
-
-    Until recently the same measurements read 180 ms, 710 ms and 2.8 s — four
-    times the time for twice the input.
-
-    Every component carries a source span so diagnostics can point at a line,
-    and the loader asked the XML parser for a line number once per
-    declaration. `roxmltree`'s `text_pos_at` counts newlines from the start of
-    the document on **every call**, which is fine once and quadratic when you
-    do it per component. It was, by a wide margin, the whole cost of loading.
-
-    Recording where each line begins once per document and binary-searching it
-    made a 1,600-element schema 350× faster. `tests/performance.rs` now pins
-    the *shape* rather than the speed: four times the input must not cost more
-    than eight times the time. Reintroducing a per-lookup scan makes it fail.
+`tests/performance.rs` holds it to that shape: four times the input may not cost
+more than eight times the time.
 
 ## Build once, query many times
 

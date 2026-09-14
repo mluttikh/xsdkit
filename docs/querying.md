@@ -436,8 +436,7 @@ with twelve substitutes shows all twelve as possible children of its parent.
     The other question, *who is in the group*, is
     `Schemas::substitution_group` in Rust. It ignores `block`, so it can
     report members that no document may use. Reach for it only when you mean
-    the group itself; the two used to be one word apart and picking wrong was
-    a silent wrong answer.
+    the group itself.
 
 ## Next
 

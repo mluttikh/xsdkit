@@ -309,8 +309,8 @@ documents:
 
 | | XSD 1.0 | XSD 1.1 |
 |---|---|---|
-| valid documents accepted | **99.8%** (11,300 / 11,325) | **99.5%** (11,845 / 11,906) |
-| invalid documents rejected | **99.7%** (9,057 / 9,083) | **98.4%** (9,524 / 9,680) |
+| valid documents accepted | **99.8%** (11,308 / 11,325) | **99.6%** (11,862 / 11,906) |
+| invalid documents rejected | **99.7%** (9,057 / 9,083) | **98.3%** (9,515 / 9,680) |
 
 ```bash
 git clone --depth 1 https://github.com/w3c/xsdtests /tmp/xsdtests

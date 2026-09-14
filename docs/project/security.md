@@ -65,9 +65,7 @@ against the wrong scopes past 65,535 levels. A document nested deeper than
 
 Cycles in a schema are legal and common — a type may contain an element of its
 own type — so they are detected rather than forbidden. Every graph walk in the
-library carries a guard; the one that did not, a self-referential `xs:list`
-`itemType`, was a stack overflow and is now a checked error with a regression
-test.
+library carries a guard.
 
 ## Patterns are transpiled, not passed through
 
@@ -91,10 +89,6 @@ CI builds all four on every commit and smoke-runs each for 30 seconds; longer
 campaigns are run locally. Every finding has a named regression test rather
 than only a corpus entry — a crash that is only remembered by a binary blob is
 a crash that comes back.
-
-Findings so far have included an `i128` overflow comparing distant dateTimes, a
-character-boundary panic slicing a malformed `gMonthDay`, and an
-`unreachable!()` reached by `P8TH`. All are fixed and pinned.
 
 ## No `unsafe`
 
