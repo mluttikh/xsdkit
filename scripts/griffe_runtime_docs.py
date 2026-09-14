@@ -36,12 +36,17 @@ class RuntimeDocstrings(griffe.Extension):
 
     def _merge(self, obj: griffe.Object | griffe.Alias, runtime: object) -> None:
         for name, member in obj.members.items():
+            # Private names are not part of the reference. One may also be an
+            # alias into another package — `_abc` for `collections.abc` — which
+            # griffe has not loaded and cannot resolve.
+            if name.startswith("_") and not (name.startswith("__") and name.endswith("__")):
+                continue
             attr = getattr(runtime, name, None)
             if attr is None:
                 continue
             try:
                 self._adopt(member, attr)
-            except AttributeError:
+            except (AttributeError, griffe.AliasResolutionError):
                 # An alias whose target is not loaded has no docstring to set.
                 continue
             if member.is_class:
