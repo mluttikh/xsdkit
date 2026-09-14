@@ -327,14 +327,16 @@ struct Iteration {
     stream: Stream,
 }
 
-/// Walks the PSVI events of one document, as it is validated.
+/// An iterator over one document's typed events, read as it is validated.
 ///
-/// The validator pushes events into a callback, and Python wants to pull them
-/// in a `for` loop, so validation runs on a thread of its own and sends events
-/// over a bounded channel. Memory stays flat however large the document is,
-/// where building every event first held 718 MB for a 26 MB document. When
-/// the iterator goes away the worker's next send fails and it stops reading,
-/// rather than validating the rest of the document for nobody.
+/// Validation runs on a thread of its own, so memory stays flat however large
+/// the document is, and an iterator dropped part way stops the reading. The
+/// outcome is on `report` once every event has been read.
+// The validator pushes events into a callback, and Python wants to pull them
+// in a `for` loop, so validation runs on a worker thread and sends events over
+// a bounded channel. Building every event first held 718 MB for a 26 MB
+// document. When the iterator goes away the worker's next send fails and it
+// stops reading, rather than validating the rest of the document for nobody.
 #[pyclass(name = "PsviEvents", module = "xsdkit", frozen)]
 pub struct PyPsviEvents {
     schemas: PySchemaSet,
@@ -977,6 +979,13 @@ impl PySchemaSet {
 #[pymethods]
 impl PySchemaSet {
     /// Loads a schema from a file, following its includes and imports.
+    ///
+    /// Raises `SchemaError`, carrying every diagnostic, when the schema has
+    /// errors; `load` returns them instead. `version="1.1"` reads XSD 1.1: open
+    /// content, conditional inclusion, assertions on wildcards,
+    /// `xs:precisionDecimal` and the relaxed Unique Particle Attribution rule.
+    /// `max_depth` caps how deeply elements nest in each schema document, 256 by
+    /// default; a deeper document is refused with `XSD1001` rather than parsed.
     #[classmethod]
     #[pyo3(signature = (path, *, search_paths=None, conformance="strict", version="1.0", nodes_limit=None, max_depth=None, resolver=None))]
     fn from_file(
@@ -1002,6 +1011,9 @@ impl PySchemaSet {
     }
 
     /// Loads a schema from a string. The text must already be decoded.
+    ///
+    /// Relative `schemaLocation` hints resolve against `uri`; with the default
+    /// `uri`, against the working directory and `search_paths`.
     #[classmethod]
     #[pyo3(signature = (xsd, *, uri="<string>", search_paths=None, conformance="strict", version="1.0", nodes_limit=None, max_depth=None, resolver=None))]
     fn from_string(
@@ -1060,7 +1072,8 @@ impl PySchemaSet {
     /// includes and imports into one set.
     ///
     /// For a schema with no single root document: a vendor bundle, or a
-    /// directory of XSDs that import one another.
+    /// directory of XSDs that import one another. A single path, or an empty
+    /// list, is refused.
     #[classmethod]
     #[pyo3(signature = (paths, *, search_paths=None, conformance="strict", version="1.0", nodes_limit=None, max_depth=None, resolver=None))]
     fn from_files(
@@ -1562,7 +1575,9 @@ impl PySchemaSet {
         ))
     }
 
-    /// Component counts, for diagnostics and smoke tests.
+    /// Component tallies — types, elements, particles and the rest — for
+    /// diagnostics and smoke tests. Counts a great deal more than the globals
+    /// `len()` reports.
     #[getter]
     fn counts(&self) -> std::collections::BTreeMap<String, usize> {
         let c = self.inner.component_counts();
@@ -1776,6 +1791,10 @@ impl PySchemaSet {
 // ---------------------------------------------------------------------------
 
 /// An element declaration: a name, a type, and how it may appear.
+///
+/// An element behaves as its children — iterable, sized, and subscriptable by
+/// name — so a schema is walked without a `.type` hop at every level:
+/// `report["item"]["price"]`, or `[child.local_name for child in report]`.
 ///
 /// A handle into the schema, not a copy — holding ten thousand of them costs
 /// ten thousand refcounts. Two handles to the same declaration compare equal
@@ -2315,15 +2334,14 @@ pub struct PyChild {
 
 #[pymethods]
 impl PyChild {
-    /// Whether it may appear more than once — the table-versus-column
-    /// question.
+    /// Whether it may appear here more than once, which makes it a list when
+    /// a document is decoded.
     #[getter]
     fn repeats(&self) -> bool {
         self.repeats
     }
 
-    /// Whether some valid content leaves it out, making a derived column
-    /// nullable.
+    /// Whether some valid content leaves it out.
     #[getter]
     fn optional(&self) -> bool {
         self.optional
@@ -2447,6 +2465,7 @@ impl PyChild {
         self.element.tree(depth)
     }
 
+    /// The element's tree, as a notebook shows it.
     #[allow(non_snake_case)]
     fn _repr_html_(&self) -> String {
         self.element._repr_html_()
@@ -2796,9 +2815,11 @@ impl PyType_ {
 
     /// Whether this type is, or derives from, `other`.
     ///
-    /// Always `False` for a type from another `SchemaSet`. A handle is an
-    /// index into one set's arenas, and the same index in another set is an
-    /// unrelated type; comparing them reported derivations that do not exist.
+    /// Always `False` for a type from another `SchemaSet`: a type in one set says
+    /// nothing about a type in another.
+    // A handle is an index into one set's arenas, and the same index in another
+    // set is an unrelated type; comparing them reported derivations that do not
+    // exist.
     #[pyo3(signature = (other, /))]
     fn derives_from(&self, other: &PyType_) -> bool {
         Arc::ptr_eq(&self.s, &other.s) && self.s.derives_from(self.id, other.id)
@@ -4204,10 +4225,11 @@ impl PyValidationReport {
 
     /// A summary line and a table of what was found.
     ///
-    /// The old rendering said only how many diagnostics there were, so seeing
-    /// any of them meant a loop. Long lists are cut off rather than filling
-    /// the notebook: a document that is wrong in four hundred ways is not
-    /// usefully read four hundred lines at a time.
+    /// Long lists are cut off rather than filling the notebook: a document that
+    /// is wrong in four hundred ways is not usefully read four hundred lines at a
+    /// time.
+    // The old rendering said only how many diagnostics there were, so seeing
+    // any of them meant a loop.
     #[allow(non_snake_case)]
     fn _repr_html_(&self) -> String {
         let errors = self.errors().len();
@@ -4331,9 +4353,8 @@ impl PyAttributeValue {
     }
     /// True when the document did not spell this out and the schema supplied
     /// it from a `default` or `fixed` value.
-    ///
-    /// Named `is_from_schema` in Rust so clippy does not read it as a
-    /// constructor; Python sees `from_schema`, which is the right name there.
+    // Named `is_from_schema` in Rust so clippy does not read it as a
+    // constructor; Python sees `from_schema`, which is the right name there.
     #[getter(from_schema)]
     fn is_from_schema(&self) -> bool {
         self.from_schema
@@ -4421,9 +4442,8 @@ impl PyPsviEvent {
     }
     /// Whether the schema supplied this text, because the element was empty
     /// and its declaration had a `default` or `fixed` value.
-    ///
-    /// Named `is_from_schema` in Rust so clippy does not read it as a
-    /// constructor; Python sees `from_schema`.
+    // Named `is_from_schema` in Rust so clippy does not read it as a
+    // constructor; Python sees `from_schema`.
     #[getter(from_schema)]
     fn is_from_schema(&self) -> bool {
         self.from_schema
