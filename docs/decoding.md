@@ -42,7 +42,7 @@ from pathlib import Path
 
 schemas.decode(Path("report.xml"))          # read the file
 schemas.decode(Path("report.xml").read_bytes())
-schemas.decode("report.xml")                # XsdError: this is not a document
+schemas.decode("report.xml")                # DocumentError: this is not a document
 ```
 
 Values arrive in their **value space**, not as strings to re-parse: a
@@ -129,7 +129,7 @@ rather than the document.
 schemas = xsdkit.SchemaSet.from_file("report.xsd")
 bad = '<report xmlns="urn:example" id="r1"><title>t</title></report>'
 
-schemas.decode(bad)          # XsdError
+schemas.decode(bad)          # DocumentError
 ```
 
 The asymmetry is deliberate. `validate` is *asked* whether a document is

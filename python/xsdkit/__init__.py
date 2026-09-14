@@ -25,10 +25,12 @@ from ._xsdkit import (
     AttributeValue,
     Diagnostic,
     Document,
+    DocumentError,
     Child,
     ChildIterator,
     Element,
     Facets,
+    InvalidValueError,
     NamedComponents,
     NameIterator,
     PsviEvent,
@@ -42,6 +44,8 @@ from ._xsdkit import (
     XsdError,
     __version__,
     load,
+    load_bytes,
+    load_files,
     load_string,
 )
 
@@ -52,10 +56,12 @@ __all__ = [
     "AttributeValue",
     "Diagnostic",
     "Document",
+    "DocumentError",
     "Child",
     "ChildIterator",
     "Element",
     "Facets",
+    "InvalidValueError",
     "NamedComponents",
     "NameIterator",
     "PsviEvent",
@@ -69,6 +75,8 @@ __all__ = [
     "XsdError",
     "__version__",
     "load",
+    "load_bytes",
+    "load_files",
     "load_string",
 ]
 

@@ -389,7 +389,7 @@ def test_documents_may_be_bytes():
     # And the encoding is detected rather than assumed.
     latin = f'<?xml version="1.0" encoding="ISO-8859-1"?><a xmlns="{NS}">1</a>'
     assert s.validate(latin.encode("iso-8859-1")).is_valid
-    with pytest.raises(ValueError, match="str, bytes, or a path"):
+    with pytest.raises(TypeError, match="str, bytes or a path, not int"):
         s.validate(42)
 
 
@@ -755,7 +755,8 @@ def test_the_default_diagnostics_cannot_be_polluted():
 
     It was a list, so one `append` reached every later `XsdError`.
     """
-    for cls in (xsdkit.XsdError, xsdkit.SchemaError):
+    errors = (xsdkit.XsdError, xsdkit.SchemaError, xsdkit.DocumentError, xsdkit.InvalidValueError)
+    for cls in errors:
         err = cls("raised by hand")
         assert list(err.diagnostics) == []
         with pytest.raises(AttributeError):
@@ -935,3 +936,109 @@ def test_small_protocols_behave_like_their_python_counterparts():
     assert first == again and len({first, again}) == 1
 
     assert weakref.ref(s)() is s
+
+
+def test_errors_form_one_hierarchy():
+    assert issubclass(xsdkit.SchemaError, xsdkit.XsdError)
+    assert issubclass(xsdkit.DocumentError, xsdkit.XsdError)
+    assert issubclass(xsdkit.InvalidValueError, xsdkit.XsdError)
+    assert issubclass(xsdkit.InvalidValueError, ValueError), "`except ValueError` still catches it"
+
+
+def test_each_mistake_raises_what_python_would(tmp_path):
+    s = build('<xs:element name="a" type="xs:int"/>')
+
+    # A value its type does not admit.
+    with pytest.raises(xsdkit.InvalidValueError):
+        s.type(XS, "int").validate("nope")
+
+    # A document that does not fit, asked for its data.
+    with pytest.raises(xsdkit.DocumentError) as excinfo:
+        s.decode(f'<a xmlns="{NS}">nope</a>')
+    assert excinfo.value.diagnostics
+
+    # An argument of the wrong type.
+    with pytest.raises(TypeError, match="not int"):
+        s.validate(42)
+    with pytest.raises(TypeError, match="not int"):
+        s.element(42)
+
+    # A file that is not there: the error reading any file gives.
+    missing = tmp_path / "missing.xml"
+    with pytest.raises(FileNotFoundError) as excinfo:
+        s.validate(missing)
+    assert excinfo.value.filename == str(missing)
+
+
+def test_bytes_that_cannot_be_decoded_are_an_invalid_document():
+    """Not an exception: `validate` answers, and `decode` refuses."""
+    s = build('<xs:element name="a" type="xs:int"/>')
+    doc = b'<?xml version="1.0" encoding="no-such-encoding"?><a/>'
+
+    report = s.validate(doc)
+    assert not report.is_valid
+    assert report.errors[0].code in {"XSD1006", "XSD1007"}
+    assert not s.iter_typed(doc).report.is_valid
+    events, report = s.read_typed(doc)
+    assert events == [] and not report.is_valid
+    with pytest.raises(xsdkit.DocumentError):
+        s.decode(doc)
+    assert s.decode(doc, lax=True) is None
+
+
+def test_search_paths_take_path_objects_but_not_a_single_path(tmp_path):
+    (tmp_path / "part.xsd").write_text(
+        f'<xs:schema xmlns:xs="{XS}" targetNamespace="{NS}">'
+        '<xs:simpleType name="T"><xs:restriction base="xs:int"/></xs:simpleType>'
+        "</xs:schema>"
+    )
+    main = (
+        f'<xs:schema xmlns:xs="{XS}" xmlns:tns="{NS}" targetNamespace="{NS}">'
+        '<xs:include schemaLocation="part.xsd"/>'
+        '<xs:element name="root" type="tns:T"/></xs:schema>'
+    )
+    assert f"{{{NS}}}root" in xsdkit.SchemaSet.from_string(main, search_paths=[tmp_path])
+    # A string or a Path on its own is one path, not a list of them.
+    for single in (str(tmp_path), tmp_path):
+        with pytest.raises(TypeError, match="not a single path"):
+            xsdkit.SchemaSet.from_string(main, search_paths=single)
+
+
+def test_a_resolver_and_search_paths_are_alternatives(tmp_path):
+    """A resolver replaces the filesystem, so the search paths would go unread."""
+    with pytest.raises(ValueError, match="not both"):
+        xsdkit.SchemaSet.from_string(
+            TWO_INCLUDES, resolver=lambda location, base: b"", search_paths=[tmp_path]
+        )
+
+
+def test_several_root_documents_load_into_one_set(tmp_path):
+    a, b = tmp_path / "a.xsd", tmp_path / "b.xsd"
+    a.write_text(
+        f'<xs:schema xmlns:xs="{XS}" targetNamespace="urn:a">'
+        '<xs:element name="a" type="xs:string"/></xs:schema>'
+    )
+    b.write_text(
+        f'<xs:schema xmlns:xs="{XS}" targetNamespace="urn:b">'
+        '<xs:element name="b" type="xs:string"/></xs:schema>'
+    )
+    assert sorted(xsdkit.SchemaSet.from_files([a, b])) == ["{urn:a}a", "{urn:b}b"]
+
+    schemas, diagnostics = xsdkit.load_files([str(a), b])
+    assert len(schemas) == 2 and diagnostics == []
+
+    with pytest.raises(TypeError, match="not a single path"):
+        xsdkit.SchemaSet.from_files(str(a))
+    with pytest.raises(ValueError, match="at least one"):
+        xsdkit.SchemaSet.from_files([])
+
+
+def test_load_bytes_detects_the_encoding():
+    xsd = (
+        '<?xml version="1.0" encoding="ISO-8859-1"?>'
+        f'<xs:schema xmlns:xs="{XS}" targetNamespace="{NS}">'
+        '<xs:element name="größe" type="xs:string"/></xs:schema>'
+    )
+    schemas, diagnostics = xsdkit.load_bytes(xsd.encode("iso-8859-1"))
+    assert diagnostics == []
+    assert f"{{{NS}}}größe" in schemas

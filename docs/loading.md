@@ -16,7 +16,8 @@ encoding you would rather not guess at.
 
     xsdkit.SchemaSet.from_file("report.xsd")
     # The `uri` is what the document is *treated* as having, which is what a
-    # relative `schemaLocation` inside it resolves against.
+    # relative `schemaLocation` inside it resolves against. Without one,
+    # relative locations resolve against the working directory.
     xsdkit.SchemaSet.from_string(xsd_text, uri="report.xsd")
     xsdkit.SchemaSet.from_bytes(raw, uri="report.xsd")
     ```
@@ -125,7 +126,8 @@ propagate as themselves — Ctrl-C works in a slow resolver.
 !!! warning "A resolver replaces the filesystem"
 
     It is an alternative to `search_paths`, not a layer on top of it. Once you
-    supply one, it is asked for everything, and nothing falls back to disk.
+    supply one, it is asked for everything, and nothing falls back to disk, so
+    passing both is refused with `ValueError`.
 
 === "Rust"
 
@@ -207,13 +209,23 @@ other graph walk in the library — see [Security](project/security.md).
     included `T`, not the one being declared. `xs:override` deliberately has no
     such rule: there, references mean the new components.
 
+## Several root documents
+
+A schema with no single root — a vendor bundle, or a directory of XSDs that
+import one another — loads into one set in one call.
+
+```python,ignore
+schemas = xsdkit.SchemaSet.from_files(["orders.xsd", "invoices.xsd"])
+schemas, diagnostics = xsdkit.load_files(sorted(pathlib.Path("vendor").glob("*.xsd")))
+```
+
 ## Options
 
 Every loader takes the same set.
 
 | Option | Default | Meaning |
 |---|---|---|
-| `search_paths` | none | Directories to try for `schemaLocation` hints |
+| `search_paths` | none | A list of directories, `str` or `Path`, to try for `schemaLocation` hints |
 | `resolver` | filesystem | Replaces resolution entirely |
 | `conformance` | `strict` | `lax` downgrades some errors — see below |
 | `version` | `"1.0"` | `"1.1"` turns on XSD 1.1 — see [XSD 1.1](xsd11.md) |
@@ -240,7 +252,8 @@ keep.
     #   --> vendor/partial.xsd:12
     ```
 
-    `load` and `load_string` return the diagnostics instead of raising.
+    `load`, `load_files`, `load_string` and `load_bytes` return the diagnostics
+    instead of raising.
     `SchemaSet.from_file` raises `SchemaError` — which carries the full list on
     its `.diagnostics` — so use whichever matches whether imperfection is
     expected.

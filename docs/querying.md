@@ -343,7 +343,7 @@ space. Put one through `validate` for the value.
 currency.validate("EUR")     # 'EUR'
 currency.is_valid("ZZZ")     # False
 currency.validate("ZZZ")
-# ValueError: enumeration: `ZZZ` is not one of the 3 permitted values
+# InvalidValueError: enumeration: `ZZZ` is not one of the 3 permitted values
 
 schemas.type("http://www.w3.org/2001/XMLSchema", "date").validate("2024-12-01")
 # datetime.date(2024, 12, 1)

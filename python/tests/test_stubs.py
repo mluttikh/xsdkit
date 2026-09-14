@@ -128,7 +128,7 @@ def test_everything_public_is_documented():
             if not (getattr(obj, "__doc__", None) or "").strip():
                 undocumented.append(f"{name}.{member}")
 
-    for fn in ("load", "load_string"):
+    for fn in ("load", "load_files", "load_string", "load_bytes"):
         if not (getattr(xsdkit, fn).__doc__ or "").strip():
             undocumented.append(fn)
 
@@ -240,7 +240,7 @@ def test_the_stub_agrees_about_parameters():
             if runtime != _stub_params(fn):
                 wrong.append(f"{name}.{member}: runtime {runtime} vs stub {_stub_params(fn)}")
 
-    for fn_name in ("load", "load_string"):
+    for fn_name in ("load", "load_files", "load_string", "load_bytes"):
         fn = next(
             (
                 n
@@ -284,7 +284,7 @@ def _runtime_docstrings():
             doc = getattr(obj, "__doc__", None)
             if doc and not _is_dunder(member):
                 yield f"{name}.{member}", doc
-    for fn in ("load", "load_string"):
+    for fn in ("load", "load_files", "load_string", "load_bytes"):
         yield fn, getattr(xsdkit, fn).__doc__ or ""
 
 

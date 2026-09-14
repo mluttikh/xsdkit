@@ -29,9 +29,12 @@ use crate::refs::{AttributeRef, ElementRef, TypeRef};
 use crate::values::Value;
 use crate::{Compilation, Conformance, FileResolver, SchemaSetBuilder, Version};
 use fxhash::{FxHashMap, FxHashSet};
-use pyo3::exceptions::{PyException, PyIndexError, PyKeyError, PyTypeError, PyValueError};
+use pyo3::exceptions::{
+    PyException, PyIndexError, PyKeyError, PyOSError, PyTypeError, PyValueError,
+};
 use pyo3::prelude::*;
-use pyo3::types::{PyBytes, PyDict, PyIterator, PyList, PyString, PyTuple, PyType};
+use pyo3::sync::PyOnceLock;
+use pyo3::types::{PyByteArray, PyBytes, PyDict, PyIterator, PyList, PyString, PyTuple, PyType};
 use pyo3::{IntoPyObjectExt, create_exception};
 use std::collections::BTreeMap;
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
@@ -40,7 +43,7 @@ create_exception!(
     xsdkit,
     XsdError,
     pyo3::exceptions::PyException,
-    "The base of every error this package raises, for `except xsdkit.XsdError`."
+    "The base of the errors about schemas, documents and values. A wrong argument type raises `TypeError`, and a path that cannot be read raises `OSError`."
 );
 create_exception!(
     xsdkit,
@@ -48,6 +51,28 @@ create_exception!(
     XsdError,
     "Raised when a schema cannot be built. Carries every diagnostic on `.diagnostics`."
 );
+create_exception!(
+    xsdkit,
+    DocumentError,
+    XsdError,
+    "Raised by `decode` for a document that does not satisfy its schema. Carries every diagnostic on `.diagnostics`."
+);
+
+/// `InvalidValueError`, which is a `ValueError` as well as an `XsdError`.
+///
+/// Built at module initialisation with `type(...)`, because
+/// `create_exception!` takes one base and `except ValueError` has to go on
+/// catching what `Type.validate` raises.
+static INVALID_VALUE_ERROR: PyOnceLock<Py<PyType>> = PyOnceLock::new();
+
+/// An `InvalidValueError` carrying `message`.
+fn invalid_value_error(py: Python<'_>, message: String) -> PyErr {
+    match INVALID_VALUE_ERROR.get(py) {
+        Some(ty) => PyErr::from_type(ty.bind(py).clone(), message),
+        // Only before the module has initialised, which nothing can reach.
+        None => PyValueError::new_err(message),
+    }
+}
 
 /// Builds a `SchemaError` carrying the whole diagnostic list.
 ///
@@ -63,13 +88,13 @@ fn schema_error(py: Python<'_>, diags: Diagnostics) -> PyErr {
     err
 }
 
-/// Builds an `XsdError` for a document, carrying the whole diagnostic list.
+/// Builds a `DocumentError` for a document, carrying the whole diagnostic list.
 ///
 /// The same contract as [`schema_error`], for the same reason: a caller that
 /// wants to show what was wrong with a document — filter by code, point at a
 /// line — cannot do it with a formatted string.
 fn document_error(py: Python<'_>, diags: &Diagnostics) -> PyErr {
-    let err = XsdError::new_err(format!("{diags}"));
+    let err = DocumentError::new_err(format!("{diags}"));
     let wrapped: Vec<PyDiagnostic> = diags.iter().cloned().map(PyDiagnostic).collect();
     if let Ok(list) = wrapped.into_py_any(py) {
         let _ = err.value(py).setattr("diagnostics", list);
@@ -156,48 +181,73 @@ impl crate::load::Resolver for PyResolver {
     }
 }
 
-/// An instance document given as `str`, as `bytes` or as a path, and the path
-/// when it was one.
+/// An instance document, read and decoded, with what diagnostics call it.
+struct Instance {
+    /// The text — or the diagnostic saying why the bytes could not be decoded,
+    /// which makes an invalid document rather than a mistake by the caller.
+    text: Result<String, Diagnostic>,
+    /// The `uri` the caller gave, else the file it was read from, else a
+    /// placeholder. The file, because a report on `orders/report.xml` that
+    /// points at `<instance>:1` is least useful in exactly the case where the
+    /// name is known.
+    uri: String,
+}
+
+/// Reads an instance document given as `str`, as `bytes` or as a path.
 ///
 /// Bytes are decoded the way a schema's are — byte-order mark, then the XML
 /// declaration, then UTF-8 — so a document read with `open(path, "rb")` needs
 /// no guess about its encoding, which is exactly the guess a caller is most
 /// likely to get wrong.
-fn instance_text(obj: &Bound<'_, PyAny>) -> PyResult<(String, Option<String>)> {
+fn read_instance(obj: &Bound<'_, PyAny>, uri: Option<&str>) -> PyResult<Instance> {
+    let py = obj.py();
+    let named = |fallback: &str| uri.unwrap_or(fallback).to_string();
     // `str` first, and always as content: a path is a `str` too, so the two
     // cannot be told apart here. What a bare name *does* produce is a clear
     // diagnostic — "document has no root element", with help saying so.
-    if let Ok(s) = obj.extract::<String>() {
-        return Ok((s, None));
+    if let Ok(text) = obj.extract::<String>() {
+        return Ok(Instance {
+            text: Ok(text),
+            uri: named("<instance>"),
+        });
     }
-    if let Ok(bytes) = obj.extract::<Vec<u8>>() {
-        return crate::encoding::decode_document(&bytes, "<instance>")
-            .map(|d| (d.text, None))
-            .map_err(|d| PyValueError::new_err(d.message));
+    if obj.is_instance_of::<PyBytes>() || obj.is_instance_of::<PyByteArray>() {
+        let bytes: Vec<u8> = obj.extract()?;
+        let uri = named("<instance>");
+        let text = crate::encoding::decode_document(&bytes, &uri).map(|d| d.text);
+        return Ok(Instance { text, uri });
     }
     // A `pathlib.Path`, on the other hand, is never ambiguous: nobody holds
     // one meaning "this is my XML". Read it, with the encoding detected from
     // the bytes exactly as for a document handed over directly.
-    let path = path_from(obj)
-        .map_err(|_| PyValueError::new_err("a document must be str, bytes, or a path"))?;
-    let bytes = std::fs::read(&path)
-        .map_err(|e| PyValueError::new_err(format!("cannot read {path}: {e}")))?;
-    match crate::encoding::decode_document(&bytes, &path) {
-        Ok(d) => Ok((d.text, Some(path))),
-        Err(d) => Err(PyValueError::new_err(d.message)),
-    }
+    let path = match path_from(obj) {
+        Ok(path) => path,
+        Err(e) if e.is_instance_of::<PyTypeError>(py) => {
+            return Err(PyTypeError::new_err(format!(
+                "a document must be str, bytes or a path, not {}",
+                obj.get_type().name()?
+            )));
+        }
+        Err(e) => return Err(e),
+    };
+    let bytes = std::fs::read(&path).map_err(|e| os_error(py, &e, &path))?;
+    let uri = named(&path);
+    let text = crate::encoding::decode_document(&bytes, &uri).map(|d| d.text);
+    Ok(Instance { text, uri })
 }
 
-/// What diagnostics about a document call it: the `uri` the caller gave, else
-/// the file it was read from, else a placeholder.
-///
-/// The file, because a report on `orders/report.xml` that points at
-/// `<instance>:1` is least useful in exactly the case where the name is known.
-fn instance_uri(given: Option<&str>, path: Option<String>) -> String {
-    given
-        .map(str::to_string)
-        .or(path)
-        .unwrap_or_else(|| "<instance>".to_string())
+/// The `OSError` Python raises for a file it cannot read — a
+/// `FileNotFoundError` for a missing one — with the errno and the filename.
+fn os_error(py: Python<'_>, e: &std::io::Error, path: &str) -> PyErr {
+    let Some(errno) = e.raw_os_error() else {
+        return PyOSError::new_err(format!("{path}: {e}"));
+    };
+    let message = py
+        .import("os")
+        .and_then(|os| os.call_method1("strerror", (errno,)))
+        .and_then(|s| s.extract::<String>())
+        .unwrap_or_else(|_| e.to_string());
+    PyOSError::new_err((errno, message, path.to_string()))
 }
 
 /// A resolver's document, as `bytes` or as `str`.
@@ -577,7 +627,14 @@ fn parse_name(schemas: &Schemas, obj: &Bound<'_, PyAny>) -> PyResult<Option<QNam
         return Ok(schemas.qname(ns.as_deref(), &local));
     }
     let s: String = obj.extract().map_err(|_| {
-        PyValueError::new_err("expected '{ns}local', 'local', or (namespace, local)")
+        let ty = obj
+            .get_type()
+            .name()
+            .map(|n| n.to_string())
+            .unwrap_or_default();
+        PyTypeError::new_err(format!(
+            "a name is '{{ns}}local', 'local' or (namespace, local), not {ty}"
+        ))
     })?;
     Ok(match s.strip_prefix('{') {
         Some(rest) => match rest.split_once('}') {
@@ -616,10 +673,36 @@ impl PySchemaSet {
     }
 }
 
+/// The paths a list argument names, each a `str` or anything `os.fspath`
+/// takes.
+///
+/// A single path is refused rather than iterated: a `str` is a sequence too,
+/// and read as a list it would name each of its characters.
+fn path_list(obj: &Bound<'_, PyAny>, argument: &str) -> PyResult<Vec<String>> {
+    if obj.is_instance_of::<PyString>() || obj.is_instance_of::<PyBytes>() || path_from(obj).is_ok()
+    {
+        return Err(PyTypeError::new_err(format!(
+            "{argument} takes a list of paths, not a single path"
+        )));
+    }
+    obj.try_iter()?.map(|p| path_from(&p?)).collect()
+}
+
+/// The root documents `from_files` and `load_files` are given: at least one.
+fn root_files(obj: &Bound<'_, PyAny>) -> PyResult<Vec<String>> {
+    let files = path_list(obj, "paths")?;
+    if files.is_empty() {
+        return Err(PyValueError::new_err(
+            "paths names no schema documents; give at least one",
+        ));
+    }
+    Ok(files)
+}
+
 /// Assembles a builder from the keyword arguments the constructors share,
 /// with the record of anything a Python resolver raises while it runs.
 fn builder(
-    search_paths: Option<Vec<String>>,
+    search_paths: Option<Bound<'_, PyAny>>,
     conformance: &str,
     version: &str,
     nodes_limit: Option<u32>,
@@ -630,11 +713,22 @@ fn builder(
     let mut b = SchemaSetBuilder::new()
         .conformance(conformance_from(conformance)?)
         .version(version_from(version)?);
+    let search_paths = match search_paths {
+        Some(paths) => Some(path_list(&paths, "search_paths")?),
+        None => None,
+    };
     // A custom resolver replaces the filesystem entirely, so the two are
     // alternatives rather than layers — a caller serving documents from a zip
-    // has no search path to add them to.
+    // has no search path to add them to — and passing both is refused rather
+    // than quietly ignoring one of them.
     match (resolver, search_paths) {
-        (Some(callable), _) => {
+        (Some(_), Some(_)) => {
+            return Err(PyValueError::new_err(
+                "pass a resolver or search_paths, not both: a resolver replaces the \
+                 filesystem, so search_paths would never be read",
+            ));
+        }
+        (Some(callable), None) => {
             b = b.resolver(PyResolver {
                 callable,
                 raised: raised.clone(),
@@ -735,7 +829,7 @@ impl PySchemaSet {
         _cls: &Bound<'_, PyType>,
         py: Python<'_>,
         path: &Bound<'_, PyAny>,
-        search_paths: Option<Vec<String>>,
+        search_paths: Option<Bound<'_, PyAny>>,
         conformance: &str,
         version: &str,
         nodes_limit: Option<u32>,
@@ -761,7 +855,7 @@ impl PySchemaSet {
         py: Python<'_>,
         xsd: String,
         uri: &str,
-        search_paths: Option<Vec<String>>,
+        search_paths: Option<Bound<'_, PyAny>>,
         conformance: &str,
         version: &str,
         nodes_limit: Option<u32>,
@@ -790,7 +884,7 @@ impl PySchemaSet {
         py: Python<'_>,
         data: Vec<u8>,
         uri: &str,
-        search_paths: Option<Vec<String>>,
+        search_paths: Option<Bound<'_, PyAny>>,
         conformance: &str,
         version: &str,
         nodes_limit: Option<u32>,
@@ -806,6 +900,39 @@ impl PySchemaSet {
             resolver,
         )?;
         schema_set(py, compile(py, b.bytes(data, uri), &raised)?)
+    }
+
+    /// Loads a schema from several files at once, following each one's
+    /// includes and imports into one set.
+    ///
+    /// For a schema with no single root document: a vendor bundle, or a
+    /// directory of XSDs that import one another.
+    #[classmethod]
+    #[pyo3(signature = (paths, *, search_paths=None, conformance="strict", version="1.0", nodes_limit=None, max_depth=None, resolver=None))]
+    fn from_files(
+        _cls: &Bound<'_, PyType>,
+        py: Python<'_>,
+        paths: &Bound<'_, PyAny>,
+        search_paths: Option<Bound<'_, PyAny>>,
+        conformance: &str,
+        version: &str,
+        nodes_limit: Option<u32>,
+        max_depth: Option<u32>,
+        resolver: Option<Py<PyAny>>,
+    ) -> PyResult<Self> {
+        let files = root_files(paths)?;
+        let (mut b, raised) = builder(
+            search_paths,
+            conformance,
+            version,
+            nodes_limit,
+            max_depth,
+            resolver,
+        )?;
+        for file in files {
+            b = b.file(file);
+        }
+        schema_set(py, compile(py, b, &raised)?)
     }
 
     /// The documents this schema set was built from.
@@ -1003,14 +1130,17 @@ impl PySchemaSet {
         xml: &Bound<'_, PyAny>,
         uri: Option<&str>,
     ) -> PyResult<PyValidationReport> {
-        let (xml, path) = instance_text(xml)?;
-        let uri = instance_uri(uri, path);
+        let doc = read_instance(xml, uri)?;
+        let text = match doc.text {
+            Ok(text) => text,
+            Err(d) => return Ok(PyValidationReport::undecodable(d)),
+        };
         let schemas = self.inner.clone();
         // No Python is called back into, so the GIL can go.
         let report = py.detach(|| {
             schemas
                 .document_validator()
-                .validate_named(&xml, &uri, |_| {})
+                .validate_named(&text, &doc.uri, |_| {})
         });
         let valid = report.is_valid();
         Ok(PyValidationReport {
@@ -1033,7 +1163,7 @@ impl PySchemaSet {
     /// attributes the value sits under `$`. `xsi:nil` decodes to `None`, or
     /// to `None` under `$` when the element carries attributes too.
     ///
-    /// Raises `XsdError` if the document is invalid; pass `lax=True` to take
+    /// Raises `DocumentError` if the document is invalid; pass `lax=True` to take
     /// the data anyway. Unlike `validate`, this one raises, because a caller
     /// asking for data has said what it wants and silently handing back data
     /// from a document that does not fit its schema is the trap this is meant
@@ -1046,11 +1176,20 @@ impl PySchemaSet {
         uri: Option<&str>,
         lax: bool,
     ) -> PyResult<Py<PyAny>> {
-        let (xml, path) = instance_text(xml)?;
-        let uri = instance_uri(uri, path);
+        let doc = read_instance(xml, uri)?;
+        let text = match doc.text {
+            Ok(text) => text,
+            // Bytes that cannot be decoded hold no data to hand over.
+            Err(_) if lax => return Ok(py.None()),
+            Err(d) => {
+                let mut diagnostics = Diagnostics::new();
+                diagnostics.push(d);
+                return Err(document_error(py, &diagnostics));
+            }
+        };
         let schemas = self.inner.clone();
         // Nothing calls back into Python while the document is read.
-        let mut decoding = py.detach(|| schemas.decode_named(&xml, &uri));
+        let mut decoding = py.detach(|| schemas.decode_named(&text, &doc.uri));
         let valid = decoding.is_valid();
         let tree = decoding.decoded.take();
 
@@ -1087,14 +1226,24 @@ impl PySchemaSet {
         xml: &Bound<'_, PyAny>,
         uri: Option<&str>,
     ) -> PyResult<PyPsviEvents> {
-        let (xml, path) = instance_text(xml)?;
-        let uri = instance_uri(uri, path);
+        let doc = read_instance(xml, uri)?;
+        let text = match doc.text {
+            Ok(text) => text,
+            Err(d) => {
+                return Ok(PyPsviEvents {
+                    events: Vec::new(),
+                    at: 0,
+                    valid: false,
+                    diagnostics: vec![PyDiagnostic(d)],
+                });
+            }
+        };
         let mut events: Vec<Py<PyPsviEvent>> = Vec::new();
         let mut failed: Option<PyErr> = None;
         let report = self
             .inner
             .document_validator()
-            .validate_named(&xml, &uri, |ev| {
+            .validate_named(&text, &doc.uri, |ev| {
                 if failed.is_some() {
                     return;
                 }
@@ -1128,8 +1277,16 @@ impl PySchemaSet {
         on_event: Option<Bound<'_, PyAny>>,
         uri: Option<&str>,
     ) -> PyResult<(Option<Vec<Py<PyPsviEvent>>>, PyValidationReport)> {
-        let (xml, path) = instance_text(xml)?;
-        let uri = instance_uri(uri, path);
+        let doc = read_instance(xml, uri)?;
+        let text = match doc.text {
+            Ok(text) => text,
+            Err(d) => {
+                return Ok((
+                    on_event.is_none().then(Vec::new),
+                    PyValidationReport::undecodable(d),
+                ));
+            }
+        };
         let mut collected: Vec<Py<PyPsviEvent>> = Vec::new();
         let mut callback_error: Option<PyErr> = None;
 
@@ -1138,7 +1295,7 @@ impl PySchemaSet {
         let report = self
             .inner
             .document_validator()
-            .validate_named(&xml, &uri, |ev| {
+            .validate_named(&text, &doc.uri, |ev| {
                 if callback_error.is_some() {
                     return;
                 }
@@ -2512,12 +2669,13 @@ impl PyType_ {
 
     /// Validates a lexical form against this type, returning its typed value.
     ///
-    /// Raises `ValueError` with the reason when the value is not valid.
+    /// Raises `InvalidValueError`, which is also a `ValueError`, with the
+    /// reason when the value is not valid.
     fn validate(&self, py: Python<'_>, lexical: &str) -> PyResult<Py<PyAny>> {
         let validator = self.s.value_validator();
         match validator.validate(self.id, lexical) {
             Ok(v) => Ok(value_to_py(py, &v)?.unbind()),
-            Err(e) => Err(PyValueError::new_err(e.to_string())),
+            Err(e) => Err(invalid_value_error(py, e.to_string())),
         }
     }
 
@@ -3571,6 +3729,17 @@ pub struct PyValidationReport {
     diagnostics: Vec<PyDiagnostic>,
 }
 
+impl PyValidationReport {
+    /// The report for bytes that could not be decoded: an invalid document,
+    /// with the one diagnostic saying why.
+    fn undecodable(d: Diagnostic) -> Self {
+        Self {
+            valid: false,
+            diagnostics: vec![PyDiagnostic(d)],
+        }
+    }
+}
+
 #[pymethods]
 impl PyValidationReport {
     /// Whether the document satisfied the schema.
@@ -3874,7 +4043,7 @@ fn loaded(compilation: Compilation) -> (PySchemaSet, Vec<PyDiagnostic>) {
 fn load(
     py: Python<'_>,
     path: &Bound<'_, PyAny>,
-    search_paths: Option<Vec<String>>,
+    search_paths: Option<Bound<'_, PyAny>>,
     conformance: &str,
     version: &str,
     nodes_limit: Option<u32>,
@@ -3900,7 +4069,7 @@ fn load_string(
     py: Python<'_>,
     xsd: String,
     uri: &str,
-    search_paths: Option<Vec<String>>,
+    search_paths: Option<Bound<'_, PyAny>>,
     conformance: &str,
     version: &str,
     nodes_limit: Option<u32>,
@@ -3916,6 +4085,61 @@ fn load_string(
         resolver,
     )?;
     let (compilation, _) = compile(py, b.text(xsd, uri), &raised)?;
+    Ok(loaded(compilation))
+}
+
+/// The same, from several root documents at once.
+#[pyfunction]
+#[pyo3(signature = (paths, *, search_paths=None, conformance="lax", version="1.0", nodes_limit=None, max_depth=None, resolver=None))]
+fn load_files(
+    py: Python<'_>,
+    paths: &Bound<'_, PyAny>,
+    search_paths: Option<Bound<'_, PyAny>>,
+    conformance: &str,
+    version: &str,
+    nodes_limit: Option<u32>,
+    max_depth: Option<u32>,
+    resolver: Option<Py<PyAny>>,
+) -> PyResult<(PySchemaSet, Vec<PyDiagnostic>)> {
+    let files = root_files(paths)?;
+    let (mut b, raised) = builder(
+        search_paths,
+        conformance,
+        version,
+        nodes_limit,
+        max_depth,
+        resolver,
+    )?;
+    for file in files {
+        b = b.file(file);
+    }
+    let (compilation, _) = compile(py, b, &raised)?;
+    Ok(loaded(compilation))
+}
+
+/// The same, from bytes whose encoding is detected.
+#[pyfunction]
+#[pyo3(signature = (data, *, uri="<bytes>", search_paths=None, conformance="lax", version="1.0", nodes_limit=None, max_depth=None, resolver=None))]
+fn load_bytes(
+    py: Python<'_>,
+    data: Vec<u8>,
+    uri: &str,
+    search_paths: Option<Bound<'_, PyAny>>,
+    conformance: &str,
+    version: &str,
+    nodes_limit: Option<u32>,
+    max_depth: Option<u32>,
+    resolver: Option<Py<PyAny>>,
+) -> PyResult<(PySchemaSet, Vec<PyDiagnostic>)> {
+    let (b, raised) = builder(
+        search_paths,
+        conformance,
+        version,
+        nodes_limit,
+        max_depth,
+        resolver,
+    )?;
+    let (compilation, _) = compile(py, b.bytes(data, uri), &raised)?;
     Ok(loaded(compilation))
 }
 
@@ -3939,6 +4163,33 @@ fn xsdkit_module(m: &Bound<'_, PyModule>) -> PyResult<()> {
     // for the same reason as above.
     schema_error.setattr("diagnostics", PyTuple::empty(m.py()))?;
     m.add("SchemaError", schema_error)?;
+    m.add("DocumentError", m.py().get_type::<DocumentError>())?;
+
+    // `create_exception!` takes one base, and `InvalidValueError` needs two:
+    // it is an `XsdError`, and still a `ValueError`, so that `except
+    // ValueError` goes on catching what `Type.validate` raises. So the class
+    // is made the way Python makes any class.
+    let py = m.py();
+    let bases = PyTuple::new(
+        py,
+        [
+            py.get_type::<XsdError>().into_any(),
+            py.get_type::<PyValueError>().into_any(),
+        ],
+    )?;
+    let namespace = PyDict::new(py);
+    namespace.set_item("__module__", "xsdkit")?;
+    namespace.set_item(
+        "__doc__",
+        "Raised by `Type.validate` for a lexical form its type does not admit. \
+         Also a `ValueError`.",
+    )?;
+    let invalid_value = py
+        .get_type::<PyType>()
+        .call1(("InvalidValueError", bases, namespace))?
+        .cast_into::<PyType>()?;
+    m.add("InvalidValueError", &invalid_value)?;
+    let _ = INVALID_VALUE_ERROR.set(py, invalid_value.unbind());
     m.add_class::<PySchemaSet>()?;
     m.add_class::<PyNamedComponents>()?;
     m.add_class::<PyNameIter>()?;
@@ -3960,5 +4211,7 @@ fn xsdkit_module(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<PyPsviEvent>()?;
     m.add_function(wrap_pyfunction!(load, m)?)?;
     m.add_function(wrap_pyfunction!(load_string, m)?)?;
+    m.add_function(wrap_pyfunction!(load_files, m)?)?;
+    m.add_function(wrap_pyfunction!(load_bytes, m)?)?;
     Ok(())
 }
