@@ -227,7 +227,10 @@ when a default means something different from an explicit value.
   in for it. An `abstract` element cannot appear at all.
 - Wildcards, with `strict`, `lax` and `skip` processing — on elements and
   on attributes. What a `lax` or `strict` wildcard admits is validated
-  against its global declaration and reaches the PSVI typed.
+  against its global declaration and reaches the PSVI typed; what a `lax` one
+  admits with no declaration is assessed as `xs:anyType`, so its text,
+  attributes and children are kept and any globally declared element inside
+  it is still checked.
 - Mixed content, `xs:all`, and repeated particles.
 - Default and fixed values, for attributes and for elements with simple
   content — an empty element takes the value its declaration supplies, and
@@ -249,9 +252,8 @@ it is the only part those datatypes need.
 **Identity constraints** are enforced: `xs:key`, `xs:keyref` and `xs:unique`,
 over the restricted XPath subset they take — an optional `.//`, child steps,
 and an attribute as a field's last step. Keys compare in the value space, so
-`07:00:00Z` and `02:00:00-05:00` are one key. Nodes inside a subtree that was
-never assessed — under a `skip` wildcard, or a `lax` one that matched no
-declaration — are not selected.
+`07:00:00Z` and `02:00:00-05:00` are one key. Nodes under a `skip` wildcard,
+which are never assessed, are not selected.
 
 Not yet: XSD 1.1 **assertions** and conditional type assignment are stored and
 not evaluated. A document that violates one of those is currently reported as

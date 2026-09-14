@@ -131,6 +131,14 @@ cannot express this.
   not one of the enumerated ones. `NamespaceConstraint::admits_uri` and
   `ContentMatcher::step_foreign` are that path; the validator takes it
   whenever `Schemas::qname` returns `None`.
+- **`lax` assesses what it cannot declare; `skip` does not look.** An element
+  a `lax` wildcard admits with no global declaration is assessed as
+  `xs:anyType` — attributes against its lax attribute wildcard, children laxly
+  in turn, text as mixed content — so a globally declared element deep inside
+  is still checked, and everything reaches the PSVI. `match_in_parent` says
+  so with `(None, false)`; `(_, true)` is reserved for `skip` and for an error
+  already reported, whose subtree is left alone. `lax` used to share the skip
+  path, which kept documents valid and dropped their content from `decode`.
 - **XSD 1.1 is opt-in** via `Version::Xsd11`, and it *relaxes* rules as well
   as adding syntax — an element competing with a wildcard is a UPA breach in
   1.0 and legal in 1.1. Default is 1.0: the stricter reading, and what most
@@ -541,10 +549,10 @@ splits the same way:
 
 | | XSD 1.0 | XSD 1.1 |
 |---|---|---|
-| valid documents accepted | **99.8%** (11,300/11,325) | **99.5%** (11,845/11,906) |
-| invalid documents rejected | **99.7%** (9,057/9,083) | **98.4%** (9,524/9,680) |
+| valid documents accepted | **99.9%** (11,309/11,325) | **99.6%** (11,863/11,906) |
+| invalid documents rejected | **99.7%** (9,057/9,083) | **98.3%** (9,515/9,680) |
 
-25 false alarms under 1.0 against 61 under 1.1, which is the same story: the
+16 false alarms under 1.0 against 43 under 1.1, which is the same story: the
 1.1-only sets are the features that are not there yet.
 
 It used to be `#[ignore]`d on the strength of a 4.5-minute figure that
@@ -1005,15 +1013,15 @@ wildcard excluding `##defined` refuses them. `saxonData/Wild/wild054` expects
 `xml:lang` admitted. Telling the two apart needs `Schemas` to remember which
 declarations were predeclared, which it does not carry.
 
-**Identity constraints over unassessed content.** A selector matches element
+**Identity constraints under a `skip` wildcard.** A selector matches element
 information items whatever their assessment, but `open_identity` runs only on
-elements the validator assessed — so nodes under a `skip` wildcard, or a `lax`
-one that matched no declaration, are not selected.
-`sunData/combined/identity/idc006` is the case: its keys sit under a `lax`
-wildcard whose intermediate element has no global declaration. Fixing it means
-matching inside skipped subtrees with *untyped* field values, which brings back
-the mismatch where an `Integer(12)` key cannot equal a `String("12")` one. One
-document is not worth that, so it is stated here instead.
+elements the validator assessed — so nodes under a `skip` wildcard are not
+selected. Under a `lax` one they are: an element it admits with no declaration
+is assessed as `xs:anyType`, which is what made
+`sunData/combined/identity/idc006` pass once the lax path stopped sharing the
+skip path. Selecting inside skipped subtrees would need *untyped* field
+values, which brings back the mismatch where an `Integer(12)` key cannot equal
+a `String("12")` one, so it is stated here instead.
 
 **Namespace bindings for a `default` or `fixed` value.** `xs:QName` and
 `xs:NOTATION` are the only datatypes whose value depends on something outside

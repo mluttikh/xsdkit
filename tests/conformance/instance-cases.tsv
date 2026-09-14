@@ -4,8 +4,8 @@
 #
 # runs                      41994
 # not scored                64
-# as XSD 1.0   valid accepted 11308/11325   invalid rejected 9057/9083
-# as XSD 1.1   valid accepted 11862/11906   invalid rejected 9515/9680
+# as XSD 1.0   valid accepted 11309/11325   invalid rejected 9057/9083
+# as XSD 1.1   valid accepted 11863/11906   invalid rejected 9515/9680
 #
 # Re-bless with XSDKIT_BLESS=1; see tests/w3c_suite.rs.
 
@@ -41612,10 +41612,10 @@ suntest/idc005.nogen/idc005.nogen.v00.xml@1.0	valid	accept	-
 suntest/idc005.nogen/idc005.nogen.v00.xml@1.1	valid	accept	-
 suntest/idc006.nogen/idc006.nogen.n00.xml@1.0	invalid	reject	XSD2016
 suntest/idc006.nogen/idc006.nogen.n00.xml@1.1	invalid	reject	XSD2016
-suntest/idc006.nogen/idc006.nogen.n01.xml@1.0	invalid	reject	XSD2016
-suntest/idc006.nogen/idc006.nogen.n01.xml@1.1	invalid	reject	XSD2016
-suntest/idc006.nogen/idc006.nogen.v00.xml@1.0	valid	reject	XSD2016
-suntest/idc006.nogen/idc006.nogen.v00.xml@1.1	valid	reject	XSD2016
+suntest/idc006.nogen/idc006.nogen.n01.xml@1.0	invalid	reject	XSD2002+XSD2003+XSD2016
+suntest/idc006.nogen/idc006.nogen.n01.xml@1.1	invalid	reject	XSD2002+XSD2003+XSD2016
+suntest/idc006.nogen/idc006.nogen.v00.xml@1.0	valid	accept	-
+suntest/idc006.nogen/idc006.nogen.v00.xml@1.1	valid	accept	-
 suntest/identitytestsuitetest001/test.1.v.xml@1.0	valid	accept	-
 suntest/identitytestsuitetest001/test.1.v.xml@1.1	valid	accept	-
 suntest/identitytestsuitetest001/test.2.n.xml@1.0	invalid	reject	XSD2014
