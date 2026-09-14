@@ -1862,6 +1862,48 @@ fn text_with_no_element_at_all_is_still_no_root_element() {
 }
 
 #[test]
+fn validate_until_hands_out_nothing_after_a_break() {
+    // One reader event can produce several PSVI events: an empty element is a
+    // start and an end at once. A break on the first must stop the second.
+    let s = report_schema();
+    let doc = r#"<report xmlns="urn:example" id="r1"><title>t</title><count>1</count></report>"#;
+    for stop_after in 1..=6 {
+        let mut seen = 0;
+        let report = s.document_validator().validate_until(doc, "doc.xml", |_| {
+            seen += 1;
+            if seen == stop_after {
+                std::ops::ControlFlow::Break(())
+            } else {
+                std::ops::ControlFlow::Continue(())
+            }
+        });
+        assert_eq!(seen, stop_after, "an event after the break");
+        // The report covers what was read, and the rest was never read: an
+        // element left open by stopping is not reported as left open.
+        assert!(
+            !report
+                .diagnostics
+                .iter()
+                .any(|d| d.message.contains("still open")),
+            "{}",
+            report.diagnostics
+        );
+    }
+
+    // Never breaking is `validate_named`.
+    let mut all = 0;
+    let report = s.document_validator().validate_until(doc, "doc.xml", |_| {
+        all += 1;
+        std::ops::ControlFlow::Continue(())
+    });
+    assert!(report.is_valid(), "{}", report.diagnostics);
+    let mut named = 0;
+    s.document_validator()
+        .validate_named(doc, "doc.xml", |_| named += 1);
+    assert_eq!(all, named);
+}
+
+#[test]
 fn a_truncated_document_is_reported() {
     let s = report_schema();
     let d = check(

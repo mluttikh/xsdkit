@@ -132,25 +132,13 @@ def test_attributes_arrive_typed(schemas):
     assert attrs["seq"].lexical == "7"
 
 
-def test_a_callback_streams_instead_of_collecting(schemas):
-    seen = []
-    events, report = schemas.read_typed(DOC, on_event=seen.append)
-    assert events is None, "the callback form returns no list"
-    assert report.is_valid
-    assert len(seen) > 10
-    assert seen[0].kind == "start"
-    assert seen[-1].kind == "end"
-
-
-def test_a_raising_callback_propagates(schemas):
-    class Boom(Exception):
-        pass
-
-    def explode(_):
-        raise Boom
-
-    with pytest.raises(Boom):
-        schemas.read_typed(DOC, on_event=explode)
+def test_read_typed_returns_every_event_and_the_outcome(schemas):
+    events, report = schemas.read_typed(DOC)
+    assert isinstance(events, list) and report.is_valid
+    assert [e.kind for e in events] == [e.kind for e in schemas.iter_typed(DOC)]
+    # A callback composes with nothing; the iterator is the streaming form.
+    with pytest.raises(TypeError):
+        schemas.read_typed(DOC, on_event=print)
 
 
 # --- xsi:type and xsi:nil --------------------------------------------------
@@ -274,8 +262,7 @@ def test_iter_typed_is_an_iterator(schemas):
     it = schemas.iter_typed(DOC)
     kinds = [ev.kind for ev in it]
     assert kinds[0] == "start" and kinds[-1] == "end"
-    # The outcome is available without waiting for the loop to end.
-    assert schemas.iter_typed(DOC).report.is_valid
+    assert it.report.is_valid
 
     # It composes: enumerate, islice, a generator expression.
     import itertools
@@ -325,7 +312,9 @@ def test_diagnostics_name_the_file_a_document_was_read_from(schemas, tmp_path):
         return {span.uri for d in report.errors for span in d.spans}
 
     assert where(schemas.validate(p)) == {str(p)}
-    assert where(schemas.iter_typed(p).report) == {str(p)}
+    events = schemas.iter_typed(p)
+    list(events)
+    assert where(events.report) == {str(p)}
     assert where(schemas.read_typed(p)[1]) == {str(p)}
     with pytest.raises(xsdkit.XsdError) as excinfo:
         schemas.decode(p)
@@ -396,3 +385,73 @@ def test_a_text_event_has_no_name_of_its_own(schemas):
     text = next(e for e in events if e.kind == "text")
     assert text.name is None and text.local_name is None
     assert events[0].name == (NS, "reading")
+
+
+# --- streaming ---------------------------------------------------------------
+
+ORDERS = (
+    '<xs:element name="orders"><xs:complexType><xs:sequence>'
+    '<xs:element name="n" type="xs:int" minOccurs="0" maxOccurs="unbounded"/>'
+    "</xs:sequence></xs:complexType></xs:element>"
+)
+
+
+def orders(values):
+    return f'<orders xmlns="{NS}">' + "".join(f"<n>{v}</n>" for v in values) + "</orders>"
+
+
+def test_the_report_waits_for_the_last_event(schemas):
+    """Validity is only known at the end of the document, and so is the report."""
+    events = schemas.iter_typed(DOC)
+    with pytest.raises(RuntimeError, match="validate"):
+        events.report
+    assert next(events).kind == "start"
+    with pytest.raises(RuntimeError):
+        events.report
+    assert list(events)[-1].kind == "end"
+    assert events.report.is_valid
+    assert list(events) == [], "an exhausted iterator stays exhausted"
+    assert events.report.is_valid
+
+
+def test_events_stream_across_batches_in_document_order():
+    s = build(ORDERS)
+    doc = orders(range(5000))
+    assert [ev.value for ev in s.iter_typed(doc) if ev.kind == "text"] == list(range(5000))
+    events, report = s.read_typed(doc)
+    assert report.is_valid
+    assert [ev.kind for ev in s.iter_typed(doc)] == [ev.kind for ev in events]
+
+
+def test_an_invalid_document_streams_and_reports_at_the_end():
+    s = build(ORDERS)
+    events = s.iter_typed(orders([1, "x", 3]))
+    assert [ev.kind for ev in events].count("start") == 4
+    assert not events.report.is_valid
+    assert [d.code for d in events.report.errors] == ["XSD2004"]
+
+
+def test_an_iterator_dropped_part_way_holds_nothing_up():
+    """Its worker stops at the next batch instead of reading on for nobody."""
+    import itertools
+
+    s = build(ORDERS)
+    doc = orders(range(5000))
+    for _ in range(50):
+        assert next(s.iter_typed(doc)).kind == "start"
+    assert [e.kind for e in itertools.islice(s.iter_typed(doc), 3)] == ["start", "start", "text"]
+    assert sum(1 for _ in s.iter_typed(doc)) == 2 + 3 * 5000
+
+
+def test_a_deep_document_streams():
+    """Validation runs on a worker thread, whose stack is not the main one's."""
+    s = build(
+        '<xs:element name="n"><xs:complexType><xs:sequence>'
+        '<xs:element ref="tns:n" minOccurs="0"/>'
+        "</xs:sequence></xs:complexType></xs:element>"
+    )
+    depth = 10_000
+    doc = f'<n xmlns="{NS}">' + "<n>" * (depth - 1) + "</n>" * depth
+    events = s.iter_typed(doc)
+    assert sum(1 for _ in events) == 2 * depth
+    assert events.report.is_valid, events.report.errors[:3]

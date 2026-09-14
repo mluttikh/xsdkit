@@ -95,6 +95,7 @@ report.diagnostics   # warnings and notes as well
 | `InvalidValueError` | `Type.validate`, for a value its type does not admit; also a `ValueError` |
 | `TypeError` | An argument of the wrong type, such as `schemas.validate(42)` |
 | `OSError` | A document path that cannot be read, such as a missing file |
+| `RuntimeError` | `PsviEvents.report`, read before every event has been |
 
 The first three are `XsdError`s, and `SchemaError` and `DocumentError` carry
 every diagnostic on `.diagnostics`. Bytes that cannot be decoded are an invalid

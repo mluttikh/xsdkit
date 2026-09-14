@@ -36,6 +36,7 @@ use fxhash::{FxHashMap, FxHashSet};
 use quick_xml::NsReader;
 use quick_xml::events::Event;
 use quick_xml::name::ResolveResult;
+use std::ops::ControlFlow;
 
 /// How deeply elements may nest in an instance document.
 ///
@@ -189,27 +190,11 @@ impl<'a> DocumentValidator<'a> {
     ///
     /// A callback rather than an iterator: the events are produced inside the
     /// streaming loop, and an iterator would have to buffer them.
-    pub fn validate_with(&self, xml: &str, sink: impl FnMut(PsviEvent)) -> ValidationReport {
-        let mut run = Run {
-            v: self,
-            diags: Diagnostics::new(),
-            stack: Vec::new(),
-            namespaces: Vec::new(),
-            ids: FxHashMap::default(),
-            idrefs: Vec::new(),
-            elements_seen: 0,
-            entities: FxHashSet::default(),
-            path: Vec::new(),
-            scopes: Vec::new(),
-            targets: Vec::new(),
-            id_roles: FxHashMap::default(),
-            uri: "<instance>".to_string(),
-            sink,
-        };
-        run.drive(xml);
-        ValidationReport {
-            diagnostics: run.diags,
-        }
+    pub fn validate_with(&self, xml: &str, mut sink: impl FnMut(PsviEvent)) -> ValidationReport {
+        self.run(xml, "<instance>", |event| {
+            sink(event);
+            ControlFlow::Continue(())
+        })
     }
 
     /// Names the document for diagnostics, e.g. a file path.
@@ -217,7 +202,35 @@ impl<'a> DocumentValidator<'a> {
         &self,
         xml: &str,
         uri: &str,
-        sink: impl FnMut(PsviEvent),
+        mut sink: impl FnMut(PsviEvent),
+    ) -> ValidationReport {
+        self.run(xml, uri, |event| {
+            sink(event);
+            ControlFlow::Continue(())
+        })
+    }
+
+    /// [`Self::validate_named`], stopping as soon as `sink` returns
+    /// [`ControlFlow::Break`].
+    ///
+    /// For a reader that has what it came for, or has gone away, and should
+    /// not pay for the rest of a large document. No event follows the one the
+    /// break answered. The report covers what was read and nothing more, so a
+    /// stopped read says nothing about whether the rest is valid.
+    pub fn validate_until(
+        &self,
+        xml: &str,
+        uri: &str,
+        sink: impl FnMut(PsviEvent) -> ControlFlow<()>,
+    ) -> ValidationReport {
+        self.run(xml, uri, sink)
+    }
+
+    fn run(
+        &self,
+        xml: &str,
+        uri: &str,
+        sink: impl FnMut(PsviEvent) -> ControlFlow<()>,
     ) -> ValidationReport {
         let mut run = Run {
             v: self,
@@ -234,6 +247,7 @@ impl<'a> DocumentValidator<'a> {
             id_roles: FxHashMap::default(),
             uri: uri.to_string(),
             sink,
+            stopped: false,
         };
         run.drive(xml);
         ValidationReport {
@@ -242,7 +256,7 @@ impl<'a> DocumentValidator<'a> {
     }
 }
 
-struct Run<'a, 'b, S: FnMut(PsviEvent)> {
+struct Run<'a, 'b, S: FnMut(PsviEvent) -> ControlFlow<()>> {
     v: &'b DocumentValidator<'a>,
     diags: Diagnostics,
     stack: Vec<Frame<'a>>,
@@ -279,6 +293,9 @@ struct Run<'a, 'b, S: FnMut(PsviEvent)> {
     id_roles: FxHashMap<TypeId, Option<IdKind>>,
     uri: String,
     sink: S,
+    /// Whether the sink asked to stop. Checked before every reader event, and
+    /// before every event handed out: one reader event can produce several.
+    stopped: bool,
 }
 
 /// The two document-scope roles a value can play.
@@ -335,7 +352,14 @@ fn declared_namespaces(attrs: &[RawAttr]) -> Vec<(Option<String>, String)> {
         .collect()
 }
 
-impl<'a, S: FnMut(PsviEvent)> Run<'a, '_, S> {
+impl<'a, S: FnMut(PsviEvent) -> ControlFlow<()>> Run<'a, '_, S> {
+    /// Hands an event to the sink, unless it has already asked to stop.
+    fn emit(&mut self, event: PsviEvent) {
+        if !self.stopped {
+            self.stopped = (self.sink)(event).is_break();
+        }
+    }
+
     fn error(&mut self, code: DiagCode, line: u32, msg: impl Into<String>) {
         let span = Span::new(&self.uri, line);
         self.diags.push(Diagnostic::error(code, msg).at(span));
@@ -664,6 +688,9 @@ impl<'a, S: FnMut(PsviEvent)> Run<'a, '_, S> {
         // truer thing to say.
         let mut before_root: Option<(u32, &'static str)> = None;
         loop {
+            if self.stopped {
+                return;
+            }
             let event = match reader.read_resolved_event() {
                 Ok((ns, event)) => {
                     // The resolved namespace borrows the reader, so anything
@@ -1040,7 +1067,7 @@ impl<'a, S: FnMut(PsviEvent)> Run<'a, '_, S> {
         // schema has no symbols for it.
         let reported = psvi_name(qname, ns, local);
 
-        (self.sink)(PsviEvent::StartElement {
+        self.emit(PsviEvent::StartElement {
             name: reported.clone(),
             declaration,
             type_id,
@@ -1554,7 +1581,7 @@ impl<'a, S: FnMut(PsviEvent)> Run<'a, '_, S> {
             // The elements *within* the skipped subtree were never announced,
             // so closing them would unbalance it the other way.
             if frame.announced {
-                (self.sink)(PsviEvent::EndElement {
+                self.emit(PsviEvent::EndElement {
                     name: frame.reported,
                     declaration: frame.declaration,
                     line,
@@ -1577,7 +1604,7 @@ impl<'a, S: FnMut(PsviEvent)> Run<'a, '_, S> {
             self.check_content(&frame, &shown, line);
         }
 
-        (self.sink)(PsviEvent::EndElement {
+        self.emit(PsviEvent::EndElement {
             name: frame.reported,
             declaration: frame.declaration,
             line,
@@ -1643,7 +1670,7 @@ impl<'a, S: FnMut(PsviEvent)> Run<'a, '_, S> {
             }
             self.record_identifiers(target, &lexical, frame.id_scope, line);
             self.fill_content_field(value.as_ref());
-            (self.sink)(PsviEvent::Text {
+            self.emit(PsviEvent::Text {
                 value,
                 type_id: target,
                 lexical,
@@ -1664,7 +1691,7 @@ impl<'a, S: FnMut(PsviEvent)> Run<'a, '_, S> {
                 // was allowed. It carries no `value` because a mixed type has
                 // no value space to parse it into, and it is not trimmed
                 // because in mixed content whitespace is content.
-                (self.sink)(PsviEvent::Text {
+                self.emit(PsviEvent::Text {
                     value: None,
                     type_id: ty,
                     lexical: frame.text.clone(),

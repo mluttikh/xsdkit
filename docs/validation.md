@@ -158,23 +158,26 @@ rather than failing to convert or being rounded into one it can hold:
 An `xs:float` arrives as the shortest decimal that reads back as the same
 32-bit value, so `0.1` is `0.1` rather than `0.10000000149011612`.
 
-### The outcome is on the iterator
+### The outcome comes at the end
 
-A document can be worth reading and still be invalid, so the report is
-available before you start as well as after you finish.
+`iter_typed` reads the document as it validates it, on a thread of its own,
+so memory stays flat however large the document is. Whether a document is
+valid is only known at its end, and that is where the report is:
 
 ```python
 events = schemas.iter_typed(xml)
-events.report.is_valid       # available immediately
-
 for ev in events:
     ...
+events.report.is_valid       # once every event has been read
 ```
 
+Reading `report` sooner raises `RuntimeError`; to know first, call `validate`.
+An iterator dropped part way, after a `break` say, stops the reading as well,
+rather than validating the rest of the document for nobody.
+
 `iter_typed` composes the way an iterator should — with `enumerate`,
-`itertools`, generator expressions. If you would rather have everything at
-once, `read_typed` returns `(events, report)` as a list, or feeds them to an
-`on_event` callback and returns `None` in their place.
+`itertools`, generator expressions. For everything at once, `read_typed`
+returns `(events, report)`, with the events as a list.
 
 ### What is on an event
 
