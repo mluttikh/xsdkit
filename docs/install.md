@@ -16,7 +16,7 @@
 
     A Rust toolchain is needed to build from source; the published wheels do not need one.
 
-Python 3.9 and newer. The extension is built against the stable ABI
+Python 3.10 and newer. The extension is built against the stable ABI
 (`abi3`), so one wheel per platform serves every supported Python — upgrading
 your interpreter does not mean waiting for a new release.
 

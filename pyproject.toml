@@ -9,14 +9,13 @@ description = "A generic XSD reader: parse W3C XML Schema into a queryable schem
 readme = "README.md"
 license = "MIT"
 license-files = ["LICENSE"]
-requires-python = ">=3.9"
+requires-python = ">=3.10"
 keywords = ["xsd", "xml", "schema", "parser", "validation"]
 classifiers = [
     "Development Status :: 3 - Alpha",
     "Intended Audience :: Developers",
     "Programming Language :: Python :: 3",
     "Programming Language :: Python :: 3 :: Only",
-    "Programming Language :: Python :: 3.9",
     "Programming Language :: Python :: 3.10",
     "Programming Language :: Python :: 3.11",
     "Programming Language :: Python :: 3.12",
@@ -51,7 +50,6 @@ include = ["python/xsdkit/*.pyi", "python/xsdkit/py.typed"]
 # `pip install --group test`. IPython is here because the notebook tests
 # render through its own formatter rather than calling `_repr_html_`.
 test = ["pytest>=8", "ipython>=8"]
-# stubtest checks the stub against the built module. mypy no longer runs on
-# Python 3.9, where the group installs nothing.
-typecheck = ["mypy>=2; python_version >= '3.10'"]
+# stubtest checks the stub against the built module.
+typecheck = ["mypy>=2"]
 dev = [{ include-group = "test" }, { include-group = "typecheck" }, "maturin>=1.9,<2.0"]

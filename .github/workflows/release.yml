@@ -61,8 +61,8 @@ jobs:
     strategy:
       fail-fast: false
       # One wheel per platform, not per platform *and* Python version: the
-      # extension is built against the stable ABI (`abi3-py39`), so a single
-      # wheel serves 3.9 through whatever ships next.
+      # extension is built against the stable ABI (`abi3-py310`), so a single
+      # wheel serves 3.10 through whatever ships next.
       # `native: true` marks the rows whose wheel the runner can actually
       # install. The cross-compiled and musl rows cannot run where they are
       # built, so they are proven by building, and by whoever installs them.

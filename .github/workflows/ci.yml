@@ -139,7 +139,7 @@ jobs:
           - { os: ubuntu-latest, python: "3.14", label: ubuntu-latest }
           - { os: macos-latest, python: "3.14", label: macos-latest }
           - { os: windows-latest, python: "3.14", label: windows-latest }
-          - { os: ubuntu-latest, python: "3.9", label: "3.9, ubuntu-latest" }
+          - { os: ubuntu-latest, python: "3.10", label: "3.10, ubuntu-latest" }
     steps:
       - uses: actions/checkout@v5
       - uses: actions/setup-python@v6
@@ -169,10 +169,8 @@ jobs:
       # the module the wheel installed, the way a type checker reads it — and
       # found 62 disagreements that test had let through: classes that cannot
       # be subclassed but were not `@final`, keywords the stub forbade and the
-      # module took, and aliases no program could import. mypy no longer runs
-      # on 3.9, which the `python` guard below skips.
+      # module took, and aliases no program could import.
       - name: Check the stub against the installed module
-        if: matrix.python != '3.9'
         run: python -m pip install --group typecheck && python -m mypy.stubtest xsdkit --allowlist python/stubtest-allowlist.txt
 
   # The same instance cases as the conformance job, through the installed
