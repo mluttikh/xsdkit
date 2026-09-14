@@ -102,7 +102,9 @@ jobs:
         shell: bash
         run: |
           python -m pip install --find-links dist --no-index xsdkit
-          python -m pip install pytest ipython
+          # The `test` dependency group, which needs pip 25.1 or later.
+          python -m pip install --upgrade pip
+          python -m pip install --group test
           # From a directory that is not the repo root, so the import resolves
           # to the installed wheel and not to `python/xsdkit`, which holds the
           # sources without the compiled extension.

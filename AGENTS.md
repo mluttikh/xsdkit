@@ -667,7 +667,10 @@ local toolchain even one release behind will miss lints CI enforces, so
 `rustup update stable` before trusting a green local run.
 
 Python: `maturin develop`, then `pytest python/tests -q` and
-`python3 scripts/check-doc-snippets-python.py`. On a machine with
+`python3 scripts/check-doc-snippets-python.py`. The test dependencies are the
+`test` dependency group in `pyproject.toml` (`pip install --group test`, pip
+25.1 or later), and CI and the release workflow install exactly that; `dev`
+adds mypy for stubtest and maturin. On a machine with
 conda active, maturin refuses to run while both `VIRTUAL_ENV` and
 `CONDA_PREFIX` are set — `env -u CONDA_PREFIX` in front of the command.
 

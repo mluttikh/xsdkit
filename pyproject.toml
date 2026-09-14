@@ -1,18 +1,27 @@
 [build-system]
-requires = ["maturin>=1.7,<2.0"]
+# 1.9 writes the licence below as a PEP 639 expression, which is what PyPI shows.
+requires = ["maturin>=1.9,<2.0"]
 build-backend = "maturin"
 
 [project]
 name = "xsdkit"
 description = "A generic XSD reader: parse W3C XML Schema into a queryable schema component model"
 readme = "README.md"
-license = { file = "LICENSE" }
+license = "MIT"
+license-files = ["LICENSE"]
 requires-python = ">=3.9"
 keywords = ["xsd", "xml", "schema", "parser", "validation"]
 classifiers = [
     "Development Status :: 3 - Alpha",
     "Intended Audience :: Developers",
-    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3 :: Only",
+    "Programming Language :: Python :: 3.9",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Programming Language :: Python :: 3.14",
     "Programming Language :: Rust",
     "Programming Language :: Python :: Implementation :: CPython",
     "Topic :: Text Processing :: Markup :: XML",
@@ -38,4 +47,11 @@ include = ["python/xsdkit/*.pyi", "python/xsdkit/py.typed"]
 
 
 [dependency-groups]
-dev = ["pytest>=8", "maturin>=1.7", "ipython>=8"]
+# What the tests import, and what CI and the release workflow install:
+# `pip install --group test`. IPython is here because the notebook tests
+# render through its own formatter rather than calling `_repr_html_`.
+test = ["pytest>=8", "ipython>=8"]
+# stubtest checks the stub against the built module. mypy no longer runs on
+# Python 3.9, where the group installs nothing.
+typecheck = ["mypy>=2; python_version >= '3.10'"]
+dev = [{ include-group = "test" }, { include-group = "typecheck" }, "maturin>=1.9,<2.0"]
