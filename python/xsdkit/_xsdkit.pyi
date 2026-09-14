@@ -5,7 +5,14 @@ that every exported name exists at runtime.
 """
 
 import os
-from typing import Any, Generic, Iterable, Iterator, Literal, Mapping, Sequence, TypeVar, final
+from collections.abc import Iterable, Iterator, Mapping, Sequence
+from typing import (
+    Any,
+    Generic,
+    Literal,
+    TypeVar,
+    final,
+)
 
 # The aliases live in a runtime module, so code annotated with them can import
 # them; imported here without `as`, so they are not re-exported from this one.
@@ -776,8 +783,6 @@ class Tree:
     in a notebook, and through `print`.
     """
 
-    def __str__(self) -> str: ...
-    def __repr__(self) -> str: ...
     def __len__(self) -> int: ...
     def __contains__(self, needle: str, /) -> bool: ...
     def __eq__(self, other: object, /) -> bool: ...

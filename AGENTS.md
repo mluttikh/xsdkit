@@ -678,7 +678,10 @@ Python: `maturin develop`, then `pytest python/tests -q` and
 `python3 scripts/check-doc-snippets-python.py`. The test dependencies are the
 `test` dependency group in `pyproject.toml` (`pip install --group test`, pip
 25.1 or later), and CI and the release workflow install exactly that; `dev`
-adds mypy for stubtest and maturin. On a machine with
+adds mypy for stubtest, Ruff and maturin. `ruff check` lints every Python file
+with Ruff's default rules at the version the `lint` group pins, and the Check &
+Lint job runs it. A deliberate exception is a `# noqa: RULE` with its reason on
+the line, not a rule switched off in `pyproject.toml` for every file. On a machine with
 conda active, maturin refuses to run while both `VIRTUAL_ENV` and
 `CONDA_PREFIX` are set — `env -u CONDA_PREFIX` in front of the command.
 The `python` feature targets the Python 3.10 stable ABI, so PyO3's build

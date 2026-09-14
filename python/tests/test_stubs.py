@@ -97,12 +97,14 @@ def test_every_stubbed_member_exists():
         if runtime is None:
             continue
         for member in node.body:
-            if isinstance(member, ast.FunctionDef):
-                if not hasattr(runtime, member.name):
-                    missing.append(f"{node.name}.{member.name}")
-            elif isinstance(member, ast.AnnAssign) and isinstance(member.target, ast.Name):
-                if not hasattr(runtime, member.target.id):
-                    missing.append(f"{node.name}.{member.target.id}")
+            if isinstance(member, ast.FunctionDef) and not hasattr(runtime, member.name):
+                missing.append(f"{node.name}.{member.name}")
+            elif (
+                isinstance(member, ast.AnnAssign)
+                and isinstance(member.target, ast.Name)
+                and not hasattr(runtime, member.target.id)
+            ):
+                missing.append(f"{node.name}.{member.target.id}")
     assert not missing, f"stubbed but absent at runtime: {missing}"
 
 
@@ -319,7 +321,7 @@ def test_docstring_examples_run(monkeypatch):
         namespace = {"xsdkit": xsdkit, "schemas": schemas}
         for example in parser.get_examples(doc):
             try:
-                exec(compile(example.source, f"<{where}>", "exec"), namespace)
+                exec(compile(example.source, f"<{where}>", "exec"), namespace)  # noqa: S102 - running it is the test
             except Exception as e:  # noqa: BLE001 - every failure is the report
                 failures.append(f"{where}: {example.source.strip()!r} raised {e!r}")
                 break

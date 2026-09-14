@@ -66,17 +66,17 @@ def render(rs) -> str:
     L.append("     tests/conformance/spec-rules.tsv. Edit the table, not this page. -->")
     L.append("")
     L.append(
-        "XSD is not one rule but **%d**, each of them named and numbered by the\n"
+        f"XSD is not one rule but **{n}**, each of them named and numbered by the\n"
         "specification itself: Appendix B of each Recommendation is, in effect, an\n"
         "index of them. That makes the language a finite checklist rather than a\n"
         "document you can only read, and this page is that checklist with a column\n"
-        "for what `xsdkit` does about each entry." % n
+        "for what `xsdkit` does about each entry."
     )
     L.append("")
     L.append(
         "| enforced | rules |\n|---|---|\n"
-        "| yes | %d |\n| in part | %d |\n| no | %d |\n| nothing to enforce | %d |"
-        % (count["yes"], count["partial"], count["no"], count["by-construction"])
+        f"| yes | {count['yes']} |\n| in part | {count['partial']} |\n"
+        f"| no | {count['no']} |\n| nothing to enforce | {count['by-construction']} |"
     )
     L.append("")
     L.append(
@@ -103,48 +103,42 @@ def render(rs) -> str:
         "name a site and every diagnostic code to be attributable to a row here."
     )
     L.append("")
+    fixtured = sum(1 for r in rs if r["fixtures"] == "fixtures")
     L.append(
         "A ✓ in the last column means this crate has its **own** fixtures for the\n"
         "rule — the smallest schema that violates it, and a near-miss that must still\n"
-        "load — in `tests/spec_rules/fixtures.rs`. %d of %d rules so far. The W3C\n"
+        f"load — in `tests/spec_rules/fixtures.rs`. {fixtured} of {n} rules so far. The W3C\n"
         "suite cannot supply those: it offers about 220 negative schema cases per\n"
         "version to share among 66 Schema Component Constraints, so a rule can be\n"
-        "enforced by a check nobody has ever seen fire." % (
-            sum(1 for r in rs if r["fixtures"] == "fixtures"), n)
+        "enforced by a check nobody has ever seen fire."
     )
 
     for spec in ("structures", "datatypes"):
         group = [r for r in rs if r["spec"] == spec]
         L.append("")
-        L.append("## %s" % TITLE[spec])
+        L.append(f"## {TITLE[spec]}")
         L.append("")
-        L.append("%d rules, of which %d enforced." % (
-            len(group), sum(1 for r in group if r["status"] == "yes")))
+        enforced = sum(1 for r in group if r["status"] == "yes")
+        L.append(f"{len(group)} rules, of which {enforced} enforced.")
         for kind in KINDS:
             here = [r for r in group if r["kind"] == kind]
             if not here:
                 continue
             L.append("")
-            L.append("### %s%s" % (kind, "" if kind.endswith("s") else "s"))
+            L.append(f"### {kind}{'' if kind.endswith('s') else 's'}")
             L.append("")
             L.append("| Rule | Enforced | Where, and what is missing | Fixtures |")
             L.append("|---|---|---|---|")
             for r in sorted(here, key=lambda r: r["name"].lower()):
-                link = "[%s](%s#%s)" % (r["name"], REC[r["spec"]], r["anchor"])
+                link = f"[{r['name']}]({REC[r['spec']]}#{r['anchor']})"
                 where = ""
                 if r["site"] not in ("-", ""):
-                    where = "`%s`" % r["site"]
+                    where = f"`{r['site']}`"
                 if r["note"]:
-                    where = ("%s — %s" % (where, r["note"])) if where else r["note"]
-                L.append(
-                    "| %s | %s | %s | %s |"
-                    % (
-                        link,
-                        MARK[r["status"]],
-                        where or "—",
-                        "✓" if r["fixtures"] == "fixtures" else "",
-                    )
-                )
+                    where = f"{where} — {r['note']}" if where else r["note"]
+                mark = MARK[r["status"]]
+                fixtures = "✓" if r["fixtures"] == "fixtures" else ""
+                L.append(f"| {link} | {mark} | {where or '—'} | {fixtures} |")
     L.append("")
     return "\n".join(L)
 

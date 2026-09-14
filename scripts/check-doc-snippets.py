@@ -71,7 +71,7 @@ def blocks(path: Path) -> list[tuple[int, str]]:
         j = start
         while j < len(lines) and lines[j].strip() != "```":
             j += 1
-        body = [ln[len(indent) :] if ln.startswith(indent) else ln for ln in lines[start:j]]
+        body = [ln.removeprefix(indent) for ln in lines[start:j]]
         found.append((start + 1, "\n".join(body)))
         i = j + 1
     return found
@@ -153,6 +153,7 @@ def main() -> int:
             cwd=ROOT,
             capture_output=True,
             text=True,
+            check=False,
         )
     finally:
         GENERATED.unlink(missing_ok=True)

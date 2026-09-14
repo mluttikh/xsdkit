@@ -52,4 +52,21 @@ include = ["python/xsdkit/*.pyi", "python/xsdkit/py.typed"]
 test = ["pytest>=8", "ipython>=8"]
 # stubtest checks the stub against the built module.
 typecheck = ["mypy>=2"]
-dev = [{ include-group = "test" }, { include-group = "typecheck" }, "maturin>=1.9,<2.0"]
+# Ruff, pinned exactly: its default rules change between releases, and what CI
+# enforces should change only when this line does.
+lint = ["ruff==0.16.7"]
+dev = [
+    { include-group = "test" },
+    { include-group = "typecheck" },
+    { include-group = "lint" },
+    "maturin>=1.9,<2.0",
+]
+
+[tool.ruff]
+# Ruff's default rules, at the version the `lint` group pins. The target version
+# comes from `requires-python`. A deliberate exception is a `# noqa` with its
+# reason beside the line, not a rule switched off here for every file.
+# Where this project's own modules live — the package under `python/`, and the
+# tests' `conftest` — so import sorting puts them in a block of their own, after
+# the third-party ones.
+src = ["python", "python/tests"]

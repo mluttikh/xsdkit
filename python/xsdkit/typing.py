@@ -14,7 +14,8 @@ program could not import them.
 import datetime
 import decimal
 import os
-from typing import Any, Callable, Literal
+from collections.abc import Callable
+from typing import Any, Literal
 
 __all__ = [
     "Conformance",

@@ -9,9 +9,9 @@ import weakref
 from decimal import Decimal
 
 import pytest
+
 import xsdkit
 from conftest import NS, XS, build
-
 
 # --- loading ---------------------------------------------------------------
 
@@ -841,7 +841,7 @@ def test_a_schema_nested_too_deeply_is_refused_not_parsed():
         '''
     )
     result = subprocess.run(
-        [sys.executable, "-c", code], capture_output=True, text=True, timeout=120
+        [sys.executable, "-c", code], capture_output=True, text=True, timeout=120, check=False
     )
     assert result.returncode == 0, result.stderr[-2000:]
     assert result.stdout.split() == ["['XSD1001']", "1"]

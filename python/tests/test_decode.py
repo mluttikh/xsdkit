@@ -4,6 +4,7 @@ import datetime
 from decimal import Decimal
 
 import pytest
+
 import xsdkit
 from conftest import NS, build
 
@@ -383,6 +384,7 @@ def test_a_deeply_nested_document_decodes():
         capture_output=True,
         text=True,
         timeout=300,
+        check=False,
     )
     assert result.returncode == 0, result.stderr[-2000:]
     assert result.stdout.strip() == "10000 ['XSD1001']"
