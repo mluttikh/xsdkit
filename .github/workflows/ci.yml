@@ -152,10 +152,13 @@ jobs:
       # `maturin develop` keeps this identical to what a user gets.
       - name: Build and install the wheel
         run: pip install .
-      # IPython is a test dependency: the notebook-rendering tests format
-      # through its own `DisplayFormatter` rather than trusting `_repr_html_`.
+      # From the `test` dependency group in pyproject.toml, the same list a
+      # contributor installs. Groups need pip 25.1, newer than the pip the
+      # oldest Python here ships with.
+      - name: Install the test dependencies
+        run: python -m pip install --upgrade pip && python -m pip install --group test
       - name: Run the Python tests
-        run: pip install pytest ipython && pytest python/tests -q
+        run: python -m pytest python/tests -q
       # The Python examples on the website all run against
       # `docs/examples/report.xsd`, so they can be run rather than merely
       # parsed. Several of them did not, for want of an `import`.
@@ -170,7 +173,7 @@ jobs:
       # on 3.9, which the `python` guard below skips.
       - name: Check the stub against the installed module
         if: matrix.python != '3.9'
-        run: pip install mypy && python -m mypy.stubtest xsdkit --allowlist python/stubtest-allowlist.txt
+        run: python -m pip install --group typecheck && python -m mypy.stubtest xsdkit --allowlist python/stubtest-allowlist.txt
 
   # The same instance cases as the conformance job, through the installed
   # wheel rather than the crate. The Rust harness never reaches
