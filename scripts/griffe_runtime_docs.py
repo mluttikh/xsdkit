@@ -1,16 +1,15 @@
 """Fill in documentation the type stub does not carry.
 
-The Python API is a compiled extension module, so its documentation exists
-twice over and neither copy is complete. `python/xsdkit/_xsdkit.pyi` has the
-type annotations — the thing a reference is mostly *for* — and almost no
-prose. The built module has the full prose, because `#[pyo3]` turns the Rust
-doc comments into `__doc__`, and no annotations at all: a property compiled
-from Rust has no return type to inspect.
+The Python API is a compiled extension module. `#[pyo3]` turns the Rust doc
+comments into `__doc__`, and `scripts/sync-stub-docstrings.py` copies those
+into `python/xsdkit/_xsdkit.pyi`, where editors read them — `test_stubs.py`
+fails when the two differ. So the stub carries the types and the prose for
+every public member, and griffe analysing it gets both.
 
-Griffe reads one or the other. Asked to analyse the stub it gets the types;
-asked to inspect the module it gets the text. This extension reads the stub
-and borrows the text, so the reference has both without the doc comments
-being written out a second time in the stub, where they would drift.
+What the stub still leaves out is the dunders the reference shows —
+`__len__`, `__iter__` and the rest — whose docstrings the sync skips because
+CPython's slot defaults say nothing. This extension reads the stub and
+borrows `__doc__` from the imported module wherever the stub has none.
 """
 
 from __future__ import annotations

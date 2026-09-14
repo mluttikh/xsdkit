@@ -1103,6 +1103,14 @@ practice, since each was a real complaint:
   without re-exporting. `python/stubtest-allowlist.txt` holds what stubtest
   gets wrong, with the reason; stubtest fails on an entry that no longer
   matches, so it cannot outlive the reason.
+- **A `///` on anything Python sees is user documentation.** `#[pyo3]` turns
+  it into `__doc__`, which `help()` shows, and
+  `scripts/sync-stub-docstrings.py` copies it into the stub, which is what an
+  editor's hover shows. `test_the_stub_carries_the_module_docstrings` fails
+  when the two differ, so after changing one, rebuild (`maturin develop`) and
+  run the script. Write what it does and how to use it; a note for
+  maintainers — why a field is renamed for clippy, what an old version did —
+  goes in a `//` comment beside it, where no user reads it as advice.
 - **Every Rust knob needs a keyword.** `version=` was missing for a long time,
   which made the whole XSD 1.1 implementation unreachable from Python without
   anyone noticing.

@@ -388,3 +388,26 @@ def test_classes_that_cannot_be_subclassed_are_final():
         with pytest.raises(TypeError):
             type("Sub", (cls,), {})
         assert name in finals, f"{name} cannot be subclassed, but the stub does not say so"
+
+
+def test_the_stub_carries_the_module_docstrings():
+    """Editors read hover text from the stub, not from the compiled module, and
+    most of the stub's members had none — so a hover over `SchemaSet.decode`
+    was empty while `help()` had three paragraphs.
+
+    The `///` comments are the one place the prose is written;
+    `scripts/sync-stub-docstrings.py` copies them in, and this fails when a
+    comment changed without it.
+    """
+    import importlib.util
+
+    script = pathlib.Path(__file__).resolve().parents[2] / "scripts" / "sync-stub-docstrings.py"
+    spec = importlib.util.spec_from_file_location("sync_stub_docstrings", script)
+    sync = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(sync)
+
+    _, changed = sync.rewrite(sync.STUB.read_text(encoding="utf-8"), xsdkit._xsdkit)
+    assert not changed, (
+        "run scripts/sync-stub-docstrings.py; the stub's docstrings differ from the module's for: "
+        + ", ".join(changed)
+    )
