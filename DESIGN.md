@@ -694,7 +694,7 @@ they claim. Neither should masquerade as a missing file.
 
 Mechanics:
 
-- `maturin`, `pyo3`, **abi3** — one wheel per platform across 3.9+.
+- `maturin`, `pyo3`, **abi3** — one wheel per platform across 3.10+.
 - **Release the GIL** around `build()`. Compilation is the only slow part,
   and `Schemas` is `Send + Sync` precisely so this is legal.
 - Typed exception hierarchy: `XsdError` base, `SchemaError` carrying

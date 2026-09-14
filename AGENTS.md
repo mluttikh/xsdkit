@@ -397,7 +397,7 @@ reused.
    good.
 
 **One wheel per platform, not per Python.** The extension is built against
-the stable ABI (`abi3-py39`), so one wheel serves 3.9 upward. That is why the
+the stable ABI (`abi3-py310`), so one wheel serves 3.10 upward. That is why the
 matrix has no Python dimension.
 
 **One-time setup, before the first tag.**
@@ -681,6 +681,11 @@ Python: `maturin develop`, then `pytest python/tests -q` and
 adds mypy for stubtest and maturin. On a machine with
 conda active, maturin refuses to run while both `VIRTUAL_ENV` and
 `CONDA_PREFIX` are set — `env -u CONDA_PREFIX` in front of the command.
+The `python` feature targets the Python 3.10 stable ABI, so PyO3's build
+script refuses an older interpreter: if the `python3` it finds is 3.9,
+`cargo clippy --features python` fails before compiling anything, with
+"cannot set a minimum Python version 3.10 higher than the interpreter
+version". Point `PYO3_PYTHON` at a Python 3.10 or later.
 
 Both import the installed package, never `python/` — that directory holds the
 Python source *without* the compiled extension, so putting it on `sys.path`

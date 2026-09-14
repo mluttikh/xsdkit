@@ -14,7 +14,7 @@ program could not import them.
 import datetime
 import decimal
 import os
-from typing import Any, Callable, Literal, Optional, Tuple, Union
+from typing import Any, Callable, Literal
 
 __all__ = [
     "Conformance",
@@ -30,10 +30,6 @@ __all__ = [
     "XsdValue",
     "XsdVersion",
 ]
-
-# `Union` and `Optional` rather than `|`, which Python 3.9 cannot evaluate at
-# runtime, and this module is imported rather than only read. Builtin generics
-# such as `list[Any]` it can.
 
 Conformance = Literal["strict", "lax"]
 """How strictly a schema is read: ``"strict"`` reports errors, ``"lax"``
@@ -60,11 +56,11 @@ Use = Literal["required", "optional", "prohibited"]
 EventKind = Literal["start", "text", "end"]
 """What a PSVI event is."""
 
-Name = Union[str, Tuple[Optional[str], str]]
+Name = str | tuple[str | None, str]
 """A name as Clark notation (``{ns}local``), a bare local name, or a
 ``(namespace, local)`` pair."""
 
-Resolver = Callable[[str, Optional[str]], Union[bytes, str, Tuple[str, Union[bytes, str]]]]
+Resolver = Callable[[str, str | None], bytes | str | tuple[str, bytes | str]]
 """Resolves a schema location to a document.
 
 Called with ``(location, base)``, where ``base`` is the URI of the document
@@ -79,24 +75,24 @@ propagate as themselves.
 Replaces the filesystem rather than adding to it, so it is an alternative to
 ``search_paths``, not a layer on top."""
 
-Instance = Union[str, bytes, bytearray, os.PathLike[str]]
+Instance = str | bytes | bytearray | os.PathLike[str]
 """A document: XML as text, as bytes whose encoding is detected, or a path to
 read it from. A ``str`` is always content — a path and a document cannot be
 told apart once both are strings — so pass ``pathlib.Path`` for a file."""
 
-XsdValue = Union[
-    str,
-    bool,
-    int,
-    float,
-    decimal.Decimal,
-    bytes,
-    datetime.datetime,
-    datetime.date,
-    datetime.time,
-    datetime.timedelta,
-    list[Any],
-]
+XsdValue = (
+    str
+    | bool
+    | int
+    | float
+    | decimal.Decimal
+    | bytes
+    | datetime.datetime
+    | datetime.date
+    | datetime.time
+    | datetime.timedelta
+    | list[Any]
+)
 """An XSD value as its closest native Python type.
 
 Durations and gregorian fragments stay as their canonical lexical strings —

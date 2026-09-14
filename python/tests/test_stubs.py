@@ -1,10 +1,5 @@
 """The stubs are only useful if they describe what actually exists."""
 
-# Annotations below use `X | None`, which Python 3.9 — the oldest the wheel
-# supports — cannot evaluate. Without this the file failed to import there,
-# and pytest stopped at collection having run nothing.
-from __future__ import annotations
-
 import ast
 import doctest
 import pathlib
