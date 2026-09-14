@@ -1133,6 +1133,18 @@ practice, since each was a real complaint:
   and a document path that cannot be read an `OSError` with its errno and
   filename, as anywhere else in Python. Bytes that cannot be decoded are an
   invalid document — a diagnostic in the report — not an exception.
+- **A `SchemaSet` pickles through serde.** The `python` feature turns on
+  `serde` and postcard. `serialize()` writes a header and the xsdkit version
+  ahead of the postcard payload, and `deserialize()` refuses any other
+  version: a name is an interner index, so bytes from another build mean
+  nothing. `Diagnostic`, `Span` and `ValidationReport` pickle as their fields
+  through a private `_rebuild` classmethod, so a `SchemaError` raised in a
+  process-pool worker arrives whole.
+- **A value `datetime` cannot hold exactly stays lexical.** A year outside
+  1–9999, an `xs:date` with a timezone, and digits below the microsecond give
+  the canonical lexical form rather than a rounded `datetime`, and seconds go
+  through the decimal's digits, never a float. `xs:float` widens through its
+  shortest decimal.
 - **Release the GIL only where no Python is called.** `validate()` detaches;
   `read_typed()` cannot, because every event becomes a Python object and
   `on_event` is Python code.

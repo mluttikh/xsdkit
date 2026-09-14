@@ -137,7 +137,7 @@ said and `datetime.strptime` does not implement `xs:date`.
 | `xs:time` | `datetime.time` |
 | `xs:dayTimeDuration` | `datetime.timedelta` |
 | `xs:duration`, `xs:gYear`, `xs:gMonthDay`, … | `str`, canonical form |
-| a date or duration Python cannot hold | `str`, canonical form |
+| a value `datetime` cannot hold exactly | `str`, canonical form |
 | list types | `list` of the item type |
 
 `xs:duration` stays a string on purpose: months and seconds are not
@@ -145,10 +145,18 @@ commensurable, so no `timedelta` can represent `P1M` faithfully. Guessing 30
 days would be a silent, plausible, wrong answer. `xs:dayTimeDuration` has no
 such problem, so it becomes a `timedelta`.
 
-XSD's year is unbounded in both directions, and XSD 1.1 has a year zero;
-`datetime` stops at 1 and 9999. A value outside that range — `10000-01-01`,
-`-0001-01-01`, or a `dayTimeDuration` of a billion days — keeps its canonical
-lexical form rather than failing to convert.
+A value `datetime` cannot hold exactly keeps its canonical lexical form,
+rather than failing to convert or being rounded into one it can hold:
+
+- a year outside 1 to 9999 — XSD's year is unbounded in both directions, and
+  XSD 1.1 has a year zero — or a `dayTimeDuration` of a billion days;
+- an `xs:date` with a timezone, such as `2024-12-01Z`, because `datetime.date`
+  has no room for one;
+- a time or a duration with digits below the microsecond, such as
+  `PT0.0000001S`.
+
+An `xs:float` arrives as the shortest decimal that reads back as the same
+32-bit value, so `0.1` is `0.1` rather than `0.10000000149011612`.
 
 ### The outcome is on the iterator
 

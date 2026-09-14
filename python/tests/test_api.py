@@ -1,7 +1,12 @@
 """The Python surface, exercised the way a user would."""
 
 import collections.abc
+import copy
+import datetime
+import math
+import pickle
 import weakref
+from decimal import Decimal
 
 import pytest
 import xsdkit
@@ -983,7 +988,8 @@ def test_bytes_that_cannot_be_decoded_are_an_invalid_document():
     assert events == [] and not report.is_valid
     with pytest.raises(xsdkit.DocumentError):
         s.decode(doc)
-    assert s.decode(doc, lax=True) is None
+    with pytest.raises(xsdkit.DocumentError):
+        s.decode(doc, lax=True)
 
 
 def test_search_paths_take_path_objects_but_not_a_single_path(tmp_path):
@@ -1042,3 +1048,147 @@ def test_load_bytes_detects_the_encoding():
     schemas, diagnostics = xsdkit.load_bytes(xsd.encode("iso-8859-1"))
     assert diagnostics == []
     assert f"{{{NS}}}größe" in schemas
+
+
+# --- data out ----------------------------------------------------------------
+
+
+def test_a_schema_set_pickles():
+    """A process pool could not share a schema set: nothing pickled."""
+    s = build('<xs:element name="a" type="xs:int"/>')
+    back = pickle.loads(pickle.dumps(s))
+    assert list(back) == list(s)
+    assert back.validate(f'<a xmlns="{NS}">1</a>').is_valid
+    assert not back.validate(f'<a xmlns="{NS}">x</a>').is_valid
+    # It cannot change, so a copy is the same object.
+    assert copy.copy(s) is s and copy.deepcopy(s) is s
+
+
+def test_serialized_bytes_are_only_read_by_the_version_that_wrote_them():
+    s = build('<xs:element name="a" type="xs:int"/>')
+    data = s.serialize()
+    assert list(xsdkit.SchemaSet.deserialize(data)) == list(s)
+
+    other = data.replace(xsdkit.__version__.encode(), b"0.0.0", 1)
+    with pytest.raises(ValueError, match="compile the schema again"):
+        xsdkit.SchemaSet.deserialize(other)
+    with pytest.raises(ValueError, match="not a schema set"):
+        xsdkit.SchemaSet.deserialize(b"<xs:schema/>")
+    with pytest.raises(ValueError, match="cannot read"):
+        xsdkit.SchemaSet.deserialize(data[: len(data) // 2])
+
+
+def test_errors_and_reports_survive_pickling():
+    """A `SchemaError` raised in a worker came back as a failure to pickle it."""
+    with pytest.raises(xsdkit.SchemaError) as excinfo:
+        build('<xs:element name="a" type="tns:Nope"/>')
+    err = pickle.loads(pickle.dumps(excinfo.value))
+    assert type(err) is xsdkit.SchemaError
+    assert str(err) == str(excinfo.value)
+    assert err.diagnostics == excinfo.value.diagnostics
+    assert err.diagnostics[0].spans == excinfo.value.diagnostics[0].spans
+
+    s = build('<xs:element name="a" type="xs:int"/>')
+    report = s.validate(f'<a xmlns="{NS}">x</a>')
+    back = pickle.loads(pickle.dumps(report))
+    assert (back.is_valid, back.diagnostics) == (report.is_valid, report.diagnostics)
+
+    with pytest.raises(xsdkit.InvalidValueError) as excinfo:
+        s.type(XS, "int").validate("x")
+    assert type(pickle.loads(pickle.dumps(excinfo.value))) is xsdkit.InvalidValueError
+
+
+def test_decode_can_say_which_root_it_read():
+    """`<a>x</a>` and `<b>x</b>` both decoded to `'x'`."""
+    s = build('<xs:element name="a" type="xs:string"/><xs:element name="b" type="xs:string"/>')
+    assert s.decode(f'<a xmlns="{NS}">x</a>') == s.decode(f'<b xmlns="{NS}">x</b>') == "x"
+    assert s.decode(f'<a xmlns="{NS}">x</a>', root=True) == {"a": "x"}
+    assert s.decode(f'<b xmlns="{NS}">x</b>', root=True) == {"b": "x"}
+
+
+def test_a_root_key_is_spelled_out_when_another_global_shares_its_name(tmp_path):
+    for ns in ("a", "b"):
+        (tmp_path / f"{ns}.xsd").write_text(
+            f'<xs:schema xmlns:xs="{XS}" targetNamespace="urn:{ns}">'
+            '<xs:element name="r" type="xs:int"/></xs:schema>'
+        )
+    s = xsdkit.SchemaSet.from_files([tmp_path / "a.xsd", tmp_path / "b.xsd"])
+    assert s.decode('<r xmlns="urn:a">1</r>', root=True) == {"{urn:a}r": 1}
+
+
+@pytest.mark.parametrize("not_xml", ["<a", "report.xml", ""])
+def test_lax_decoding_still_refuses_what_is_not_xml(not_xml):
+    """`lax=True` returned `None` for text that was not XML at all."""
+    s = build('<xs:element name="a" type="xs:int"/>')
+    assert s.decode(f'<a xmlns="{NS}">x</a>', lax=True) == "x"
+    with pytest.raises(xsdkit.DocumentError):
+        s.decode(not_xml, lax=True)
+
+
+@pytest.mark.parametrize(
+    "builtin, lexical, expected",
+    [
+        ("date", "2024-12-01", datetime.date(2024, 12, 1)),
+        ("date", "2024-12-01Z", "2024-12-01Z"),
+        ("date", "2024-12-01+05:00", "2024-12-01+05:00"),
+        ("time", "12:00:00.5", datetime.time(12, 0, 0, 500_000)),
+        ("time", "12:00:00.1234567", "12:00:00.1234567"),
+        (
+            "dateTime",
+            "2024-12-01T12:00:00.000001Z",
+            datetime.datetime(2024, 12, 1, 12, 0, 0, 1, tzinfo=datetime.timezone.utc),
+        ),
+        ("dateTime", "2024-12-01T12:00:00.0000001", "2024-12-01T12:00:00.0000001"),
+        ("dayTimeDuration", "PT0.000001S", datetime.timedelta(microseconds=1)),
+        ("dayTimeDuration", "PT0.0000001S", "PT0.0000001S"),
+        ("dayTimeDuration", "-PT1.5S", -datetime.timedelta(seconds=1.5)),
+    ],
+)
+def test_a_value_datetime_cannot_hold_exactly_stays_lexical(builtin, lexical, expected):
+    """`2024-12-01Z` lost its timezone, and `PT0.0000001S` became `timedelta(0)`."""
+    value = build('<xs:element name="e" type="xs:string"/>').type(XS, builtin).validate(lexical)
+    assert value == expected
+    assert type(value) is type(expected)
+
+
+def test_a_float_arrives_as_the_decimal_it_was_written_as():
+    """`0.1` came back as `0.10000000149011612`, the same 32-bit value widened."""
+    t = build('<xs:element name="e" type="xs:string"/>').type(XS, "float")
+    assert t.validate("0.1") == 0.1
+    assert t.validate("3.4028235E38") == 3.4028235e38
+    assert math.isnan(t.validate("NaN"))
+    assert t.validate("-INF") == float("-inf")
+
+
+def test_a_qname_value_is_read_against_the_bindings_given():
+    """There was no way to pass bindings, so no prefixed QName could be checked."""
+    qname = build('<xs:element name="e" type="xs:string"/>').type(XS, "QName")
+    assert qname.validate("ex:report", namespaces={"ex": NS}) == f"{{{NS}}}report"
+    assert qname.validate("report", namespaces={"": NS}) == f"{{{NS}}}report"
+    assert qname.is_valid("ex:report", namespaces={"ex": NS})
+    assert not qname.is_valid("ex:report")
+    with pytest.raises(xsdkit.InvalidValueError):
+        qname.validate("ex:report")
+    with pytest.raises(TypeError, match="not list"):
+        qname.validate("ex:report", namespaces=["ex"])
+
+
+def test_a_complex_type_with_simple_content_validates_its_value():
+    """It raised "a complex type has no value space", and `facets` was `None`."""
+    s = build(
+        '<xs:complexType name="Price"><xs:simpleContent><xs:extension base="xs:decimal">'
+        '<xs:attribute name="currency" type="xs:string"/>'
+        "</xs:extension></xs:simpleContent></xs:complexType>"
+        '<xs:complexType name="Small"><xs:simpleContent><xs:restriction base="tns:Price">'
+        '<xs:maxInclusive value="100"/>'
+        "</xs:restriction></xs:simpleContent></xs:complexType>"
+    )
+    price = s.type(NS, "Price")
+    assert price.validate("19.95") == Decimal("19.95")
+    assert price.facets is not None
+    with pytest.raises(xsdkit.InvalidValueError):
+        price.validate("cheap")
+
+    small = s.type(NS, "Small")
+    assert small.is_valid("99") and not small.is_valid("101")
+    assert small.facets.max_inclusive == "100"

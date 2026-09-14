@@ -49,6 +49,11 @@ def _is_dunder(name: str) -> bool:
     return name.startswith("__") and name.endswith("__")
 
 
+# What `__reduce__` hands `pickle` to call. Plumbing for a dunder, not API, so
+# it is exempt from the stub the way the dunders are.
+PICKLE_HOOKS = {"_rebuild"}
+
+
 def _is_property(node: ast.stmt) -> bool:
     return isinstance(node, ast.FunctionDef) and any(
         isinstance(d, ast.Name) and d.id == "property" for d in node.decorator_list
@@ -160,7 +165,7 @@ def test_every_runtime_member_is_stubbed():
 
     Dunders are left out: the ones the stub declares are checked in the other
     direction, and Python synthesises the rest of the comparison protocol from
-    a single `__eq__`.
+    a single `__eq__`. So are the hooks pickling calls, for the same reason.
     """
     stubbed = _stub_classes()
     missing = []
@@ -170,7 +175,9 @@ def test_every_runtime_member_is_stubbed():
             continue
         declared = _declared(node)
         for member in vars(cls):
-            if not _is_dunder(member) and member not in declared:
+            if _is_dunder(member) or member in PICKLE_HOOKS:
+                continue
+            if member not in declared:
                 missing.append(f"{name}.{member}")
     assert not missing, f"present at runtime, absent from the stub: {sorted(missing)}"
 
