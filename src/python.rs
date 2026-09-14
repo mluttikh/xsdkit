@@ -3739,12 +3739,25 @@ struct TypeShape {
     repeating: Vec<QName>,
     /// The same question for attributes.
     attr_clark: FxHashSet<QName>,
+    /// The dictionary key of each declared child, made once per decode.
+    ///
+    /// Made per occurrence, every key was a Rust `String` turned into a new
+    /// Python `str` — a million of them for a document of 200,000 items, all
+    /// with the GIL held.
+    child_keys: FxHashMap<QName, Py<PyString>>,
+    /// The same for declared attributes, `@` included.
+    attr_keys: FxHashMap<QName, Py<PyString>>,
 }
 
 /// The shapes of every type reached so far in one decode.
 type Shapes = FxHashMap<TypeId, std::rc::Rc<TypeShape>>;
 
-fn shape_of(schemas: &Schemas, ty: TypeId, shapes: &mut Shapes) -> std::rc::Rc<TypeShape> {
+fn shape_of(
+    py: Python<'_>,
+    schemas: &Schemas,
+    ty: TypeId,
+    shapes: &mut Shapes,
+) -> std::rc::Rc<TypeShape> {
     if let Some(s) = shapes.get(&ty) {
         return s.clone();
     }
@@ -3758,21 +3771,40 @@ fn shape_of(schemas: &Schemas, ty: TypeId, shapes: &mut Shapes) -> std::rc::Rc<T
         .iter()
         .map(|c| (schemas[c.element].name, c.repeats))
         .collect();
+    let clark = ambiguous_names(declared.iter().copied(), schemas);
+    let attributes: Vec<QName> = schemas
+        .attribute_uses(ty)
+        .iter()
+        .map(|u| schemas[u.attribute].name)
+        .collect();
+    let attr_clark = ambiguous_names(attributes.iter().copied(), schemas);
+    let child_keys = declared
+        .iter()
+        .map(|&n| {
+            (
+                n,
+                PyString::new(py, &decoded_key(schemas, n, &clark)).unbind(),
+            )
+        })
+        .collect();
+    let attr_keys = attributes
+        .iter()
+        .map(|&n| {
+            let key = format!("@{}", decoded_key(schemas, n, &attr_clark));
+            (n, PyString::new(py, &key).unbind())
+        })
+        .collect();
     let shape = std::rc::Rc::new(TypeShape {
-        clark: ambiguous_names(declared.iter().copied(), schemas),
         repeating: declared
             .iter()
             .copied()
             .filter(|n| repeats.get(n).copied().unwrap_or(false))
             .collect(),
+        clark,
         repeats,
-        attr_clark: ambiguous_names(
-            schemas
-                .attribute_uses(ty)
-                .iter()
-                .map(|u| schemas[u.attribute].name),
-            schemas,
-        ),
+        attr_clark,
+        child_keys,
+        attr_keys,
     });
     shapes.insert(ty, shape.clone());
     shape
@@ -3829,9 +3861,10 @@ fn open_element<'a, 'py>(
     d: &'a Decoded,
     shapes: &mut Shapes,
 ) -> PyResult<(Bound<'py, PyAny>, Option<Open<'a, 'py>>)> {
-    let shape = shape_of(schemas, d.type_id, shapes);
+    let shape = shape_of(py, schemas, d.type_id, shapes);
 
-    let mut attrs: Vec<(String, Bound<'py, PyAny>)> = Vec::with_capacity(d.attributes.len());
+    let mut attrs: Vec<(Bound<'py, PyString>, Bound<'py, PyAny>)> =
+        Vec::with_capacity(d.attributes.len());
     for a in &d.attributes {
         let value = match &a.value {
             Some(v) => value_to_py(py, v)?,
@@ -3840,10 +3873,16 @@ fn open_element<'a, 'py>(
         // A name the schema never declared arrived through a wildcard, and
         // keeps its full name for the same reason a child element does.
         let key = match a.name.qname() {
-            Some(q) => decoded_key(schemas, q, &shape.attr_clark),
-            None => schemas.display_psvi_name(&a.name),
+            Some(q) => match shape.attr_keys.get(&q) {
+                Some(key) => key.bind(py).clone(),
+                None => PyString::new(
+                    py,
+                    &format!("@{}", decoded_key(schemas, q, &shape.attr_clark)),
+                ),
+            },
+            None => PyString::new(py, &format!("@{}", schemas.display_psvi_name(&a.name))),
         };
-        attrs.push((format!("@{key}"), value));
+        attrs.push((key, value));
     }
 
     // `xsi:nil` is the document saying there is no value, which is not the
@@ -3871,13 +3910,13 @@ fn open_element<'a, 'py>(
     }
 
     if d.nil {
-        out.set_item("$", py.None())?;
+        out.set_item(pyo3::intern!(py, "$"), py.None())?;
         return Ok((out.into_any(), None));
     }
     if simple {
         // Simple content that also carries attributes: the value needs a key
         // of its own to sit beside them.
-        out.set_item("$", scalar(py, d)?)?;
+        out.set_item(pyo3::intern!(py, "$"), scalar(py, d)?)?;
         return Ok((out.into_any(), None));
     }
 
@@ -3918,9 +3957,12 @@ fn insert_child<'py>(
     // foreign one is by definition not declared here.
     let qn = child.name.qname();
     let declared = qn.is_some_and(|q| shape.repeats.contains_key(&q));
-    let key = match qn.filter(|_| declared) {
-        Some(q) => decoded_key(schemas, q, &shape.clark),
-        None => schemas.display_psvi_name(&child.name),
+    let key = match qn
+        .filter(|_| declared)
+        .and_then(|q| shape.child_keys.get(&q))
+    {
+        Some(key) => key.bind(py).clone(),
+        None => PyString::new(py, &schemas.display_psvi_name(&child.name)),
     };
     let repeating = qn
         .and_then(|q| shape.repeats.get(&q).copied())
@@ -3960,7 +4002,10 @@ fn close_element<'py>(py: Python<'py>, schemas: &Schemas, open: &Open<'_, 'py>) 
     // seeding them first used to put every repeating child ahead of its
     // siblings, which is not an order anyone wrote.
     for name in &open.shape.repeating {
-        let key = decoded_key(schemas, *name, &open.shape.clark);
+        let key = match open.shape.child_keys.get(name) {
+            Some(key) => key.bind(py).clone(),
+            None => PyString::new(py, &decoded_key(schemas, *name, &open.shape.clark)),
+        };
         if !open.dict.contains(&key)? {
             open.dict.set_item(key, PyList::empty(py))?;
         }
@@ -3969,7 +4014,7 @@ fn close_element<'py>(py: Python<'py>, schemas: &Schemas, open: &Open<'_, 'py>) 
     // Mixed content: the character data around the children.
     if let DecodedContent::Elements { text, .. } = &open.decoded.content {
         if !text.trim().is_empty() {
-            open.dict.set_item("$", text.clone())?;
+            open.dict.set_item(pyo3::intern!(py, "$"), text.clone())?;
         }
     }
     Ok(())
@@ -3989,6 +4034,21 @@ fn dismantle(tree: Option<Decoded>) {
         }
     }
 }
+
+/// The classes a value becomes, imported once rather than once per value.
+///
+/// Every `Decimal`, `date` and `datetime` used to begin with `py.import` and a
+/// `getattr` — a module lookup and an attribute lookup for each of the hundreds
+/// of thousands of values in a large document, all of it holding the GIL.
+static DECIMAL: PyOnceLock<Py<PyType>> = PyOnceLock::new();
+static DATE: PyOnceLock<Py<PyType>> = PyOnceLock::new();
+static DATETIME: PyOnceLock<Py<PyType>> = PyOnceLock::new();
+static TIME: PyOnceLock<Py<PyType>> = PyOnceLock::new();
+static TIMEDELTA: PyOnceLock<Py<PyType>> = PyOnceLock::new();
+static TIMEZONE: PyOnceLock<Py<PyType>> = PyOnceLock::new();
+/// `datetime.timezone.utc`, which is what most timezoned values carry, and
+/// what `timezone(timedelta(0))` returns anyway.
+static UTC: PyOnceLock<Py<PyAny>> = PyOnceLock::new();
 
 /// The years Python's `datetime` can hold.
 const PYTHON_YEARS: std::ops::RangeInclusive<i64> = 1..=9999;
@@ -4032,14 +4092,13 @@ fn value_to_py<'py>(py: Python<'py>, v: &Value) -> PyResult<Bound<'py, PyAny>> {
         // `4.5` are one `xs:decimal` and compare equal as Python `Decimal`s
         // too, but a price written `4.50` is meant to be shown that way, and
         // arithmetic on it keeps the precision: `4.50 * 2` is `9.00`.
-        Value::Decimal(d) => py
-            .import("decimal")?
-            .getattr("Decimal")?
+        Value::Decimal(d) => DECIMAL
+            .import(py, "decimal", "Decimal")?
             .call1((d.as_written().to_string(),)),
         Value::HexBinary(b) | Value::Base64Binary(b) => PyBytes::new(py, b).into_bound_py_any(py),
         Value::DateTime(dt) if PYTHON_YEARS.contains(&dt.year()) => match whole_micros(dt.second())
         {
-            Some((sec, micro)) => py.import("datetime")?.getattr("datetime")?.call1((
+            Some((sec, micro)) => DATETIME.import(py, "datetime", "datetime")?.call1((
                 dt.year(),
                 dt.month(),
                 dt.day(),
@@ -4051,12 +4110,11 @@ fn value_to_py<'py>(py: Python<'py>, v: &Value) -> PyResult<Bound<'py, PyAny>> {
             )),
             None => v.to_string().into_bound_py_any(py),
         },
-        Value::Date(d) if PYTHON_YEARS.contains(&d.year()) && d.timezone_offset().is_none() => py
-            .import("datetime")?
-            .getattr("date")?
+        Value::Date(d) if PYTHON_YEARS.contains(&d.year()) && d.timezone_offset().is_none() => DATE
+            .import(py, "datetime", "date")?
             .call1((d.year(), d.month(), d.day())),
         Value::Time(t) => match whole_micros(t.second()) {
-            Some((sec, micro)) => py.import("datetime")?.getattr("time")?.call1((
+            Some((sec, micro)) => TIME.import(py, "datetime", "time")?.call1((
                 t.hour(),
                 t.minute(),
                 sec,
@@ -4081,8 +4139,8 @@ fn value_to_py<'py>(py: Python<'py>, v: &Value) -> PyResult<Bound<'py, PyAny>> {
             kwargs.set_item("minutes", d.minutes())?;
             kwargs.set_item("seconds", sign * i64::from(whole))?;
             kwargs.set_item("microseconds", sign * i64::from(micro))?;
-            py.import("datetime")?
-                .getattr("timedelta")?
+            TIMEDELTA
+                .import(py, "datetime", "timedelta")?
                 .call((), Some(&kwargs))
         }
         Value::List(items) => {
@@ -4138,9 +4196,23 @@ fn widen_float(f: f32) -> f64 {
 
 fn tzinfo<'py>(py: Python<'py>, minutes: Option<i16>) -> PyResult<Option<Bound<'py, PyAny>>> {
     let Some(m) = minutes else { return Ok(None) };
-    let dt = py.import("datetime")?;
-    let delta = dt.getattr("timedelta")?.call1((0, 0, 0, 0, m))?;
-    Ok(Some(dt.getattr("timezone")?.call1((delta,))?))
+    if m == 0 {
+        let utc = UTC.get_or_try_init(py, || {
+            TIMEZONE
+                .import(py, "datetime", "timezone")?
+                .getattr("utc")
+                .map(Bound::unbind)
+        })?;
+        return Ok(Some(utc.bind(py).clone()));
+    }
+    let delta = TIMEDELTA
+        .import(py, "datetime", "timedelta")?
+        .call1((0, 0, 0, 0, m))?;
+    Ok(Some(
+        TIMEZONE
+            .import(py, "datetime", "timezone")?
+            .call1((delta,))?,
+    ))
 }
 
 // ---------------------------------------------------------------------------

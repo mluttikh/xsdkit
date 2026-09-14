@@ -1195,6 +1195,13 @@ practice, since each was a real complaint:
   Python, and `__next__` waits for its next batch detached — without holding
   the iteration's lock, which a second thread would otherwise block on while
   holding the GIL the first one needs back.
+- **Nothing per value may look up what could be looked up once.** `decode`
+  holds the GIL while it builds dictionaries, so its per-value cost is its
+  speed and its ceiling on threads. The `Decimal` and `datetime` classes live
+  in `PyOnceLock` statics, and each `TypeShape` carries its children's and
+  attributes' keys as Python strings. Before, every value paid a module import
+  and a `getattr` and every key a new `str`, and `decode` ran 17% slower on one
+  thread and reached 2.6× on eight rather than 3.4×.
 - **`iter_typed` streams through a worker thread.** The validator pushes events
   into a callback, and an iterator pulls: the worker runs `validate_until` and
   sends events over a bounded channel 256 at a time, and `__next__` makes the
