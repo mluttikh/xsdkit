@@ -20,9 +20,7 @@ scored, because the working group marked its own expectation for them
 | overall correct | **98.7%** (4,734 / 4,794) | **97.3%** (5,565 / 5,717) |
 
 The two columns are reported apart because a single percentage across them
-would be an average of two different languages, true of neither. An earlier
-version of this page quoted one figure — 66.5% of invalid schemas rejected —
-over a mix of 1.0 and 1.1 runs. Splitting it changed no code.
+would be an average of two different languages, true of neither.
 
 The 1.1 column is lower on the second row because the 1.1-only test sets are
 largely the features this version does not claim: assertions, conditional type
@@ -48,12 +46,10 @@ difference is entirely 1.1 features. As 1.0 they cluster as `Simple` (13),
 sets plus `All` (17), `Wild` (11), `CTA` (11), `Open` (8) and
 `TypeAlternativeTests` (6). The `All` cluster is worth reading as separate
 rules rather than one: of its 17, nine are particle subsumption and six are
-*Derivation Valid (Extension)* — both P2-sized — which is what is left after
-*All Group Limited* and Unique Particle Attribution over an `xs:all` were
-implemented. Three areas cover most of it: particle subsumption
-(the full *Derivation Valid (Restriction, Complex)* rule), XSD 1.1 assertions,
-and conditional type assignment. The first is a matter of finishing the
-remaining cases; the last two need an XPath 2.0 subset.
+*Derivation Valid (Extension)*, both P2-sized. Three areas cover most of it:
+particle subsumption (the full *Derivation Valid (Restriction, Complex)* rule),
+XSD 1.1 assertions, and conditional type assignment. The first is a matter of
+finishing the remaining cases; the last two need an XPath 2.0 subset.
 
 ### The twenty false rejections
 
@@ -76,21 +72,21 @@ and two are `queried`.
 
 | | XSD 1.0 | XSD 1.1 |
 |---|---|---|
-| valid documents accepted | **99.8%** (11,300 / 11,325) | **99.5%** (11,845 / 11,906) |
-| invalid documents rejected | **99.7%** (9,057 / 9,083) | **98.4%** (9,524 / 9,680) |
-| overall correct | **99.8%** (20,357 / 20,408) | **99.0%** (21,369 / 21,586) |
+| valid documents accepted | **99.8%** (11,308 / 11,325) | **99.6%** (11,862 / 11,906) |
+| invalid documents rejected | **99.7%** (9,057 / 9,083) | **98.3%** (9,515 / 9,680) |
+| overall correct | **99.8%** (20,365 / 20,408) | **99.0%** (21,377 / 21,586) |
 
 Here the rows are much closer, because validating a document against a model
 you already built is the part that is finished.
 
-The false alarms are 25 as 1.0 and 61 as 1.1, and they are not that many
+The false alarms are 17 as 1.0 and 44 as 1.1, and they are not that many
 separate bugs. Grouped by the diagnostics we wrongly emit — counted from
 `tests/conformance/instance-cases.tsv`, which records the codes for every run,
 so this table is read off the gate rather than assembled by hand:
 
 | Diagnostics | as 1.0 | as 1.1 | Cause |
 |---|---|---|---|
-| `XSD2002`+`XSD2003` unexpected element, then incomplete content | 9 | 33 | Conditional type assignment, `openContent` and `xs:all` — features this version does not claim, and all but nine of them are 1.1-only |
+| `XSD2002`+`XSD2003` unexpected element, then incomplete content | 1 | 16 | As 1.1, features this version does not claim in full — `openContent` 6, `xs:all` 5, assertions and conditional type assignment 2 each — plus one `ElemDecl` case that fails in both versions |
 | `XSD2008` bad `xsi:type` | 5 | 6 | Scattered; one reports `XSD2001` too |
 | `XSD2001` element not declared | 5 | 5 | Scattered |
 | `XSD2006` missing required attribute | — | 5 | Scattered |
@@ -99,16 +95,8 @@ so this table is read off the gate rather than assembled by hand:
 | `XSD2011` duplicate `xs:ID` | — | 3 | Two are the deliberate disagreement below |
 | `XSD2003` incomplete content, `XSD2016` unresolved `keyref` | 2 | 2 | One each; the second is an identity constraint under a `lax` wildcard |
 
-What is left is now mostly the declared gaps rather than defects: the largest
-group is one this version says up front it does not implement.
-
-This table used to be dominated by 112 `xlink:href` documents, written off as
-a harness gap on the grounds that the suite's catalogue schema imports
-`xlink.xsd` over the network and we decline to fetch it. That reading was
-wrong. They were failing because an `xs:anyAttribute` written inside an
-`xs:attributeGroup` never reached the types that referenced the group — a
-plain bug, now fixed, and the documents pass without any schema being
-supplied to the harness.
+As 1.1, the largest group is features this version does not claim in full. As
+1.0, the 17 are scattered.
 
 Two of the false *alarms* are a deliberate disagreement. `saxonData/Id`'s
 `id003.v01` and `id004.v01` put the same `xs:ID` value on two sibling elements
@@ -118,24 +106,18 @@ to a value satisfies both, so this follows the specification and reports the
 duplicate. Both are 1.1-only groups, which is why that row is empty in the 1.0
 column.
 
-The false *acceptances* — invalid documents we pass — are 26 as 1.0 and 156
+The false *acceptances* — invalid documents we pass — are 26 as 1.0 and 165
 as 1.1, and by test set they are mostly the two features this version stores
 and never evaluates. XSD 1.1 **assertions** are 67 of them (`Assert` 43,
-`assertion` 24) and **conditional type assignment** 15 (`CTA` 10,
-`TypeAlternativeTests` 5), both waiting on an XPath 2.0 subset. After those
+`assertion` 24) and **conditional type assignment** 24 (`CTA` 19,
+`TypeAlternativeTests` 5), both waiting on an XPath 2.0 subset. Without
+conditional type assignment, an element whose type comes only from
+`xs:alternative` is an `xs:anyType`, which accepts any content. After those
 come `vc:` conditional inclusion (13) and open content (11), which are
 implemented and whose remaining misses have not been examined.
 
-Identity constraints used to lead this list, at about 80 documents, when they
-were read into the model and not enforced. They are enforced now: three
-`xs:key`/`xs:unique` documents remain in each version, and six `xs:ID` cases
-in 1.1.
-
-Before that, the biggest group was 150 documents from the NIST datatype sets,
-which wrap the element under test in `<xs:any processContents="strict"/>`.
-Every wildcard behaved as `skip`, so nothing inside one was checked and those
-tests passed vacuously on the valid side while failing to catch anything on
-the invalid side. `processContents` is now honoured.
+Identity constraints are enforced; three `xs:key`/`xs:unique` documents are
+still accepted in each version, and six `xs:ID` cases in 1.1.
 
 ## Which rules, rather than how many cases
 

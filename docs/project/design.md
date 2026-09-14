@@ -32,10 +32,8 @@ borrow check. Components live in arenas addressed by `Copy` u32 ids, and
 
 The cost is that an unresolved reference is representable during loading. It is
 paid for with a placeholder sentinel that every `Index` implementation asserts
-against in debug builds, and a compile-time pass that must patch every
-id-bearing field — a pass that has been the source of three bugs of the same
-shape, each fixed by making the walk exhaustive rather than by remembering
-harder.
+against in debug builds, and a compile-time pass that patches every id-bearing
+field before a `Schemas` is handed out.
 
 ## Every error, not the first
 
@@ -55,13 +53,8 @@ to `n!` interleavings.
 
 All 14 non-trivial XSD datatypes are implemented in `src/atomic.rs` — the
 civil-calendar arithmetic, the ±14-hour timezone partial order, duration
-comparison against the four reference dateTimes the specification names.
-
-This was not the first plan. An existing crate was used, defended twice on
-review, and then removed on evidence when the W3C suite found it rejecting
-`--02-29` as an `xs:gMonthDay`. Conformance went *up* after the removal. The
-decision record, including the two answers that were wrong, is kept in
-`DESIGN.md` §3.12.4 rather than quietly rewritten.
+comparison against the four reference dateTimes the specification names. The
+reasoning is in `DESIGN.md` §3.12.4.
 
 ## Facts, not interpretation
 
