@@ -66,6 +66,12 @@ Taking only the first event returns at once. `read_typed` builds every event
 before returning, and held 718 MB for the same document. Use `iter_typed` for
 large documents.
 
+`decode` took 1.08 s for that document. It builds its dictionaries holding the
+GIL, so threads help it less than they help `validate`: sixteen decodes of a
+2.6 MB document ran 3.4× faster on eight threads than on one, where sixteen
+validations ran 5.9× faster. Each type's dictionary keys and the `Decimal` and
+`datetime` classes are looked up once per document, not once per value.
+
 ## Where the remaining time goes
 
 For a large schema, roughly: XML parsing, then component construction, then
