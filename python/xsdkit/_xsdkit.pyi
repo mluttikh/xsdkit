@@ -4,71 +4,59 @@ Names here mirror `src/python.rs`. Keep them in step: `test_stubs.py` checks
 that every exported name exists at runtime.
 """
 
-import datetime
-import decimal
 import os
-from typing import Any, Callable, Generic, Iterable, Iterator, Literal, Mapping, Sequence, TypeVar
+from typing import Any, Generic, Iterable, Iterator, Literal, Mapping, Sequence, TypeVar, final
+
+# The aliases live in a runtime module, so code annotated with them can import
+# them; imported here without `as`, so they are not re-exported from this one.
+from .typing import (
+    Conformance,
+    ContentKind,
+    EventKind,
+    Instance,
+    ModelKind,
+    Name,
+    Resolver,
+    Severity,
+    Use,
+    Variety,
+    XsdValue,
+    XsdVersion,
+)
 
 __version__: str
+# What the module exports, which stubtest checks against the runtime list.
+__all__ = [
+    "AppInfo",
+    "Attribute",
+    "AttributeUse",
+    "AttributeValue",
+    "Child",
+    "ChildIterator",
+    "Diagnostic",
+    "Document",
+    "DocumentError",
+    "Element",
+    "Facets",
+    "InvalidValueError",
+    "NameIterator",
+    "NamedComponents",
+    "PsviEvent",
+    "PsviEvents",
+    "SchemaError",
+    "SchemaSet",
+    "Span",
+    "Tree",
+    "Type",
+    "ValidationReport",
+    "XsdError",
+    "__version__",
+    "load",
+    "load_bytes",
+    "load_files",
+    "load_string",
+]
 
-Conformance = Literal["strict", "lax"]
-#: Which XSD to read the documents as.
-XsdVersion = Literal["1.0", "1.1"]
-Severity = Literal["error", "warning", "note"]
-Variety = Literal["atomic", "list", "union"]
-ContentKind = Literal["empty", "simple", "element-only", "mixed"]
-ModelKind = Literal["empty", "automaton", "all"]
-Use = Literal["required", "optional", "prohibited"]
-
-#: A name as Clark notation (``{ns}local``), a bare local name, or a pair.
-Name = str | tuple[str | None, str]
-
-#: Resolves a schema location to a document.
-#:
-#: Called with ``(location, base)``, where ``base`` is the URI of the document
-#: containing the reference, or ``None``. Return the document as ``bytes`` —
-#: leaving the encoding to xsdkit, which reads the byte-order mark and the XML
-#: declaration — or as ``str``, or as ``(uri, document)`` to say where it was
-#: actually found. Raise to report that it could not be resolved; the exception
-#: becomes the diagnostic, and the first one raised is the ``SchemaError``'s
-#: ``__cause__``. ``KeyboardInterrupt`` and ``SystemExit`` end the build and
-#: propagate as themselves.
-#:
-#: Replaces the filesystem rather than adding to it, so it is an alternative to
-#: ``search_paths``, not a layer on top.
-Resolver = Callable[[str, str | None], bytes | str | tuple[str, bytes | str]]
-
-#: A document to validate: text, or bytes whose encoding xsdkit detects.
-Instance = str | bytes | bytearray | os.PathLike[str]
-"""A document: XML as text, as bytes whose encoding is detected, or a path to
-read it from. A ``str`` is always content — a path and a document cannot be
-told apart once both are strings — so pass ``pathlib.Path`` for a file."""
-
-#: An XSD value as its closest native Python type.
-#:
-#: Durations and gregorian fragments stay as their canonical lexical strings —
-#: ``xs:duration`` has no lossless Python counterpart, since months and seconds
-#: are not commensurable. ``xs:dayTimeDuration`` alone becomes a ``timedelta``.
-#: A date or duration Python cannot hold stays lexical too: a year after 9999
-#: or before 1, or 999,999,999 days or more.
-#:
-#: An ``xs:QName`` arrives as Clark notation (``{namespace}local``) with its
-#: prefix already resolved against the document, since the prefix is a spelling
-#: rather than part of the value.
-XsdValue = (
-    str
-    | bool
-    | int
-    | float
-    | decimal.Decimal
-    | bytes
-    | datetime.datetime
-    | datetime.date
-    | datetime.time
-    | datetime.timedelta
-    | list[Any]
-)
-EventKind = Literal["start", "text", "end"]
 
 class XsdError(Exception):
     """The base of the errors about schemas, documents and values.
@@ -99,6 +87,7 @@ class InvalidValueError(XsdError, ValueError):
     """Raised by ``Type.validate`` for a lexical form its type does not admit.
     Also a ``ValueError``."""
 
+@final
 class Span:
     @property
     def uri(self) -> str:
@@ -110,6 +99,7 @@ class Span:
     def label(self) -> str | None:
         """What this span is, when a diagnostic carries more than one."""
 
+@final
 class Diagnostic:
     def _repr_html_(self) -> str:
         """The diagnostic as a compiler would print it."""
@@ -131,6 +121,7 @@ class Diagnostic:
     @property
     def is_error(self) -> bool: ...
 
+@final
 class Document:
     @property
     def uri(self) -> str:
@@ -150,6 +141,7 @@ class Document:
         role, so it is reported rather than interpreted.
         """
 
+@final
 class AppInfo:
     @property
     def source(self) -> str | None:
@@ -159,6 +151,7 @@ class AppInfo:
         """The ``appinfo`` children, re-serialized with names in Clark
         notation."""
 
+@final
 class Facets:
     """A set of facets on a simple type.
 
@@ -199,6 +192,7 @@ class Facets:
     @property
     def fraction_digits(self) -> int | None: ...
 
+@final
 class Attribute:
     @property
     def name(self) -> tuple[str | None, str]: ...
@@ -217,6 +211,7 @@ class Attribute:
     @property
     def appinfo(self) -> list[AppInfo]: ...
 
+@final
 class AttributeUse:
     @property
     def attribute(self) -> Attribute: ...
@@ -235,6 +230,7 @@ class AttributeUse:
     @property
     def default(self) -> str | None: ...
 
+@final
 class Element:
     """An element declaration: a name, a type, and how it may appear.
 
@@ -313,6 +309,7 @@ class Element:
     @property
     def appinfo(self) -> list[AppInfo]: ...
 
+@final
 class Child:
     """An element as a child of one particular type.
 
@@ -372,6 +369,7 @@ class Child:
     def tree(self, depth: int = 3) -> Tree: ...
     def _repr_html_(self) -> str: ...
 
+@final
 class Type:
     """A type definition, simple or complex."""
 
@@ -450,6 +448,7 @@ class Type:
     @property
     def appinfo(self) -> list[AppInfo]: ...
 
+@final
 class AttributeValue:
     @property
     def name(self) -> tuple[str | None, str]: ...
@@ -467,6 +466,7 @@ class AttributeValue:
         """True when the document did not spell this attribute out and the
         schema supplied it from a ``default`` or ``fixed`` value."""
 
+@final
 class PsviEvent:
     @property
     def kind(self) -> EventKind: ...
@@ -504,6 +504,7 @@ class PsviEvent:
     @property
     def line(self) -> int: ...
 
+@final
 class PsviEvents:
     """An iterator over one document's typed events, read as it is validated."""
 
@@ -517,6 +518,7 @@ class PsviEvents:
         valid before reading it, call ``SchemaSet.validate``.
         """
 
+@final
 class Tree:
     """Rendered text that knows how to show itself.
 
@@ -541,6 +543,7 @@ class Tree:
 
 _C = TypeVar("_C")
 
+@final
 class NamedComponents(Generic[_C]):
     """A schema's global components of one kind, in name order and by name.
 
@@ -569,16 +572,19 @@ class NamedComponents(Generic[_C]):
     def get(self, name: Name, default: Any = None) -> _C | Any:
         """The component of that name, or ``default`` when there is none."""
 
+@final
 class ChildIterator:
     def __iter__(self) -> Iterator[Child]: ...
     def __next__(self) -> Child: ...
     def __len__(self) -> int: ...
 
+@final
 class NameIterator:
     def __iter__(self) -> Iterator[str]: ...
     def __next__(self) -> str: ...
     def __len__(self) -> int: ...
 
+@final
 class ValidationReport:
     def _repr_html_(self) -> str:
         """A summary line and a table of what was found."""
@@ -591,9 +597,14 @@ class ValidationReport:
     def errors(self) -> list[Diagnostic]: ...
     def __bool__(self) -> bool: ...
 
+@final
 class SchemaSet:
     def _repr_html_(self) -> str:
         """Its documents and globals at a glance."""
+
+    def __copy__(self) -> SchemaSet:
+        """A schema set cannot change, so a copy is the same object."""
+    def __deepcopy__(self, memo: Any, /) -> SchemaSet: ...
 
     @classmethod
     def from_file(

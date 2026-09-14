@@ -1,0 +1,16 @@
+# Entries `python -m mypy.stubtest xsdkit` reports that are not wrong.
+#
+# stubtest reads a `Literal[...]` alias as the union of its literals, and the
+# runtime object `typing.Literal[...]` builds is not a `typing.Union`, so every
+# such alias in `xsdkit/typing.py` is reported as "is not a Union". The alias is
+# the same type to a type checker either way. stubtest also reports an entry
+# here that no longer matches anything, so this list cannot outlive the reason
+# for it.
+xsdkit.typing.Conformance
+xsdkit.typing.ContentKind
+xsdkit.typing.EventKind
+xsdkit.typing.ModelKind
+xsdkit.typing.Severity
+xsdkit.typing.Use
+xsdkit.typing.Variety
+xsdkit.typing.XsdVersion

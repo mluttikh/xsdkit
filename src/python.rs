@@ -1151,6 +1151,7 @@ impl PySchemaSet {
         slf
     }
 
+    #[pyo3(signature = (_memo, /))]
     fn __deepcopy__(slf: Py<Self>, _memo: &Bound<'_, PyAny>) -> Py<Self> {
         slf
     }
@@ -1270,7 +1271,7 @@ impl PySchemaSet {
     }
 
     /// Looks up a global element. `None` if there is none.
-    #[pyo3(signature = (namespace, local=None))]
+    #[pyo3(signature = (namespace, local=None, /))]
     fn element(
         &self,
         namespace: &Bound<'_, PyAny>,
@@ -1293,7 +1294,7 @@ impl PySchemaSet {
     }
 
     /// Looks up a global type. `None` if there is none.
-    #[pyo3(name = "type", signature = (namespace, local=None))]
+    #[pyo3(name = "type", signature = (namespace, local=None, /))]
     fn type_(
         &self,
         namespace: &Bound<'_, PyAny>,
@@ -1314,7 +1315,7 @@ impl PySchemaSet {
     }
 
     /// Looks up a global attribute. `None` if there is none.
-    #[pyo3(signature = (namespace, local=None))]
+    #[pyo3(signature = (namespace, local=None, /))]
     fn attribute(
         &self,
         namespace: &Bound<'_, PyAny>,
@@ -2095,6 +2096,7 @@ impl PyTree {
     }
 
     /// How many times `needle` occurs, as `str.count` would say.
+    #[pyo3(signature = (needle, /))]
     fn count(&self, needle: &str) -> usize {
         self.text.matches(needle).count()
     }
@@ -2797,6 +2799,7 @@ impl PyType_ {
     /// Always `False` for a type from another `SchemaSet`. A handle is an
     /// index into one set's arenas, and the same index in another set is an
     /// unrelated type; comparing them reported derivations that do not exist.
+    #[pyo3(signature = (other, /))]
     fn derives_from(&self, other: &PyType_) -> bool {
         Arc::ptr_eq(&self.s, &other.s) && self.s.derives_from(self.id, other.id)
     }
@@ -2905,6 +2908,7 @@ impl PyType_ {
     /// resolved against this type's children exactly as `type[name]` resolves
     /// them. A single `str` is refused rather than read one character at a
     /// time.
+    #[pyo3(signature = (names, /))]
     fn accepts(&self, names: &Bound<'_, PyAny>) -> PyResult<bool> {
         if names.is_instance_of::<PyString>() || names.is_instance_of::<PyBytes>() {
             return Err(PyTypeError::new_err(
