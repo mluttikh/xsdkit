@@ -31,27 +31,26 @@ Everything on this page runs against
 
 === "Python"
 
-    A `SchemaSet` is a mapping over the globals your documents declare.
+    A `SchemaSet` is a mapping over the global elements your documents declare.
 
     ```python
-    len(schemas)                        # 6
+    len(schemas)                        # 1
     "{urn:example}report" in schemas    # True
-    list(schemas)
-    # ['{urn:example}report', '{urn:example}Currency', '{urn:example}Item',
-    #  '{urn:example}Money', '{urn:example}Report', '{urn:example}Sku']
-
-    # A real mapping, not merely something shaped like one:
-    schemas.keys()                      # the same names, as a list
-    schemas.items()                     # (name, component) pairs
-    dict(schemas)                       # so this works
+    list(schemas)                       # ['{urn:example}report']
+    schemas.items()                     # (name, element) pairs
+    dict(schemas)                       # a real mapping, so this works
     ```
 
-    Elements come before types in iteration. For a list of one kind:
+    Types and attributes are separate symbol spaces — an element and a type
+    may share a name — so each kind has a view of its own. A view iterates and
+    indexes by position like a list, and looks up by name like a mapping:
 
     ```python
-    schemas.elements     # [<Element {urn:example}report>]
-    schemas.types        # the six declared types, built-ins excluded
-    schemas.documents    # what was read, with target namespaces
+    schemas.types["{urn:example}Money"]  # <Type complex {urn:example}Money>
+    schemas.types.keys()                 # the five declared types, built-ins excluded
+    schemas.elements                     # [<Element {urn:example}report>]
+    schemas.attributes                   # global attributes, xml: and xsi: excluded
+    schemas.documents                    # what was read, with target namespaces
     ```
 
     The lookup methods return `None` when there is nothing, for when absence is
@@ -272,7 +271,7 @@ transitively, and so are the attributes inherited from base types.
 === "Python"
 
     ```python
-    money = schemas["{urn:example}Money"]
+    money = schemas.types["{urn:example}Money"]
 
     money.is_complex        # True
     money.content           # 'simple'  — a simple value with attributes on it
@@ -313,11 +312,11 @@ reduces to.
 ## Facets, composed
 
 ```python
-currency = schemas["{urn:example}Currency"]
+currency = schemas.types["{urn:example}Currency"]
 currency.facets.enumeration
 # ['EUR', 'USD', 'GBP']
 
-schemas["{urn:example}Sku"].facets.patterns
+schemas.types["{urn:example}Sku"].facets.patterns
 # [['[A-Z]{2}-[0-9]{4}']]
 ```
 

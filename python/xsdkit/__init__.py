@@ -16,6 +16,8 @@ Validating a document, with values arriving as native Python types::
     True
 """
 
+import collections.abc as _abc
+
 from ._xsdkit import (
     AppInfo,
     Attribute,
@@ -27,6 +29,7 @@ from ._xsdkit import (
     ChildIterator,
     Element,
     Facets,
+    NamedComponents,
     NameIterator,
     PsviEvent,
     PsviEvents,
@@ -53,6 +56,7 @@ __all__ = [
     "ChildIterator",
     "Element",
     "Facets",
+    "NamedComponents",
     "NameIterator",
     "PsviEvent",
     "PsviEvents",
@@ -67,3 +71,6 @@ __all__ = [
     "load",
     "load_string",
 ]
+
+# A mapping in full, so `isinstance(schemas, Mapping)` holds as `dict(schemas)` does.
+_abc.Mapping.register(SchemaSet)

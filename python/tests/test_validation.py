@@ -388,3 +388,11 @@ def test_attributes_a_wildcard_admits_under_undeclared_names_are_kept():
     assert (foo.lexical, foo.value, foo.declaration) == ("x", None, None)
 
     assert s.decode(doc) == {"@k": 1, "@{urn:other}foo": "x", "@bar": "y"}
+
+
+def test_a_text_event_has_no_name_of_its_own(schemas):
+    """It belongs to the element around it, which the start event names."""
+    events, _ = schemas.read_typed(DOC)
+    text = next(e for e in events if e.kind == "text")
+    assert text.name is None and text.local_name is None
+    assert events[0].name == (NS, "reading")

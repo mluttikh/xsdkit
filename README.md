@@ -145,8 +145,9 @@ report["item"]["price"].type.qname   # walk by name, no `.type` hop
 report["item"].repeats               # occurrence belongs to the pair,
 report["item"]["note"].optional      # and a child carries its own
 
-len(schemas)                         # globals this schema declares
-"{urn:example}report" in schemas     # a mapping: dict(schemas) works too
+len(schemas)                         # global elements this schema declares
+"{urn:example}report" in schemas     # a mapping of them: dict(schemas) works too
+schemas.types["{urn:example}Report"] # types and attributes have views of their own
 
 # Does a child sequence satisfy the content model?
 report.type.accepts(["{urn:example}title", "{urn:example}count"])
