@@ -2407,6 +2407,92 @@ fn an_any_type_element_accepts_any_children() {
     }
 }
 
+/// An element a `lax` wildcard admits with no declaration to find is assessed
+/// as `xs:anyType`. It used to be skipped like `processContents="skip"`: the
+/// document validated, and its text, attributes and children never reached
+/// the PSVI.
+#[test]
+fn a_lax_wildcard_element_without_a_declaration_is_assessed_as_any_type() {
+    let body = |mode: &str| {
+        format!(
+            r###"<xs:element name="r"><xs:complexType><xs:sequence>
+                   <xs:any namespace="##other" processContents="{mode}" maxOccurs="unbounded"/>
+                 </xs:sequence></xs:complexType></xs:element>
+                 <xs:element name="count" type="xs:int"/>"###
+        )
+    };
+    let doc = r#"<r xmlns="urn:example" xmlns:o="urn:other"><o:b>1</o:b><o:c k="v">text</o:c><o:d><o:e>2</o:e></o:d></r>"#;
+    let events = |s: &Schemas| {
+        let mut out = Vec::new();
+        let report = s.document_validator().validate_with(doc, |ev| {
+            out.push(match ev {
+                PsviEvent::StartElement {
+                    name, attributes, ..
+                } => format!(
+                    "start {}{}",
+                    s.display_psvi_name(&name),
+                    attributes
+                        .iter()
+                        .map(|a| format!(" @{}={}", s.display_psvi_name(&a.name), a.lexical))
+                        .collect::<String>()
+                ),
+                PsviEvent::Text { lexical, .. } => format!("text {lexical}"),
+                PsviEvent::EndElement { name, .. } => format!("end {}", s.display_psvi_name(&name)),
+                _ => "other".to_string(),
+            })
+        });
+        assert!(report.is_valid(), "{}", report.diagnostics);
+        out
+    };
+
+    let lax = schema(&body("lax"));
+    assert_eq!(
+        events(&lax),
+        [
+            "start {urn:example}r",
+            "start {urn:other}b",
+            "text 1",
+            "end {urn:other}b",
+            "start {urn:other}c @k=v",
+            "text text",
+            "end {urn:other}c",
+            "start {urn:other}d",
+            "start {urn:other}e",
+            "text 2",
+            "end {urn:other}e",
+            "end {urn:other}d",
+            "end {urn:example}r",
+        ]
+    );
+    // Laxly all the way down: a child with a global declaration is checked
+    // against it, however deep inside undeclared elements it sits.
+    invalid(
+        &lax,
+        r#"<r xmlns="urn:example" xmlns:o="urn:other"><o:b><o:c><count>nope</count></o:c></o:b></r>"#,
+        DiagCode::InvalidValue,
+    );
+
+    // `skip` is what `lax` used to do, and still looks no further.
+    let skip = schema(&body("skip"));
+    assert_eq!(
+        events(&skip),
+        [
+            "start {urn:example}r",
+            "start {urn:other}b",
+            "end {urn:other}b",
+            "start {urn:other}c",
+            "end {urn:other}c",
+            "start {urn:other}d",
+            "end {urn:other}d",
+            "end {urn:example}r",
+        ]
+    );
+    valid(
+        &skip,
+        r#"<r xmlns="urn:example" xmlns:o="urn:other"><o:b><count>nope</count></o:b></r>"#,
+    );
+}
+
 /// Every complex type that names no base restricts `xs:anyType`, and none may
 /// start failing the restriction check now that it has a particle.
 #[test]

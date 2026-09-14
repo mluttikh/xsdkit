@@ -968,7 +968,7 @@ impl<'a, S: FnMut(PsviEvent) -> ControlFlow<()>> Run<'a, '_, S> {
         // Which declaration? The root asks the schema; anything else asks its
         // parent's content model, because the same name can be a different
         // declaration elsewhere.
-        let (declaration, mut skipped) = if self.stack.is_empty() {
+        let (declaration, skipped) = if self.stack.is_empty() {
             match qname.and_then(|q| self.v.schemas.globals().elements.get(&q).copied()) {
                 Some(id) => (Some(id), false),
                 None => {
@@ -984,10 +984,12 @@ impl<'a, S: FnMut(PsviEvent) -> ControlFlow<()>> Run<'a, '_, S> {
             self.match_in_parent(qname, ns.as_deref(), local, &shown, line)
         };
 
-        if declaration.is_none() && !skipped {
-            // A `lax` wildcard with nothing to match: legal, unchecked.
-            skipped = true;
-        }
+        // No declaration and not skipped is an element a `lax` wildcard
+        // admitted with nothing to match. It is assessed as `xs:anyType`, the
+        // type `declared_type` falls back to below: its attributes against
+        // anyType's lax attribute wildcard, its children laxly in turn, and its
+        // text as mixed content. Skipping it — which this used to do — kept the
+        // document valid and dropped everything inside it from the PSVI.
 
         // An abstract element declaration exists to be substituted for, not
         // to be used. A content model never offers one — the substitution
@@ -1094,6 +1096,12 @@ impl<'a, S: FnMut(PsviEvent) -> ControlFlow<()>> Run<'a, '_, S> {
 
     /// Asks the enclosing content model whether this element belongs here,
     /// and which declaration it is.
+    ///
+    /// Returns the declaration and whether the element is skipped. `(None,
+    /// false)` is an element a `lax` wildcard admitted with no declaration to
+    /// find, which is assessed as `xs:anyType`; `(_, true)` is one nothing
+    /// inside of is assessed — a `skip` wildcard, or an error already
+    /// reported.
     fn match_in_parent(
         &mut self,
         qname: Option<QName>,
@@ -1119,17 +1127,20 @@ impl<'a, S: FnMut(PsviEvent) -> ControlFlow<()>> Run<'a, '_, S> {
             // interned ids alone would reject every foreign element.
             if matcher.step_foreign(ns_uri, local) {
                 // A name the schema never interned has no global declaration
-                // to find, so `lax` has nothing to check it against and only
-                // `strict` has anything to say.
-                let strict = matcher.matched_wildcard() == Some(ProcessContents::Strict);
-                if strict {
-                    self.error(
-                        DiagCode::ElementNotDeclared,
-                        line,
-                        format!("`{shown}` is admitted by a `strict` wildcard, which requires a global element declaration"),
-                    );
-                }
-                return (None, true);
+                // to find. `strict` says that is an error, `skip` looks no
+                // further, and `lax` assesses the element as `xs:anyType`.
+                return match matcher.matched_wildcard() {
+                    Some(ProcessContents::Strict) => {
+                        self.error(
+                            DiagCode::ElementNotDeclared,
+                            line,
+                            format!("`{shown}` is admitted by a `strict` wildcard, which requires a global element declaration"),
+                        );
+                        (None, true)
+                    }
+                    Some(ProcessContents::Lax) => (None, false),
+                    _ => (None, true),
+                };
             }
             let owner = self.show(parent_name);
             self.error(
@@ -1186,7 +1197,7 @@ impl<'a, S: FnMut(PsviEvent) -> ControlFlow<()>> Run<'a, '_, S> {
                 return match (mode, chosen) {
                     (ProcessContents::Skip, _) => (None, true),
                     (_, Some(id)) => (Some(id), false),
-                    (ProcessContents::Lax, None) => (None, true),
+                    (ProcessContents::Lax, None) => (None, false),
                     (ProcessContents::Strict, None) => {
                         self.error(
                             DiagCode::ElementNotDeclared,

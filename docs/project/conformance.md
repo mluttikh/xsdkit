@@ -72,14 +72,14 @@ and two are `queried`.
 
 | | XSD 1.0 | XSD 1.1 |
 |---|---|---|
-| valid documents accepted | **99.8%** (11,308 / 11,325) | **99.6%** (11,862 / 11,906) |
+| valid documents accepted | **99.9%** (11,309 / 11,325) | **99.6%** (11,863 / 11,906) |
 | invalid documents rejected | **99.7%** (9,057 / 9,083) | **98.3%** (9,515 / 9,680) |
-| overall correct | **99.8%** (20,365 / 20,408) | **99.0%** (21,377 / 21,586) |
+| overall correct | **99.8%** (20,366 / 20,408) | **99.0%** (21,378 / 21,586) |
 
 Here the rows are much closer, because validating a document against a model
 you already built is the part that is finished.
 
-The false alarms are 17 as 1.0 and 44 as 1.1, and they are not that many
+The false alarms are 16 as 1.0 and 43 as 1.1, and they are not that many
 separate bugs. Grouped by the diagnostics we wrongly emit — counted from
 `tests/conformance/instance-cases.tsv`, which records the codes for every run,
 so this table is read off the gate rather than assembled by hand:
@@ -93,10 +93,10 @@ so this table is read off the gate rather than assembled by hand:
 | `XSD2005` attribute not allowed | 1 | 5 | Scattered |
 | `XSD2004` invalid value | 3 | 2 | Scattered |
 | `XSD2011` duplicate `xs:ID` | — | 3 | Two are the deliberate disagreement below |
-| `XSD2003` incomplete content, `XSD2016` unresolved `keyref` | 2 | 2 | One each; the second is an identity constraint under a `lax` wildcard |
+| `XSD2003` incomplete content | 1 | 1 | One in each version |
 
 As 1.1, the largest group is features this version does not claim in full. As
-1.0, the 17 are scattered.
+1.0, the 16 are scattered.
 
 Two of the false *alarms* are a deliberate disagreement. `saxonData/Id`'s
 `id003.v01` and `id004.v01` put the same `xs:ID` value on two sibling elements

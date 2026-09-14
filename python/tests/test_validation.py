@@ -359,6 +359,30 @@ def test_an_anytype_element_accepts_any_children():
         assert any(d.code == "XSD2004" for d in bad.errors), [str(d) for d in bad.errors]
 
 
+def test_content_a_lax_wildcard_admits_without_a_declaration_is_kept():
+    """It was skipped like `processContents="skip"`: the document validated, and
+    its text, attributes and children reached neither the events nor `decode`."""
+    s = build(
+        '<xs:element name="r"><xs:complexType><xs:sequence>'
+        '<xs:any namespace="##other" processContents="lax" maxOccurs="unbounded"/>'
+        "</xs:sequence></xs:complexType></xs:element>"
+        '<xs:element name="count" type="xs:int"/>'
+    )
+    doc = (
+        f'<r xmlns="{NS}" xmlns:o="urn:other">'
+        '<o:b>1</o:b><o:c k="v">text</o:c><o:d><o:e>2</o:e></o:d></r>'
+    )
+    assert s.validate(doc).is_valid
+    assert s.decode(doc) == {
+        "{urn:other}b": "1",
+        "{urn:other}c": {"@k": "v", "$": "text"},
+        "{urn:other}d": {"{urn:other}e": "2"},
+    }
+    # A child with a global declaration is checked, however deep it sits.
+    bad = s.validate(f'<r xmlns="{NS}" xmlns:o="urn:other"><o:b><count>nope</count></o:b></r>')
+    assert [d.code for d in bad.errors] == ["XSD2004"]
+
+
 def test_attributes_a_wildcard_admits_under_undeclared_names_are_kept():
     """They were dropped from the events and from `decode` alike."""
     s = build(
