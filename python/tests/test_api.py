@@ -1,5 +1,8 @@
 """The Python surface, exercised the way a user would."""
 
+import collections.abc
+import weakref
+
 import pytest
 import xsdkit
 from conftest import NS, XS, build
@@ -285,19 +288,24 @@ def test_xsd_11_is_reachable():
         xsdkit.SchemaSet.from_string(xsd, version="1.2")
 
 
-def test_schema_set_is_a_mapping():
+def test_schema_set_is_a_mapping_of_global_elements():
     s = build('<xs:element name="a" type="xs:string"/>'
               '<xs:simpleType name="T"><xs:restriction base="xs:string"/></xs:simpleType>')
-    # Its own declarations only — the fifty-odd built-ins would bury them.
-    assert len(s) == 2
-    assert sorted(s) == [f"{{{NS}}}T", f"{{{NS}}}a"]
-    assert f"{{{NS}}}a" in s
+    assert len(s) == 1
+    assert list(s) == [f"{{{NS}}}a"]
+    assert f"{{{NS}}}a" in s and f"{{{NS}}}T" not in s
+    assert 42 not in s, "not a name, so not there — as for a dict"
     assert s[f"{{{NS}}}a"] == s.element(NS, "a")
-    assert s[(NS, "T")] == s.type(NS, "T")
+    assert s.get(f"{{{NS}}}nope") is None
+
+    # A type has a view of its own, and the error says where to look.
+    with pytest.raises(KeyError, match="schemas.types"):
+        s[(NS, "T")]
+    assert s.types[(NS, "T")] == s.type(NS, "T")
 
     # A built-in is not one of this schema's declarations, but is still
     # resolvable by name.
-    assert f"{{{XS}}}string" not in s
+    assert f"{{{XS}}}string" not in s.types
     assert s.type(XS, "string") is not None
 
     with pytest.raises(KeyError):
@@ -707,19 +715,16 @@ def test_block_excludes_a_substitute_that_is_still_in_the_group():
 
 
 def test_a_schema_set_is_a_mapping_in_full():
-    """`dict(schemas)` was documented long before it worked.
-
-    `__len__`, `__contains__`, `__getitem__` and `__iter__` make something
-    that *looks* like a mapping; `dict()` needs `keys` as well, and without it
-    raised a `ValueError` about sequence lengths that told nobody anything.
-    """
+    """`__len__`, `__contains__`, `__getitem__` and `__iter__` make something
+    that *looks* like a mapping; `dict()` needs `keys` as well."""
     s = build(
         '<xs:element name="a" type="xs:string"/>'
         '<xs:complexType name="T"><xs:sequence/></xs:complexType>'
     )
     assert s.keys() == list(s)
     assert [k for k, _ in s.items()] == s.keys()
-    assert [type(v).__name__ for v in s.values()] == ["Element", "Type"]
+    assert [type(v).__name__ for v in s.values()] == ["Element"]
+    assert isinstance(s, collections.abc.Mapping)
 
     d = dict(s)
     assert len(d) == len(s)
@@ -834,3 +839,99 @@ def test_a_schema_nested_too_deeply_is_refused_not_parsed():
     )
     assert result.returncode == 0, result.stderr[-2000:]
     assert result.stdout.split() == ["['XSD1001']", "1"]
+
+
+def test_an_element_and_a_type_may_share_a_name():
+    """Elements and types are separate symbol spaces, and
+    `<xs:element name="Address" type="tns:Address"/>` is everywhere."""
+    s = build(
+        '<xs:element name="Address" type="tns:Address"/>'
+        '<xs:element name="Zed" type="xs:string"/>'
+        '<xs:complexType name="Aaa"><xs:sequence/></xs:complexType>'
+        '<xs:complexType name="Address"><xs:sequence>'
+        '<xs:element name="street" type="xs:string"/>'
+        "</xs:sequence></xs:complexType>"
+    )
+    address = f"{{{NS}}}Address"
+    assert list(s) == [address, f"{{{NS}}}Zed"]
+    assert len(dict(s)) == len(s) == 2
+    assert isinstance(s[address], xsdkit.Element)
+    assert isinstance(s.types[address], xsdkit.Type)
+    assert s[address].type == s.types[address]
+    assert s.types.keys() == [f"{{{NS}}}Aaa", address]
+
+
+def test_the_views_work_by_position_and_by_name():
+    s = build(
+        '<xs:element name="b" type="xs:string"/>'
+        '<xs:element name="a" type="xs:string"/>'
+        '<xs:attribute name="lang" type="xs:language"/>'
+        '<xs:simpleType name="T"><xs:restriction base="xs:string"/></xs:simpleType>'
+    )
+    a, b = s.element(NS, "a"), s.element(NS, "b")
+
+    # As a list: the components, in name order.
+    assert list(s.elements) == [a, b]
+    assert len(s.elements) == 2
+    assert s.elements[0] == a and s.elements[-1] == b
+    with pytest.raises(IndexError):
+        s.elements[2]
+    assert repr(s.elements) == f"[<Element {{{NS}}}a>, <Element {{{NS}}}b>]"
+
+    # As a mapping: by name, in either spelling.
+    assert s.elements[f"{{{NS}}}b"] == s.elements[(NS, "b")] == b
+    assert f"{{{NS}}}a" in s.elements and a in s.elements
+    assert s.elements.get(f"{{{NS}}}nope") is None
+    assert s.elements.keys() == [k for k, _ in s.elements.items()]
+    assert s.elements.values() == [a, b]
+    with pytest.raises(KeyError, match="an element"):
+        s.types[f"{{{NS}}}a"]
+
+    # Attributes this schema declares, without the xml: and xsi: ones.
+    assert s.attributes.keys() == [f"{{{NS}}}lang"]
+    assert s.attributes[(NS, "lang")] == s.attribute(NS, "lang")
+    assert s.attribute("http://www.w3.org/XML/1998/namespace", "lang") is not None
+
+
+def test_accepts_resolves_names_the_way_subscripting_does():
+    s = build(
+        '<xs:element name="r"><xs:complexType><xs:sequence>'
+        '<xs:element name="x" type="xs:int"/><xs:element name="y" type="xs:int"/>'
+        "</xs:sequence></xs:complexType></xs:element>"
+    )
+    t = s[f"{{{NS}}}r"].type
+    assert t["x"].local_name == "x"
+    assert t.accepts(["x", "y"]), "local names, as `type[name]` takes them"
+    assert t.accepts([f"{{{NS}}}x", (NS, "y")])
+    assert not t.accepts(["y", "x"])
+    with pytest.raises(TypeError, match="not a single string"):
+        t.accepts(f"{{{NS}}}x")
+
+
+def test_small_protocols_behave_like_their_python_counterparts():
+    s = build(
+        '<xs:element name="r"><xs:complexType><xs:sequence>'
+        '<xs:element name="x" type="xs:int"/><xs:element name="y" type="xs:int"/>'
+        "</xs:sequence></xs:complexType></xs:element>"
+        '<xs:simpleType name="B"><xs:restriction base="xs:int">'
+        '<xs:minInclusive value="1"/><xs:maxInclusive value="9"/>'
+        "</xs:restriction></xs:simpleType>"
+    )
+    r = s[f"{{{NS}}}r"]
+
+    it = iter(r)
+    next(it)
+    assert len(it) == 1, "an iterator's length is what is left"
+
+    assert repr(s) == "<SchemaSet 1 document, 1 element, 1 type>"
+    assert repr(s.types[(NS, "B")].declared_facets) == "<Facets min_inclusive=1 max_inclusive=9>"
+
+    tree = r.tree()
+    assert hash(tree) == hash(str(tree)) and {str(tree): 1}[tree] == 1
+    assert tree + "!" == str(tree) + "!" and "!" + tree == "!" + str(tree)
+
+    doc = f'<r xmlns="{NS}"><x>no</x><y>1</y></r>'
+    first, again = s.validate(doc).diagnostics[0], s.validate(doc).diagnostics[0]
+    assert first == again and len({first, again}) == 1
+
+    assert weakref.ref(s)() is s

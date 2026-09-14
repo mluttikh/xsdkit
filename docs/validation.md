@@ -172,7 +172,7 @@ once, `read_typed` returns `(events, report)` as a list, or feeds them to an
 
 ```python
 ev.kind                 # 'start' | 'text' | 'end'
-ev.name, ev.local_name  # ('urn:example', 'price'), 'price'
+ev.name, ev.local_name  # ('urn:example', 'price'), 'price'; None on a text event
 ev.declaration          # the Element declaration; None under skip, or lax with no match
 ev.type                 # the type in force, after any xsi:type override
 ev.type_from_instance   # True when xsi:type chose it

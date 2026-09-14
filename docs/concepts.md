@@ -89,7 +89,7 @@ it resolves exactly the way one of your own types does.
 schemas.type("http://www.w3.org/2001/XMLSchema", "string")
 # <Type simple {http://www.w3.org/2001/XMLSchema}string>
 
-[t.qname for t in schemas["{urn:example}Money"].base_chain]
+[t.qname for t in schemas.types["{urn:example}Money"].base_chain]
 # ['{urn:example}Money',
 #  '{http://www.w3.org/2001/XMLSchema}decimal',
 #  '{http://www.w3.org/2001/XMLSchema}anyAtomicType',
@@ -97,8 +97,8 @@ schemas.type("http://www.w3.org/2001/XMLSchema", "string")
 #  '{http://www.w3.org/2001/XMLSchema}anyType']
 ```
 
-The built-ins are excluded from `len()`, iteration and `in`, though — they are
-in every schema set and would bury what your documents actually declared.
+The built-ins are left out of `schemas.types`, though — they are in every
+schema set and would bury what your documents actually declared.
 `schemas.type(...)` still finds them.
 
 ## Seven symbol spaces
@@ -118,13 +118,13 @@ does a model group of the same name.
 | Identity constraint | `xs:key`, `xs:keyref`, `xs:unique` |
 
 `xsdkit` keeps them apart. That is why lookups are per-kind — `schemas.element(...)`,
-`schemas.type(...)`, `schemas.attribute(...)` — rather than one `get()` that
+`schemas.type(...)`, `schemas.attribute(...)` — rather than one lookup that
 would have to guess which `Item` you meant.
 
-Subscripting is the one convenience over that rule: `schemas["{urn:example}Item"]`
-searches elements first, then types, because in practice a name is unambiguous
-and typing the kind twice is friction. Where it matters, use the explicit
-lookup.
+Subscripting follows the same rule. `schemas["{urn:example}Item"]` is always
+an element, `schemas.types["{urn:example}Item"]` a type and
+`schemas.attributes[...]` an attribute, so a name an element and a type share
+reaches both, and a name looked up in the wrong place says where it is.
 
 ## Global and local
 
@@ -195,7 +195,7 @@ interner to turn a name back into text.
 `xs:documentation` and `xs:appinfo` are kept, not discarded.
 
 ```python
-schemas["{urn:example}Sku"].doc
+schemas.types["{urn:example}Sku"].doc
 # 'Two letters, a dash, then four digits.'
 ```
 

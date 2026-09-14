@@ -15,6 +15,8 @@ Everything importable from `xsdkit`. Types come from the shipped stubs, so
 
 ::: xsdkit.SchemaSet
 
+::: xsdkit.NamedComponents
+
 ::: xsdkit.load
 
 ::: xsdkit.load_string

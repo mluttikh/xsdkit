@@ -29,9 +29,9 @@ use crate::refs::{AttributeRef, ElementRef, TypeRef};
 use crate::values::Value;
 use crate::{Compilation, Conformance, FileResolver, SchemaSetBuilder, Version};
 use fxhash::{FxHashMap, FxHashSet};
-use pyo3::exceptions::{PyException, PyValueError};
+use pyo3::exceptions::{PyException, PyIndexError, PyKeyError, PyTypeError, PyValueError};
 use pyo3::prelude::*;
-use pyo3::types::{PyBytes, PyDict, PyList, PyTuple, PyType};
+use pyo3::types::{PyBytes, PyDict, PyIterator, PyList, PyString, PyTuple, PyType};
 use pyo3::{IntoPyObjectExt, create_exception};
 use std::collections::BTreeMap;
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
@@ -326,6 +326,243 @@ impl PyNameIter {
     }
 }
 
+/// Which of a schema's symbol spaces a [`PyNamedComponents`] view holds.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum ComponentKind {
+    Element,
+    Type,
+    Attribute,
+}
+
+impl ComponentKind {
+    const ALL: [ComponentKind; 3] = [Self::Element, Self::Type, Self::Attribute];
+
+    fn article(self) -> &'static str {
+        match self {
+            Self::Element => "an element",
+            Self::Type => "a type",
+            Self::Attribute => "an attribute",
+        }
+    }
+
+    /// Where a name of this kind is looked up, for an error that points there.
+    fn lookup(self) -> &'static str {
+        match self {
+            Self::Element => "schemas[...]",
+            Self::Type => "schemas.types[...]",
+            Self::Attribute => "schemas.attributes[...]",
+        }
+    }
+}
+
+/// Whether a global name belongs to what every schema set carries — the XSD
+/// built-in types, and the `xml:` and `xsi:` attributes — rather than to what
+/// a document declared.
+///
+/// By namespace, not by `as_builtin`: that one answers from
+/// `SimpleType::builtin` and so cannot see `xs:anyType`, which is complex.
+fn predeclared(s: &Schemas, q: QName) -> bool {
+    matches!(
+        s.namespace_of(q),
+        Some(crate::names::XS | crate::names::XSI | crate::names::XML)
+    )
+}
+
+/// The global of `kind` that `name` names, when this schema declares one.
+///
+/// Anything that is not a name at all is simply not there, so that `42 in
+/// schemas` is `False`, as it is for a `dict`.
+fn lookup_global(s: &Schemas, kind: ComponentKind, name: &Bound<'_, PyAny>) -> Option<QName> {
+    let q = parse_name(s, name).ok().flatten()?;
+    let g = s.globals();
+    let declared = match kind {
+        ComponentKind::Element => g.elements.contains_key(&q),
+        ComponentKind::Type => g.types.contains_key(&q) && !predeclared(s, q),
+        ComponentKind::Attribute => g.attributes.contains_key(&q) && !predeclared(s, q),
+    };
+    declared.then_some(q)
+}
+
+/// A `KeyError` for a name `kind` does not have, which says so when another
+/// kind does: an element and a type sharing a name is common, and the fix is
+/// to look in the other place.
+fn missing_global(s: &Schemas, kind: ComponentKind, name: &Bound<'_, PyAny>) -> PyErr {
+    let shown = name
+        .repr()
+        .map(|r| r.to_string())
+        .unwrap_or_else(|_| "that name".into());
+    let other = ComponentKind::ALL
+        .into_iter()
+        .find(|k| *k != kind && lookup_global(s, *k, name).is_some());
+    PyKeyError::new_err(match other {
+        Some(k) => format!(
+            "{shown} is not {} but {}; use {}",
+            kind.article(),
+            k.article(),
+            k.lookup()
+        ),
+        None => format!("{shown} is not {} this schema declares", kind.article()),
+    })
+}
+
+/// A schema's global components of one kind, in name order and by name.
+///
+/// Elements, types and attributes are separate symbol spaces, and an element
+/// and a type sharing a name is one of the most common patterns in XSD, so
+/// each kind has a view of its own rather than one mapping over all three. A
+/// view iterates its components and indexes them by position the way a list
+/// does, and looks them up by name the way a mapping does.
+#[pyclass(module = "xsdkit", name = "NamedComponents", frozen)]
+pub struct PyNamedComponents {
+    s: Arc<Schemas>,
+    kind: ComponentKind,
+    /// Clark-notation names with the names they came from, sorted.
+    entries: Vec<(String, QName)>,
+}
+
+impl PyNamedComponents {
+    fn component<'py>(&self, py: Python<'py>, q: QName) -> PyResult<Option<Bound<'py, PyAny>>> {
+        let g = self.s.globals();
+        let s = self.s.clone();
+        Ok(match self.kind {
+            ComponentKind::Element => match g.elements.get(&q) {
+                Some(&id) => Some(PyElement { s, id }.into_bound_py_any(py)?),
+                None => None,
+            },
+            ComponentKind::Type => match g.types.get(&q) {
+                Some(&id) => Some(PyType_ { s, id }.into_bound_py_any(py)?),
+                None => None,
+            },
+            ComponentKind::Attribute => match g.attributes.get(&q) {
+                Some(&id) => Some(PyAttribute { s, id }.into_bound_py_any(py)?),
+                None => None,
+            },
+        })
+    }
+}
+
+#[pymethods]
+impl PyNamedComponents {
+    fn __len__(&self) -> usize {
+        self.entries.len()
+    }
+
+    /// The components, in name order.
+    fn __iter__<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyIterator>> {
+        self.values(py)?.try_iter()
+    }
+
+    /// By position, as in a list, or by name: `{ns}local` or `(ns, local)`.
+    fn __getitem__<'py>(
+        &self,
+        py: Python<'py>,
+        key: &Bound<'_, PyAny>,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        if let Ok(i) = key.extract::<isize>() {
+            let at = if i < 0 {
+                i + self.entries.len() as isize
+            } else {
+                i
+            };
+            let found = usize::try_from(at)
+                .ok()
+                .and_then(|at| self.entries.get(at))
+                .map(|(_, q)| *q);
+            return match found {
+                Some(q) => self
+                    .component(py, q)?
+                    .ok_or_else(|| PyIndexError::new_err("index out of range")),
+                None => Err(PyIndexError::new_err(format!(
+                    "{} index out of range",
+                    self.kind.article()
+                ))),
+            };
+        }
+        let found = match lookup_global(&self.s, self.kind, key) {
+            Some(q) => self.component(py, q)?,
+            None => None,
+        };
+        found.ok_or_else(|| missing_global(&self.s, self.kind, key))
+    }
+
+    /// Whether a name, or a component of this kind, is in the view.
+    fn __contains__(&self, item: &Bound<'_, PyAny>) -> bool {
+        let g = self.s.globals();
+        let ours = |s: &Arc<Schemas>| Arc::ptr_eq(s, &self.s);
+        match self.kind {
+            ComponentKind::Element => {
+                if let Ok(e) = item.cast::<PyElement>() {
+                    let e = e.get();
+                    return ours(&e.s) && g.elements.get(&self.s[e.id].name) == Some(&e.id);
+                }
+            }
+            ComponentKind::Type => {
+                if let Ok(t) = item.cast::<PyType_>() {
+                    let t = t.get();
+                    return ours(&t.s)
+                        && self.s[t.id].name().is_some_and(|n| {
+                            g.types.get(&n) == Some(&t.id) && !predeclared(&self.s, n)
+                        });
+                }
+            }
+            ComponentKind::Attribute => {
+                if let Ok(a) = item.cast::<PyAttribute>() {
+                    let a = a.get();
+                    let n = self.s[a.id].name;
+                    return ours(&a.s)
+                        && g.attributes.get(&n) == Some(&a.id)
+                        && !predeclared(&self.s, n);
+                }
+            }
+        }
+        lookup_global(&self.s, self.kind, item).is_some()
+    }
+
+    /// The names, in Clark notation and in order.
+    fn keys(&self) -> Vec<String> {
+        self.entries.iter().map(|(n, _)| n.clone()).collect()
+    }
+
+    /// The components, in the same order as `keys`.
+    fn values<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyList>> {
+        let mut out = Vec::with_capacity(self.entries.len());
+        for (_, q) in &self.entries {
+            out.extend(self.component(py, *q)?);
+        }
+        PyList::new(py, out)
+    }
+
+    /// `(name, component)` pairs, in the same order as `keys`.
+    fn items<'py>(&self, py: Python<'py>) -> PyResult<Vec<(String, Bound<'py, PyAny>)>> {
+        let mut out = Vec::with_capacity(self.entries.len());
+        for (n, q) in &self.entries {
+            if let Some(c) = self.component(py, *q)? {
+                out.push((n.clone(), c));
+            }
+        }
+        Ok(out)
+    }
+
+    /// The component of that name, or `default` when there is none.
+    #[pyo3(signature = (name, default=None))]
+    fn get<'py>(
+        &self,
+        py: Python<'py>,
+        name: &Bound<'_, PyAny>,
+        default: Option<Bound<'py, PyAny>>,
+    ) -> PyResult<Option<Bound<'py, PyAny>>> {
+        match lookup_global(&self.s, self.kind, name) {
+            Some(q) => self.component(py, q),
+            None => Ok(default),
+        }
+    }
+
+    /// The components as a list would show them.
+    fn __repr__(&self, py: Python<'_>) -> PyResult<String> {
+        Ok(self.values(py)?.repr()?.to_string())
+    }
+}
+
 /// Parses a name written either in Clark notation (`{ns}local`), as a bare
 /// local name, or as a `(namespace, local)` pair.
 fn parse_name(schemas: &Schemas, obj: &Bound<'_, PyAny>) -> PyResult<Option<QName>> {
@@ -360,7 +597,13 @@ fn clark(schemas: &Schemas, q: QName) -> String {
 // ---------------------------------------------------------------------------
 
 /// A compiled set of schema components.
-#[pyclass(module = "xsdkit", name = "SchemaSet", frozen, skip_from_py_object)]
+#[pyclass(
+    module = "xsdkit",
+    name = "SchemaSet",
+    frozen,
+    skip_from_py_object,
+    weakref
+)]
 pub struct PySchemaSet {
     inner: Arc<Schemas>,
 }
@@ -452,39 +695,34 @@ fn schema_set(py: Python<'_>, compiled: (Compilation, Option<PyErr>)) -> PyResul
 }
 
 impl PySchemaSet {
-    /// The global names, elements before types, each sorted — the order
-    /// `keys`, `values`, `items` and iteration all agree on.
-    fn names(&self) -> Vec<String> {
-        let mut names: Vec<String> = self
-            .elements()
+    /// This schema's global components of one kind, sorted by name.
+    ///
+    /// The XSD built-in types and the `xml:` and `xsi:` attributes live in the
+    /// same tables — they have to, so that `type="xs:int"` resolves like any
+    /// other reference — but they are not part of what a schema *says*, and
+    /// every Python-facing enumeration leaves them out.
+    fn declared(&self, kind: ComponentKind) -> Vec<(String, QName)> {
+        let g = self.inner.globals();
+        let names: Vec<QName> = match kind {
+            ComponentKind::Element => g.elements.keys().copied().collect(),
+            ComponentKind::Type => g.types.keys().copied().collect(),
+            ComponentKind::Attribute => g.attributes.keys().copied().collect(),
+        };
+        let mut v: Vec<(String, QName)> = names
             .into_iter()
-            .map(|e| clark(&self.inner, self.inner[e.id].name))
-            .chain(
-                self.types()
-                    .into_iter()
-                    .filter_map(|t| self.inner[t.id].name().map(|n| clark(&self.inner, n))),
-            )
+            .filter(|q| kind == ComponentKind::Element || !predeclared(&self.inner, *q))
+            .map(|q| (clark(&self.inner, q), q))
             .collect();
-        names.dedup();
-        names
+        v.sort_by(|a, b| a.0.cmp(&b.0));
+        v
     }
 
-    /// The global types this schema set's documents declare.
-    ///
-    /// The XSD built-ins live in the same table — they have to, so that
-    /// `type="xs:int"` resolves like any other reference — but they are not
-    /// part of what a schema *says*, and every Python-facing enumeration
-    /// leaves them out.
-    fn declared_types(&self) -> impl Iterator<Item = (&QName, &TypeId)> {
-        // By namespace, not by `as_builtin`: that one answers from
-        // `SimpleType::builtin` and so cannot see `xs:anyType`, which is
-        // complex. Everything predeclared lives in the XSD namespace, and
-        // nothing a document declares may.
-        self.inner
-            .globals()
-            .types
-            .iter()
-            .filter(|(q, _)| self.inner.namespace_of(**q) != Some(crate::names::XS))
+    fn view(&self, kind: ComponentKind) -> PyNamedComponents {
+        PyNamedComponents {
+            s: self.inner.clone(),
+            kind,
+            entries: self.declared(kind),
+        }
     }
 }
 
@@ -587,149 +825,101 @@ impl PySchemaSet {
             .collect()
     }
 
-    /// How many global elements and types *this schema* declares.
+    /// How many global elements *this schema* declares.
     ///
-    /// `SchemaSet` behaves as a mapping from a global name to its declaration:
-    /// `len`, `in`, `[]` and iteration all work, and iterating yields names, so
-    /// `dict(s)` and `for name in s` read as they do for any other mapping.
-    ///
-    /// The XSD built-in types are excluded. They are present in every schema
-    /// set, so counting them would drown a two-element schema in fifty
-    /// entries — `len(s)` is meant to answer "how much is in this schema". They
-    /// are still reachable by name through `type()`, which resolves
-    /// rather than enumerates. `counts` is the component tally, and
-    /// counts a great deal more than the globals.
+    /// `SchemaSet` is a mapping from a global element's name to its
+    /// declaration: `len`, `in`, `[]`, `get` and iteration all work, and
+    /// iterating yields names, so `dict(s)` and `for name in s` read as they do
+    /// for any other mapping. Types and attributes are separate symbol spaces
+    /// — an element and a type often share a name — and have views of their
+    /// own in `types` and `attributes`. `counts` is the component tally.
     fn __len__(&self) -> usize {
-        let g = self.inner.globals();
-        g.elements.len() + self.declared_types().count()
+        self.inner.globals().elements.len()
     }
 
-    fn __contains__(&self, name: &Bound<'_, PyAny>) -> PyResult<bool> {
-        let Some(q) = parse_name(&self.inner, name)? else {
-            return Ok(false);
-        };
-        Ok(self.inner.globals().elements.contains_key(&q)
-            || self.inner.globals().types.contains_key(&q)
-                && q.ns
-                    .is_none_or(|ns| self.inner.namespace_uri(ns) != crate::names::XS))
+    fn __contains__(&self, name: &Bound<'_, PyAny>) -> bool {
+        lookup_global(&self.inner, ComponentKind::Element, name).is_some()
     }
 
-    /// The element or type of that name, raising `KeyError` when there is
-    /// none.
+    /// The global element of that name, raising `KeyError` when there is none.
     ///
     /// The lookup methods return `None` instead, for when absence is an
-    /// ordinary answer; this is for when it is a mistake.
-    fn __getitem__<'py>(
+    /// ordinary answer; this is for when it is a mistake. A name that belongs
+    /// to a type or an attribute says so, and where to look instead.
+    fn __getitem__(&self, name: &Bound<'_, PyAny>) -> PyResult<PyElement> {
+        match lookup_global(&self.inner, ComponentKind::Element, name) {
+            Some(q) => Ok(PyElement {
+                s: self.inner.clone(),
+                id: self.inner.globals().elements[&q],
+            }),
+            None => Err(missing_global(&self.inner, ComponentKind::Element, name)),
+        }
+    }
+
+    /// The global element of that name, or `default` when there is none.
+    #[pyo3(signature = (name, default=None))]
+    fn get<'py>(
         &self,
         py: Python<'py>,
         name: &Bound<'_, PyAny>,
-    ) -> PyResult<Bound<'py, PyAny>> {
-        let q = parse_name(&self.inner, name)?;
-        if let Some(q) = q {
-            if let Some(id) = self.inner.globals().elements.get(&q) {
-                return PyElement {
-                    s: self.inner.clone(),
-                    id: *id,
-                }
-                .into_bound_py_any(py);
-            }
-            if let Some(id) = self.inner.globals().types.get(&q) {
-                // Agrees with `in` and with iteration: a built-in is not one
-                // of this schema's declarations, and `type()` is the way to
-                // resolve one.
-                if q.ns
-                    .is_none_or(|ns| self.inner.namespace_uri(ns) != crate::names::XS)
-                {
-                    return PyType_ {
-                        s: self.inner.clone(),
-                        id: *id,
-                    }
-                    .into_bound_py_any(py);
-                }
-            }
-        }
-        Err(pyo3::exceptions::PyKeyError::new_err(
-            name.repr()?.to_string(),
-        ))
+        default: Option<Bound<'py, PyAny>>,
+    ) -> PyResult<Option<Bound<'py, PyAny>>> {
+        self.view(ComponentKind::Element).get(py, name, default)
     }
 
-    /// The global names, as a list.
+    /// The global element names, sorted.
     ///
-    /// Present so this really is a mapping and not merely a thing that looks
-    /// like one: `dict(schemas)` needs `keys` alongside `__getitem__`, and
-    /// iterating names is not enough for it — the documentation claimed the
-    /// conversion worked long before it did.
-    fn keys(&self) -> PyResult<Vec<String>> {
-        Ok(self.names())
+    /// Present so this really is a mapping: `dict(schemas)` needs `keys`
+    /// alongside `__getitem__`.
+    fn keys(&self) -> Vec<String> {
+        self.view(ComponentKind::Element).keys()
     }
 
-    /// The global components, in the same order as `keys`.
-    fn values<'py>(&self, py: Python<'py>) -> PyResult<Vec<Bound<'py, PyAny>>> {
-        self.names()
-            .into_iter()
-            .map(|n| self.__getitem__(py, &n.into_bound_py_any(py)?))
-            .collect()
+    /// The global elements, in the same order as `keys`.
+    fn values<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyList>> {
+        self.view(ComponentKind::Element).values(py)
     }
 
-    /// `(name, component)` pairs, in the same order as `keys`.
+    /// `(name, element)` pairs, in the same order as `keys`.
     fn items<'py>(&self, py: Python<'py>) -> PyResult<Vec<(String, Bound<'py, PyAny>)>> {
-        self.names()
-            .into_iter()
-            .map(|n| {
-                let v = self.__getitem__(py, &n.clone().into_bound_py_any(py)?)?;
-                Ok((n, v))
-            })
-            .collect()
+        self.view(ComponentKind::Element).items(py)
     }
 
-    /// The global names, elements before types, each sorted.
+    /// The global element names, sorted.
     fn __iter__(&self) -> PyResult<Py<PyNameIter>> {
-        let names = self.names();
+        let names = self.keys();
         Python::attach(|py| Py::new(py, PyNameIter { names, at: 0 }))
     }
 
-    /// Every global element declaration, by name.
+    /// Every global element declaration, in name order and by name.
     ///
-    /// The declarations themselves, not `(name, declaration)` pairs — the name
-    /// is on the declaration, and pairs made every caller write `[0][1]`. Look
-    /// one up by name with `schemas["{ns}name"]` or `element()`.
+    /// A view: iterate it or index it by position, as a list, or look a
+    /// declaration up by name, as a mapping — `schemas.elements["{ns}name"]`.
     #[getter]
-    fn elements(&self) -> Vec<PyElement> {
-        let mut v: Vec<_> = self
-            .inner
-            .globals()
-            .elements
-            .iter()
-            .map(|(q, id)| (clark(&self.inner, *q), *id))
-            .collect();
-        v.sort_by(|a, b| a.0.cmp(&b.0));
-        v.into_iter()
-            .map(|(_, id)| PyElement {
-                s: self.inner.clone(),
-                id,
-            })
-            .collect()
+    fn elements(&self) -> PyNamedComponents {
+        self.view(ComponentKind::Element)
     }
 
-    /// Every global type definition *this schema* declares, keyed by
-    /// Clark-notation name.
+    /// Every global type definition *this schema* declares, in name order and
+    /// by name.
     ///
-    /// The XSD built-ins are excluded, for the same reason `len()`
-    /// excludes them: they are in every schema set and would bury the ones the
-    /// document actually wrote. `type("{...}string")` still resolves them.
+    /// An element and a type may share a name, which is why types have a view
+    /// of their own. The XSD built-ins are excluded: they are in every schema
+    /// set and would bury the ones the documents wrote. `type("{...}string")`
+    /// still resolves them.
     #[getter]
-    fn types(&self) -> Vec<PyType_> {
-        let mut v: Vec<_> = self
-            .declared_types()
-            .map(|(q, id)| (clark(&self.inner, *q), *id))
-            .collect();
-        v.sort_by(|a, b| a.0.cmp(&b.0));
-        v.into_iter()
-            .map(|(_, id)| PyType_ {
-                s: self.inner.clone(),
-                id,
-            })
-            .collect()
+    fn types(&self) -> PyNamedComponents {
+        self.view(ComponentKind::Type)
+    }
+
+    /// Every global attribute declaration *this schema* declares, in name
+    /// order and by name.
+    ///
+    /// The `xml:` and `xsi:` attributes every schema set carries are
+    /// excluded; `attribute()` still resolves them.
+    #[getter]
+    fn attributes(&self) -> PyNamedComponents {
+        self.view(ComponentKind::Attribute)
     }
 
     /// Looks up a global element. `None` if there is none.
@@ -998,8 +1188,8 @@ impl PySchemaSet {
     /// what you want to see first on opening a schema you did not write.
     #[allow(non_snake_case)]
     fn _repr_html_(&self) -> String {
-        let elements = self.elements();
-        let types = self.types();
+        let elements = self.declared(ComponentKind::Element);
+        let types = self.declared(ComponentKind::Type);
         let documents = self.documents();
         let plural = |n: usize| if n == 1 { "" } else { "s" };
         let mut out = format!(
@@ -1033,7 +1223,12 @@ impl PySchemaSet {
             let shown: Vec<String> = elements
                 .iter()
                 .take(LIMIT)
-                .map(|e| format!("<span style=\"{NAME}\">{}</span>", esc(&e.local_name())))
+                .map(|(_, q)| {
+                    format!(
+                        "<span style=\"{NAME}\">{}</span>",
+                        esc(self.inner.local_of(*q))
+                    )
+                })
                 .collect();
             let more = elements.len().saturating_sub(LIMIT);
             out.push_str(&format!(
@@ -1050,13 +1245,17 @@ impl PySchemaSet {
         out
     }
 
+    /// What this schema declares, counted the way `len` and the views count
+    /// it rather than with the built-ins every schema set carries.
     fn __repr__(&self) -> String {
-        let c = self.inner.component_counts();
+        let n = |count: usize, noun: &str| {
+            format!("{count} {noun}{}", if count == 1 { "" } else { "s" })
+        };
         format!(
-            "<SchemaSet {} document(s), {} types, {} elements>",
-            self.inner.documents().len(),
-            c.types,
-            c.elements
+            "<SchemaSet {}, {}, {}>",
+            n(self.inner.documents().len(), "document"),
+            n(self.inner.globals().elements.len(), "element"),
+            n(self.declared(ComponentKind::Type).len(), "type"),
         )
     }
 }
@@ -1108,7 +1307,7 @@ impl PySchemaSet {
                 }
                 PyPsviEvent {
                     kind: "start",
-                    name: psvi_name_of(&name),
+                    name: Some(psvi_name_of(&name)),
                     declaration: declaration.map(|id| PyElement {
                         s: self.inner.clone(),
                         id,
@@ -1134,7 +1333,7 @@ impl PySchemaSet {
                 line,
             } => PyPsviEvent {
                 kind: "text",
-                name: (None, String::new()),
+                name: None,
                 declaration: None,
                 type_: Some(PyType_ {
                     s: self.inner.clone(),
@@ -1157,7 +1356,7 @@ impl PySchemaSet {
                 line,
             } => PyPsviEvent {
                 kind: "end",
-                name: psvi_name_of(&name),
+                name: Some(psvi_name_of(&name)),
                 declaration: declaration.map(|id| PyElement {
                     s: self.inner.clone(),
                     id,
@@ -1517,6 +1716,20 @@ impl PyTree {
             Err(_) => false,
         }
     }
+
+    /// Hashes as the string it equals, so the two are interchangeable as keys.
+    fn __hash__(&self, py: Python<'_>) -> PyResult<isize> {
+        PyString::new(py, &self.text).hash()
+    }
+
+    /// Joins as its text would, giving a plain `str`.
+    fn __add__(&self, other: &str) -> String {
+        format!("{}{other}", self.text)
+    }
+
+    fn __radd__(&self, other: &str) -> String {
+        format!("{other}{}", self.text)
+    }
 }
 
 /// `{ns}local` shortened to `local` for a built-in, left alone otherwise.
@@ -1642,27 +1855,44 @@ fn occurrence_of(c: &PyChild) -> &'static str {
     }
 }
 
-/// Finds the named child, accepting a local name as readily as a full one.
+/// Resolves a name against a type's children, accepting a local name as
+/// readily as a full one.
 ///
 /// Exact first: a local name that happens to look like a Clark-notation one
-/// should not be second-guessed.
+/// should not be second-guessed. When no child has the name, the parsed name
+/// comes back anyway, for a wildcard to match.
+fn child_qname(
+    s: &Schemas,
+    children: &[PyChild],
+    name: &Bound<'_, PyAny>,
+) -> PyResult<Option<QName>> {
+    let exact = parse_name(s, name)?;
+    if let Some(q) = exact {
+        if children.iter().any(|c| s[c.element.id].name == q) {
+            return Ok(Some(q));
+        }
+    }
+    if let Ok(local) = name.extract::<String>() {
+        if let Some(c) = children.iter().find(|c| c.element.local_name() == local) {
+            return Ok(Some(s[c.element.id].name));
+        }
+    }
+    Ok(exact)
+}
+
+/// Finds the named child, the way [`child_qname`] resolves the name.
 fn pick_child(
     s: &Schemas,
     children: Vec<PyChild>,
     name: &Bound<'_, PyAny>,
     owner: &str,
 ) -> PyResult<PyChild> {
-    if let Ok(Some(q)) = parse_name(s, name) {
+    if let Ok(Some(q)) = child_qname(s, &children, name) {
         if let Some(c) = children.iter().find(|c| s[c.element.id].name == q) {
             return Ok(c.clone());
         }
     }
-    if let Ok(w) = name.extract::<String>() {
-        if let Some(c) = children.iter().find(|c| c.element.local_name() == w) {
-            return Ok(c.clone());
-        }
-    }
-    Err(pyo3::exceptions::PyKeyError::new_err(format!(
+    Err(PyKeyError::new_err(format!(
         "{owner} has no child {}",
         name.repr()?
     )))
@@ -1868,8 +2098,9 @@ impl PyChildIter {
         item
     }
 
+    /// How many children are left, as for the other iterators here.
     fn __len__(&self) -> usize {
-        self.items.len()
+        self.items.len().saturating_sub(self.at)
     }
 }
 
@@ -2257,11 +2488,20 @@ impl PyType_ {
 
     /// Whether a sequence of child names satisfies this type's content model.
     ///
-    /// Names may be Clark notation, bare local names, or `(ns, local)` pairs.
+    /// Names may be Clark notation, `(ns, local)` pairs, or bare local names,
+    /// resolved against this type's children exactly as `type[name]` resolves
+    /// them. A single `str` is refused rather than read one character at a
+    /// time.
     fn accepts(&self, names: &Bound<'_, PyAny>) -> PyResult<bool> {
+        if names.is_instance_of::<PyString>() || names.is_instance_of::<PyBytes>() {
+            return Err(PyTypeError::new_err(
+                "accepts() takes a sequence of names, not a single string",
+            ));
+        }
+        let children = self.children();
         let mut wanted = Vec::new();
         for item in names.try_iter()? {
-            let Some(q) = parse_name(&self.s, &item?)? else {
+            let Some(q) = child_qname(&self.s, &children, &item?)? else {
                 // A name no component in this schema carries cannot match.
                 return Ok(false);
             };
@@ -2593,18 +2833,35 @@ impl PyFacets {
         table(rows)
     }
 
+    /// Every facet that is set, by its Python name.
     fn __repr__(&self) -> String {
-        let mut parts = Vec::new();
-        if let Some(v) = self.0.max_length {
-            parts.push(format!("max_length={v}"));
-        }
-        if let Some(e) = &self.0.enumeration {
+        let f = &self.0;
+        let mut parts: Vec<String> = [
+            ("length", f.length.map(|v| v.to_string())),
+            ("min_length", f.min_length.map(|v| v.to_string())),
+            ("max_length", f.max_length.map(|v| v.to_string())),
+            ("min_inclusive", f.min_inclusive.clone()),
+            ("min_exclusive", f.min_exclusive.clone()),
+            ("max_inclusive", f.max_inclusive.clone()),
+            ("max_exclusive", f.max_exclusive.clone()),
+            ("total_digits", f.total_digits.map(|v| v.to_string())),
+            ("fraction_digits", f.fraction_digits.map(|v| v.to_string())),
+            ("white_space", f.white_space.map(|w| w.to_string())),
+        ]
+        .into_iter()
+        .filter_map(|(name, value)| value.map(|v| format!("{name}={v}")))
+        .collect();
+        if let Some(e) = &f.enumeration {
             parts.push(format!("enumeration={} value(s)", e.len()));
         }
-        if !self.0.patterns.is_empty() {
-            parts.push(format!("patterns={} step(s)", self.0.patterns.len()));
+        if !f.patterns.is_empty() {
+            parts.push(format!("patterns={} step(s)", f.patterns.len()));
         }
-        format!("<Facets {}>", parts.join(" "))
+        if parts.is_empty() {
+            "<Facets (none)>".to_string()
+        } else {
+            format!("<Facets {}>", parts.join(" "))
+        }
     }
 
     /// A value, not a handle: two facet sets with the same constraints are the
@@ -2857,6 +3114,22 @@ impl PyDiagnostic {
         }
         out.push_str("</div>");
         out
+    }
+
+    /// A value, not a handle: two diagnostics saying the same thing about the
+    /// same place are equal, and hash alike.
+    fn __eq__(&self, other: &PyDiagnostic) -> bool {
+        self.0 == other.0
+    }
+
+    fn __hash__(&self) -> u64 {
+        use std::hash::{Hash, Hasher};
+        let mut h = std::collections::hash_map::DefaultHasher::new();
+        (self.0.code.as_str(), &self.0.message, &self.0.help).hash(&mut h);
+        for s in &self.0.spans {
+            (&s.uri, s.line, &s.label).hash(&mut h);
+        }
+        h.finish()
     }
 
     fn __repr__(&self) -> String {
@@ -3481,7 +3754,8 @@ impl PyAttributeValue {
 #[pyclass(module = "xsdkit", name = "PsviEvent", frozen, skip_from_py_object)]
 pub struct PyPsviEvent {
     kind: &'static str,
-    name: (Option<String>, String),
+    /// Absent on a `"text"` event, which belongs to the element around it.
+    name: Option<(Option<String>, String)>,
     declaration: Option<PyElement>,
     type_: Option<PyType_>,
     type_from_instance: bool,
@@ -3500,15 +3774,17 @@ impl PyPsviEvent {
     fn kind(&self) -> &'static str {
         self.kind
     }
-    /// The element's name as a `(namespace, local)` pair.
+    /// The element's name as a `(namespace, local)` pair; `None` on a
+    /// `"text"` event, which belongs to the element around it.
     #[getter]
-    fn name(&self) -> (Option<String>, String) {
+    fn name(&self) -> Option<(Option<String>, String)> {
         self.name.clone()
     }
-    /// The local part of the name, without its namespace.
+    /// The local part of the name, without its namespace; `None` on a
+    /// `"text"` event.
     #[getter]
-    fn local_name(&self) -> String {
-        self.name.1.clone()
+    fn local_name(&self) -> Option<String> {
+        self.name.as_ref().map(|n| n.1.clone())
     }
     /// The declaration this element matched.
     ///
@@ -3564,7 +3840,9 @@ impl PyPsviEvent {
     fn __repr__(&self) -> String {
         format!(
             "<PsviEvent {} {} line {}>",
-            self.kind, self.name.1, self.line
+            self.kind,
+            self.name.as_ref().map_or("", |n| n.1.as_str()),
+            self.line
         )
     }
 }
@@ -3662,6 +3940,7 @@ fn xsdkit_module(m: &Bound<'_, PyModule>) -> PyResult<()> {
     schema_error.setattr("diagnostics", PyTuple::empty(m.py()))?;
     m.add("SchemaError", schema_error)?;
     m.add_class::<PySchemaSet>()?;
+    m.add_class::<PyNamedComponents>()?;
     m.add_class::<PyNameIter>()?;
     m.add_class::<PyChild>()?;
     m.add_class::<PyChildIter>()?;

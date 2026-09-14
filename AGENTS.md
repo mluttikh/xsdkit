@@ -1025,12 +1025,18 @@ be released around `build()`.
 The API is a Python API, not a transliterated Rust one. What that has meant in
 practice, since each was a real complaint:
 
-- **`SchemaSet` is a mapping** — `len`, `in`, `[]`, iteration — over the
-  globals *the documents declare*. The XSD built-ins are filtered out of all
-  of it, by namespace rather than by `Schemas::as_builtin`, which reads
-  `SimpleType::builtin` and so cannot see the complex `xs:anyType`. `type()`
-  still resolves them: the mapping is "what this schema says", the lookup
-  methods are "resolve this name".
+- **`SchemaSet` is a mapping of global elements** — `len`, `in`, `[]`, `get`,
+  iteration — and `types` and `attributes` are `NamedComponents` views of
+  their own. Elements, types and attributes are separate symbol spaces, and an
+  element and a type sharing a name is one of the commonest patterns in XSD, so
+  one mapping over all of them cannot be right. A view iterates and indexes by
+  position like a list and looks up by name like a mapping, and a `KeyError`
+  names the kind a name does belong to. The XSD built-in types and the
+  `xml:`/`xsi:` attributes are filtered out by namespace rather than by
+  `Schemas::as_builtin`, which reads `SimpleType::builtin` and so cannot see
+  the complex `xs:anyType`. `type()` and `attribute()` still resolve them: the
+  views are "what this schema says", the lookup methods are "resolve this
+  name".
 - **The bindings project `src/refs.rs`, they do not reimplement it.** Every
   `#[pyclass]` holds an `Arc<Schemas>` and an id — a PyO3 class cannot hold a
   borrow — and each accessor makes a reference with `self.r()` and reads

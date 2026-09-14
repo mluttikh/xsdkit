@@ -7,7 +7,7 @@ that every exported name exists at runtime.
 import datetime
 import decimal
 import os
-from typing import Any, Callable, Iterable, Iterator, Literal, Sequence
+from typing import Any, Callable, Generic, Iterable, Iterator, Literal, Sequence, TypeVar
 
 __version__: str
 
@@ -95,6 +95,10 @@ class Span:
 class Diagnostic:
     def _repr_html_(self) -> str:
         """The diagnostic as a compiler would print it."""
+
+    def __eq__(self, other: object, /) -> bool:
+        """Two diagnostics saying the same thing about the same place are equal."""
+    def __hash__(self) -> int: ...
 
     @property
     def code(self) -> str: ...
@@ -442,9 +446,12 @@ class PsviEvent:
     @property
     def kind(self) -> EventKind: ...
     @property
-    def name(self) -> tuple[str | None, str]: ...
+    def name(self) -> tuple[str | None, str] | None:
+        """``(namespace, local)``; ``None`` on a ``"text"`` event, which belongs
+        to the element around it."""
     @property
-    def local_name(self) -> str: ...
+    def local_name(self) -> str | None:
+        """The local part of the name; ``None`` on a ``"text"`` event."""
     @property
     def declaration(self) -> Element | None: ...
     @property
@@ -498,9 +505,43 @@ class Tree:
     def __len__(self) -> int: ...
     def __contains__(self, needle: str, /) -> bool: ...
     def __eq__(self, other: object, /) -> bool: ...
+    def __hash__(self) -> int:
+        """Hashes as the string it equals."""
+    def __add__(self, other: str, /) -> str: ...
+    def __radd__(self, other: str, /) -> str: ...
     def _repr_html_(self) -> str: ...
     def splitlines(self) -> list[str]: ...
     def count(self, needle: str, /) -> int: ...
+
+_C = TypeVar("_C")
+
+class NamedComponents(Generic[_C]):
+    """A schema's global components of one kind, in name order and by name.
+
+    Iterates and indexes by position like a list, and looks up by name like a
+    mapping::
+
+        for t in schemas.types: ...
+        schemas.types[0]
+        schemas.types["{urn:example}Money"]
+    """
+
+    def __len__(self) -> int: ...
+    def __iter__(self) -> Iterator[_C]:
+        """The components, in name order."""
+    def __getitem__(self, key: int | Name, /) -> _C:
+        """By position, as in a list, or by name, raising ``KeyError`` — which
+        says so when the name belongs to another kind of component."""
+    def __contains__(self, item: object, /) -> bool:
+        """Whether a name, or a component of this kind, is in the view."""
+    def keys(self) -> list[str]:
+        """The names, in Clark notation and in order."""
+    def values(self) -> list[_C]:
+        """The components, in the same order as ``keys``."""
+    def items(self) -> list[tuple[str, _C]]:
+        """``(name, component)`` pairs, in the same order as ``keys``."""
+    def get(self, name: Name, default: Any = ...) -> _C | Any:
+        """The component of that name, or ``default`` when there is none."""
 
 class ChildIterator:
     def __iter__(self) -> Iterator[Child]: ...
@@ -579,38 +620,44 @@ class SchemaSet:
         """Detects the encoding: byte-order mark, then the XML declaration,
         then UTF-8."""
     def __len__(self) -> int:
-        """How many global elements and types *this schema* declares.
+        """How many global elements *this schema* declares.
 
-        The XSD built-ins are excluded here, from ``in``, from iteration and
-        from ``types``: they are present in every schema set and would bury
-        what the documents actually declared. ``type()`` still resolves them.
+        ``SchemaSet`` is a mapping of global elements. Types and attributes
+        are separate symbol spaces — an element and a type often share a name
+        — and have views of their own in ``types`` and ``attributes``.
         """
-    def __contains__(self, name: Name, /) -> bool: ...
-    def __getitem__(self, name: Name, /) -> Element | Type:
-        """The element or type of that name, raising ``KeyError`` when there
-        is none. The lookup methods return ``None`` instead, for when absence
-        is an ordinary answer rather than a mistake."""
+    def __contains__(self, name: object, /) -> bool: ...
+    def __getitem__(self, name: Name, /) -> Element:
+        """The global element of that name, raising ``KeyError`` when there is
+        none — and saying so when the name belongs to a type or an attribute.
+        The lookup methods return ``None`` instead, for when absence is an
+        ordinary answer rather than a mistake."""
     def __iter__(self) -> Iterator[str]:
-        """The global names in Clark notation, elements before types."""
+        """The global element names in Clark notation, sorted."""
+    def get(self, name: Name, default: Any = ...) -> Element | Any:
+        """The global element of that name, or ``default`` when there is none."""
     def keys(self) -> list[str]:
-        """The global names, elements before types, each sorted."""
-    def values(self) -> list[Element | Type]:
-        """The global components, in the same order as ``keys``."""
-    def items(self) -> list[tuple[str, Element | Type]]:
-        """``(name, component)`` pairs, in the same order as ``keys``."""
+        """The global element names, sorted."""
+    def values(self) -> list[Element]:
+        """The global elements, in the same order as ``keys``."""
+    def items(self) -> list[tuple[str, Element]]:
+        """``(name, element)`` pairs, in the same order as ``keys``."""
     @property
     def documents(self) -> list[Document]: ...
     @property
-    def elements(self) -> list[Element]:
-        """Every global element declaration, by name.
+    def elements(self) -> NamedComponents[Element]:
+        """Every global element declaration, in name order and by name."""
+    @property
+    def types(self) -> NamedComponents[Type]:
+        """Every global type *this schema* declares, in name order and by name.
 
-        The declarations themselves, not ``(name, declaration)`` pairs — the
-        name is on the declaration, and pairs made every caller write
-        ``[0][1]``.
+        The XSD built-ins are excluded; ``type()`` still resolves them.
         """
     @property
-    def types(self) -> list[Type]:
-        """Every global type *this schema* declares, by name."""
+    def attributes(self) -> NamedComponents[Attribute]:
+        """Every global attribute *this schema* declares, in name order and by
+        name. The ``xml:`` and ``xsi:`` attributes are excluded; ``attribute()``
+        still resolves them."""
     @property
     def counts(self) -> dict[str, int]:
         """Component tallies — types, elements, particles and the rest. Counts
