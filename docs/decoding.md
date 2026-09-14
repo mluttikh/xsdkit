@@ -95,9 +95,13 @@ case right as well. Where the two differ is the empty case: an absent
 repeating child is `[]` here, where `xmlschema` leaves the key out, so
 `data["item"]` needs no `.get("item", [])` even when the document has none.
 
-Keys keep document order, the way a reader of the document expects to see
-them. A repeating child the document did not carry has no position in it, so
-its empty list comes after the keys that were present.
+Keys come in the order each name first appears in the document. Every
+occurrence of a name goes into that name's one list, so how *different* names
+interleave is not kept: under a repeating choice, `<x>1</x><y>2</y><x>3</x>`
+decodes to `{'x': [1, 3], 'y': [2]}`. Where that order carries meaning, read
+the [PSVI events](validation.md) instead. A repeating child the document did
+not carry has no position at all, so its empty list comes after the keys that
+were present.
 
 A child that may appear **at most once** and does not appear has no key at
 all, which is how `note` behaves above:
@@ -121,6 +125,24 @@ the Rust [`Decoded`](reference/rust.md) tree keeps every qualified name, the
 type in force after any `xsi:type`, and which values the schema supplied
 rather than the document.
 
+## The root
+
+`decode` hands back the root element's *content*: code reading one kind of
+document already knows which element that is. When a schema set declares
+several, pass `root=True` to be told which one the document was:
+
+```python
+from pathlib import Path
+
+schemas = xsdkit.SchemaSet.from_file("report.xsd")
+schemas.decode(Path("report.xml"), root=True)
+# {'report': {'@id': 'r1', 'title': 'November orders', ...}}
+```
+
+The key follows the rule every other key does, with the set's global elements
+as the siblings: the local name, in Clark notation only when another global
+element shares it.
+
 ## Invalid documents
 
 `decode` raises, where `validate` does not:
@@ -142,6 +164,13 @@ Take it anyway when you mean to:
 ```python
 data = schemas.decode(bad, lax=True)
 data["title"]                # 't' — what there was of it
+```
+
+`lax` takes what an invalid document says. Text that is not XML at all says
+nothing, so it raises either way:
+
+```python
+schemas.decode("<report", lax=True)          # DocumentError
 ```
 
 ## Mixed content

@@ -288,6 +288,18 @@ Python interpreter started per request — the `serde` feature makes a compiled
 `Schemas` serializable, so compilation happens once and everything afterwards
 is a load.
 
+The Python wheel is built with it. A `SchemaSet` pickles, so a process pool
+shares one without compiling it again in every worker, and `serialize()` and
+`SchemaSet.deserialize()` give the bytes for a cache of your own:
+
+```python
+schemas = xsdkit.SchemaSet.from_file("report.xsd")
+cached = schemas.serialize()
+xsdkit.SchemaSet.deserialize(cached).validate(Path("report.xml")).is_valid   # True
+```
+
+In Rust, turn the feature on:
+
 ```toml
 xsdkit = { version = "0.2", features = ["serde"] }
 ```
@@ -318,7 +330,9 @@ cargo run --release --features serde --example cache -- main.xsd [search/path ..
 
     A name is an index into an interner, so a cache only means anything
     alongside the code that wrote it. Key the cache on the crate version and
-    rebuild on a miss; do not ship one as a data file.
+    rebuild on a miss; do not ship one as a data file. `SchemaSet.deserialize`
+    refuses bytes another xsdkit version wrote, with `ValueError`, and like
+    `pickle` it is only for bytes you trust.
 
 ## Next
 

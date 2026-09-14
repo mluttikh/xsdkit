@@ -673,6 +673,48 @@ impl PySchemaSet {
     }
 }
 
+/// What `SchemaSet.serialize` writes ahead of the xsdkit version and the
+/// payload, so bytes from anywhere else are refused by name rather than
+/// failing somewhere inside postcard.
+const SERIAL_HEADER: &[u8] = b"xsdkit schema set\n";
+
+/// What a `__reduce__` returns: what `pickle` calls to rebuild the object, and
+/// the arguments it calls it with.
+type Reduced<'py, Args> = PyResult<(Bound<'py, PyAny>, Args)>;
+
+/// A `Diagnostic` as `pickle` carries it: code, severity, message, spans, help.
+type DiagnosticFields = (
+    &'static str,
+    &'static str,
+    String,
+    Vec<PySpan>,
+    Option<String>,
+);
+
+/// The prefix bindings a `namespaces=` argument gives: a mapping from prefix
+/// to namespace URI, with `""` for the default namespace.
+fn namespace_bindings(obj: Option<&Bound<'_, PyAny>>) -> PyResult<Vec<(Option<String>, String)>> {
+    let Some(obj) = obj else {
+        return Ok(Vec::new());
+    };
+    let items = obj.call_method0("items").map_err(|_| {
+        let ty = obj
+            .get_type()
+            .name()
+            .map(|n| n.to_string())
+            .unwrap_or_default();
+        PyTypeError::new_err(format!(
+            "namespaces maps prefixes to namespace URIs, not {ty}"
+        ))
+    })?;
+    let mut bindings = Vec::new();
+    for item in items.try_iter()? {
+        let (prefix, uri): (Option<String>, String) = item?.extract()?;
+        bindings.push((prefix.filter(|p| !p.is_empty()), uri));
+    }
+    Ok(bindings)
+}
+
 /// The paths a list argument names, each a `str` or anything `os.fspath`
 /// takes.
 ///
@@ -935,6 +977,72 @@ impl PySchemaSet {
         schema_set(py, compile(py, b, &raised)?)
     }
 
+    /// The compiled schema set as bytes, for `deserialize` to read back
+    /// without compiling the schema again.
+    ///
+    /// For a cache, and for handing a schema set to another process: pickling
+    /// goes through this. Only the xsdkit version that wrote the bytes reads
+    /// them back, so key a cache on `xsdkit.__version__`.
+    fn serialize<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyBytes>> {
+        let schemas = self.inner.clone();
+        let payload = py
+            .detach(move || postcard::to_allocvec(&*schemas))
+            .map_err(|e| XsdError::new_err(format!("cannot serialize the schema set: {e}")))?;
+        let version = env!("CARGO_PKG_VERSION").as_bytes();
+        let mut out = Vec::with_capacity(SERIAL_HEADER.len() + version.len() + 1 + payload.len());
+        out.extend_from_slice(SERIAL_HEADER);
+        out.extend_from_slice(version);
+        out.push(b'\n');
+        out.extend_from_slice(&payload);
+        Ok(PyBytes::new(py, &out))
+    }
+
+    /// Reads back what `serialize` wrote.
+    ///
+    /// Raises `ValueError` for bytes that are not a serialized schema set, or
+    /// that another xsdkit version wrote: a name is an index into the
+    /// interner, so a schema set from another build means nothing here. Read
+    /// only bytes you trust, as with `pickle`.
+    #[classmethod]
+    fn deserialize(_cls: &Bound<'_, PyType>, py: Python<'_>, data: &[u8]) -> PyResult<Self> {
+        let not_ours =
+            || PyValueError::new_err("these bytes are not a schema set from SchemaSet.serialize()");
+        let rest = data.strip_prefix(SERIAL_HEADER).ok_or_else(not_ours)?;
+        let end = rest.iter().position(|&b| b == b'\n').ok_or_else(not_ours)?;
+        let (version, payload) = (&rest[..end], &rest[end + 1..]);
+        let ours = env!("CARGO_PKG_VERSION");
+        if version != ours.as_bytes() {
+            return Err(PyValueError::new_err(format!(
+                "this schema set was serialized by xsdkit {}, and this is xsdkit {ours}: \
+                 compile the schema again",
+                String::from_utf8_lossy(version)
+            )));
+        }
+        let schemas = py
+            .detach(|| postcard::from_bytes::<Schemas>(payload))
+            .map_err(|e| {
+                PyValueError::new_err(format!("cannot read the serialized schema set: {e}"))
+            })?;
+        Ok(Self::wrap(schemas))
+    }
+
+    /// Pickles through `serialize`, so a schema set reaches a process pool's
+    /// workers without being compiled again in each.
+    fn __reduce__<'py>(slf: &Bound<'py, Self>) -> Reduced<'py, (Bound<'py, PyBytes>,)> {
+        let bytes = slf.get().serialize(slf.py())?;
+        Ok((slf.get_type().getattr("deserialize")?, (bytes,)))
+    }
+
+    /// A schema set cannot change, so a copy is the same object, the way it
+    /// is for a `tuple`.
+    fn __copy__(slf: Py<Self>) -> Py<Self> {
+        slf
+    }
+
+    fn __deepcopy__(slf: Py<Self>, _memo: &Bound<'_, PyAny>) -> Py<Self> {
+        slf
+    }
+
     /// The documents this schema set was built from.
     #[getter]
     fn documents(&self) -> Vec<PyDocument> {
@@ -1167,20 +1275,26 @@ impl PySchemaSet {
     /// the data anyway. Unlike `validate`, this one raises, because a caller
     /// asking for data has said what it wants and silently handing back data
     /// from a document that does not fit its schema is the trap this is meant
-    /// to remove.
-    #[pyo3(signature = (xml, *, uri=None, lax=false))]
+    /// to remove. Text that is not XML at all raises even with `lax=True`:
+    /// there is nothing in it to take.
+    ///
+    /// The result is the root element's content. Pass `root=True` for
+    /// `{root name: content}`, which says which global element the document
+    /// was; the key follows the same rule as every other.
+    #[pyo3(signature = (xml, *, uri=None, lax=false, root=false))]
     fn decode(
         &self,
         py: Python<'_>,
         xml: &Bound<'_, PyAny>,
         uri: Option<&str>,
         lax: bool,
+        root: bool,
     ) -> PyResult<Py<PyAny>> {
         let doc = read_instance(xml, uri)?;
         let text = match doc.text {
             Ok(text) => text,
-            // Bytes that cannot be decoded hold no data to hand over.
-            Err(_) if lax => return Ok(py.None()),
+            // Bytes that cannot be decoded are not a document to take
+            // anything from, lax or not.
             Err(d) => {
                 let mut diagnostics = Diagnostics::new();
                 diagnostics.push(d);
@@ -1193,15 +1307,25 @@ impl PySchemaSet {
         let valid = decoding.is_valid();
         let tree = decoding.decoded.take();
 
-        let out = if !lax && !valid {
-            Err(document_error(py, &decoding.diagnostics))
-        } else {
-            match &tree {
-                Some(d) => {
-                    decoded_to_py(py, &self.inner, d, &mut Shapes::default()).map(Bound::unbind)
-                }
-                None => Ok(py.None()),
+        // `lax` takes what an invalid document says. Text that is not XML
+        // says nothing, and `None` for it made a file name passed as a `str`
+        // look like a document with no content.
+        let malformed = decoding
+            .diagnostics
+            .iter()
+            .any(|d| NOT_XML.contains(&d.code));
+        let out = match &tree {
+            Some(d) if valid || (lax && !malformed) => {
+                decoded_to_py(py, &self.inner, d, &mut Shapes::default()).and_then(|value| {
+                    if !root {
+                        return Ok(value.unbind());
+                    }
+                    let keyed = PyDict::new(py);
+                    keyed.set_item(root_key(&self.inner, d), value)?;
+                    Ok(keyed.into_any().unbind())
+                })
             }
+            _ => Err(document_error(py, &decoding.diagnostics)),
         };
         // The tree's own drop glue recurses once per level, and overflows the
         // stack on a deep enough document whether or not it was converted.
@@ -2482,6 +2606,24 @@ impl PyType_ {
     }
 }
 
+impl PyType_ {
+    /// The type a value of this one is checked against: itself, or for a
+    /// complex type with simple content, the simple type of that content.
+    ///
+    /// Without this a price with a currency had no value space at all, and
+    /// the type its value is checked against was reachable only through
+    /// `.base`, and not even there once a restriction sat in between.
+    fn value_type(&self) -> TypeId {
+        match &self.s[self.id] {
+            TypeDefinition::Complex(t) => match t.content {
+                crate::model::ContentType::Simple(simple) if !simple.is_placeholder() => simple,
+                _ => self.id,
+            },
+            TypeDefinition::Simple(_) => self.id,
+        }
+    }
+}
+
 #[pymethods]
 impl PyType_ {
     /// `(namespace, local)`, or `None` for an anonymous inline type.
@@ -2669,19 +2811,37 @@ impl PyType_ {
 
     /// Validates a lexical form against this type, returning its typed value.
     ///
+    /// `namespaces` maps prefixes to namespace URIs, `""` for the default
+    /// namespace, for an `xs:QName`, whose value is whatever its prefix is
+    /// bound to where it was written. A complex type with simple content
+    /// validates against the simple type of that content.
+    ///
     /// Raises `InvalidValueError`, which is also a `ValueError`, with the
     /// reason when the value is not valid.
-    fn validate(&self, py: Python<'_>, lexical: &str) -> PyResult<Py<PyAny>> {
+    #[pyo3(signature = (lexical, /, *, namespaces=None))]
+    fn validate(
+        &self,
+        py: Python<'_>,
+        lexical: &str,
+        namespaces: Option<&Bound<'_, PyAny>>,
+    ) -> PyResult<Py<PyAny>> {
+        let bindings = namespace_bindings(namespaces)?;
         let validator = self.s.value_validator();
-        match validator.validate(self.id, lexical) {
+        match validator.validate_with(self.value_type(), lexical, &bindings) {
             Ok(v) => Ok(value_to_py(py, &v)?.unbind()),
             Err(e) => Err(invalid_value_error(py, e.to_string())),
         }
     }
 
     /// Whether a lexical form is valid against this type.
-    fn is_valid(&self, lexical: &str) -> bool {
-        self.s.value_validator().validate(self.id, lexical).is_ok()
+    #[pyo3(signature = (lexical, /, *, namespaces=None))]
+    fn is_valid(&self, lexical: &str, namespaces: Option<&Bound<'_, PyAny>>) -> PyResult<bool> {
+        let bindings = namespace_bindings(namespaces)?;
+        Ok(self
+            .s
+            .value_validator()
+            .validate_with(self.value_type(), lexical, &bindings)
+            .is_ok())
     }
 
     // -- simple types ------------------------------------------------------
@@ -2759,12 +2919,14 @@ impl PyType_ {
     /// `declared_facets`. A restriction inherits everything its base
     /// constrained, so a type that says only `maxLength` still has its base's
     /// `minLength`, and reporting the declared set alone disagrees with what
-    /// `validate` does.
+    /// `validate` does. For a complex type with simple content, the facets of
+    /// that content's simple type.
     #[getter]
     fn facets(&self) -> Option<PyFacets> {
-        self.s[self.id]
+        let ty = self.value_type();
+        self.s[ty]
             .as_simple()
-            .map(|_| PyFacets(crate::validate::effective_facets(&self.s, self.id)))
+            .map(|_| PyFacets(crate::validate::effective_facets(&self.s, ty)))
     }
 
     /// The `xs:documentation` text, entries joined.
@@ -3162,6 +3324,21 @@ impl PySpan {
         format!("<Span {}>", self.__str__())
     }
 
+    /// Pickles as its fields.
+    fn __reduce__<'py>(slf: &Bound<'py, Self>) -> Reduced<'py, (String, u32, Option<String>)> {
+        let s = slf.get();
+        Ok((
+            slf.get_type().getattr("_rebuild")?,
+            (s.uri.clone(), s.line, s.label.clone()),
+        ))
+    }
+
+    /// What `__reduce__` hands `pickle` to call.
+    #[classmethod]
+    fn _rebuild(_cls: &Bound<'_, PyType>, uri: String, line: u32, label: Option<String>) -> Self {
+        Self { uri, line, label }
+    }
+
     /// A value, not a handle: two with the same fields are the same.
     fn __eq__(&self, other: &PySpan) -> bool {
         self.uri == other.uri && self.line == other.line && self.label == other.label
@@ -3237,6 +3414,56 @@ impl PyDiagnostic {
         self.0.is_error()
     }
 
+    /// Pickles as its fields, so a `SchemaError` raised in a process pool's
+    /// worker arrives whole instead of as a failure to pickle it.
+    fn __reduce__<'py>(slf: &Bound<'py, Self>) -> Reduced<'py, DiagnosticFields> {
+        let d = slf.get();
+        Ok((
+            slf.get_type().getattr("_rebuild")?,
+            (d.code(), d.severity(), d.message(), d.spans(), d.help()),
+        ))
+    }
+
+    /// What `__reduce__` hands `pickle` to call.
+    #[classmethod]
+    fn _rebuild(
+        _cls: &Bound<'_, PyType>,
+        code: &str,
+        severity: &str,
+        message: String,
+        spans: Vec<Bound<'_, PyAny>>,
+        help: Option<String>,
+    ) -> PyResult<Self> {
+        let code = crate::diagnostics::DiagCode::ALL
+            .into_iter()
+            .find(|c| c.as_str() == code)
+            .ok_or_else(|| PyValueError::new_err(format!("no diagnostic has the code {code:?}")))?;
+        let severity = match severity {
+            "error" => Severity::Error,
+            "warning" => Severity::Warning,
+            "note" => Severity::Note,
+            other => return Err(PyValueError::new_err(format!("no severity {other:?}"))),
+        };
+        let spans = spans
+            .iter()
+            .map(|s| {
+                let s = s.cast::<PySpan>()?.get();
+                Ok(Span {
+                    uri: s.uri.clone(),
+                    line: s.line,
+                    label: s.label.clone(),
+                })
+            })
+            .collect::<PyResult<Vec<Span>>>()?;
+        Ok(Self(Diagnostic {
+            code,
+            severity,
+            message,
+            spans,
+            help,
+        }))
+    }
+
     fn __str__(&self) -> String {
         self.0.to_string()
     }
@@ -3298,6 +3525,33 @@ impl PyDiagnostic {
 // ---------------------------------------------------------------------------
 // Values, as native Python objects
 // ---------------------------------------------------------------------------
+
+/// The diagnostics that say a document is not XML at all, rather than XML
+/// that does not fit its schema.
+const NOT_XML: [crate::diagnostics::DiagCode; 4] = [
+    crate::diagnostics::DiagCode::MalformedXml,
+    crate::diagnostics::DiagCode::UnsupportedEncoding,
+    crate::diagnostics::DiagCode::MalformedEncoding,
+    crate::diagnostics::DiagCode::UnknownEntity,
+];
+
+/// The key a document's root takes under `decode(..., root=True)`.
+///
+/// The rule every other key follows, with the set's global elements as the
+/// siblings: the local name, unless another global element shares it. A root
+/// that is not a global element keeps its full name, as anything a wildcard
+/// admitted does.
+fn root_key(schemas: &Schemas, root: &Decoded) -> String {
+    let globals: Vec<QName> = schemas.global_elements().map(|e| e.name()).collect();
+    match root.name.qname().filter(|q| globals.contains(q)) {
+        Some(name) => decoded_key(
+            schemas,
+            name,
+            &ambiguous_names(globals.into_iter(), schemas),
+        ),
+        None => schemas.display_psvi_name(&root.name),
+    }
+}
 
 /// The key a name takes in a decoded dictionary.
 ///
@@ -3620,12 +3874,20 @@ const TIMEDELTA_DAYS: i64 = 999_999_999;
 /// directions and XSD 1.1 has a year zero, and handing one of those to
 /// `datetime.date` raised a bare `ValueError` out of `decode` for a document
 /// `validate` had accepted.
+///
+/// So does anything else `datetime` would have to change to hold: an `xs:date`
+/// with a timezone, which `datetime.date` has no room for, and a time or
+/// duration with digits below the microsecond. Dropping the timezone made
+/// `2024-12-01Z` and `2024-12-01+05:00` one value.
 fn value_to_py<'py>(py: Python<'py>, v: &Value) -> PyResult<Bound<'py, PyAny>> {
     match v {
         Value::String(s) | Value::AnyUri(s) => s.into_bound_py_any(py),
         Value::Boolean(b) => b.into_bound_py_any(py),
         Value::Integer(n) => n.into_bound_py_any(py),
-        Value::Float(f) => f32::from(*f).into_bound_py_any(py),
+        // Through the shortest decimal that reads back as the same `f32`.
+        // Widened digit for digit, `0.1` became `0.10000000149011612`: the
+        // same 32-bit value, and not what anyone wrote.
+        Value::Float(f) => widen_float(f32::from(*f)).into_bound_py_any(py),
         Value::Double(d) => f64::from(*d).into_bound_py_any(py),
         // The scale it was written with, not the canonical form. `4.50` and
         // `4.5` are one `xs:decimal` and compare equal as Python `Decimal`s
@@ -3636,9 +3898,9 @@ fn value_to_py<'py>(py: Python<'py>, v: &Value) -> PyResult<Bound<'py, PyAny>> {
             .getattr("Decimal")?
             .call1((d.as_written().to_string(),)),
         Value::HexBinary(b) | Value::Base64Binary(b) => PyBytes::new(py, b).into_bound_py_any(py),
-        Value::DateTime(dt) if PYTHON_YEARS.contains(&dt.year()) => {
-            let (sec, micro) = split_seconds(&dt.second().to_string());
-            py.import("datetime")?.getattr("datetime")?.call1((
+        Value::DateTime(dt) if PYTHON_YEARS.contains(&dt.year()) => match whole_micros(dt.second())
+        {
+            Some((sec, micro)) => py.import("datetime")?.getattr("datetime")?.call1((
                 dt.year(),
                 dt.month(),
                 dt.day(),
@@ -3647,23 +3909,29 @@ fn value_to_py<'py>(py: Python<'py>, v: &Value) -> PyResult<Bound<'py, PyAny>> {
                 sec,
                 micro,
                 tzinfo(py, dt.timezone_offset().map(|t| t.minutes()))?,
-            ))
-        }
-        Value::Date(d) if PYTHON_YEARS.contains(&d.year()) => py
+            )),
+            None => v.to_string().into_bound_py_any(py),
+        },
+        Value::Date(d) if PYTHON_YEARS.contains(&d.year()) && d.timezone_offset().is_none() => py
             .import("datetime")?
             .getattr("date")?
             .call1((d.year(), d.month(), d.day())),
-        Value::Time(t) => {
-            let (sec, micro) = split_seconds(&t.second().to_string());
-            py.import("datetime")?.getattr("time")?.call1((
+        Value::Time(t) => match whole_micros(t.second()) {
+            Some((sec, micro)) => py.import("datetime")?.getattr("time")?.call1((
                 t.hour(),
                 t.minute(),
                 sec,
                 micro,
                 tzinfo(py, t.timezone_offset().map(|t| t.minutes()))?,
-            ))
-        }
+            )),
+            None => v.to_string().into_bound_py_any(py),
+        },
         Value::DayTimeDuration(d) if d.days().abs() < TIMEDELTA_DAYS => {
+            let seconds = d.seconds();
+            let Some((whole, micro)) = whole_micros(seconds) else {
+                return v.to_string().into_bound_py_any(py);
+            };
+            let sign = if seconds.is_negative() { -1 } else { 1 };
             // By name, not by position. `timedelta`'s positional order is
             // (days, seconds, microseconds, milliseconds, minutes, hours,
             // weeks) — seventh is *weeks*, and putting days there multiplied
@@ -3672,10 +3940,8 @@ fn value_to_py<'py>(py: Python<'py>, v: &Value) -> PyResult<Bound<'py, PyAny>> {
             kwargs.set_item("days", d.days())?;
             kwargs.set_item("hours", d.hours())?;
             kwargs.set_item("minutes", d.minutes())?;
-            kwargs.set_item(
-                "seconds",
-                d.seconds().to_string().parse::<f64>().unwrap_or(0.0),
-            )?;
+            kwargs.set_item("seconds", sign * i64::from(whole))?;
+            kwargs.set_item("microseconds", sign * i64::from(micro))?;
             py.import("datetime")?
                 .getattr("timedelta")?
                 .call((), Some(&kwargs))
@@ -3698,12 +3964,37 @@ fn value_to_py<'py>(py: Python<'py>, v: &Value) -> PyResult<Bound<'py, PyAny>> {
     }
 }
 
-/// Splits `"15.25"` into whole seconds and microseconds.
-fn split_seconds(text: &str) -> (u32, u32) {
-    let f: f64 = text.parse().unwrap_or(0.0);
-    let sec = f.trunc().max(0.0) as u32;
-    let micro = ((f - f.trunc()) * 1_000_000.0).round() as u32;
-    (sec, micro.min(999_999))
+/// Whole seconds and microseconds, when a count of seconds has no digit below
+/// the microsecond that `datetime` and `timedelta` would have to drop.
+///
+/// Exact, from the decimal's digits rather than through a float, which
+/// rounded `PT0.0000001S` to nothing without saying so.
+fn whole_micros(seconds: crate::atomic::Decimal) -> Option<(u32, u32)> {
+    let (digits, exponent) = (seconds.coefficient(), seconds.exponent());
+    let scale = exponent.unsigned_abs();
+    let micros = if exponent >= 0 {
+        digits.checked_mul(10u128.checked_pow(scale + 6)?)?
+    } else if scale <= 6 {
+        digits.checked_mul(10u128.pow(6 - scale))?
+    } else {
+        let below = 10u128.checked_pow(scale - 6)?;
+        if digits % below != 0 {
+            return None;
+        }
+        digits / below
+    };
+    let whole = u32::try_from(micros / 1_000_000).ok()?;
+    let micro = u32::try_from(micros % 1_000_000).ok()?;
+    Some((whole, micro))
+}
+
+/// An `f32` as the Python float its shortest decimal reads as.
+fn widen_float(f: f32) -> f64 {
+    if f.is_finite() {
+        f.to_string().parse().unwrap_or(f64::from(f))
+    } else {
+        f64::from(f)
+    }
 }
 
 fn tzinfo<'py>(py: Python<'py>, minutes: Option<i16>) -> PyResult<Option<Bound<'py, PyAny>>> {
@@ -3768,6 +4059,29 @@ impl PyValidationReport {
 
     fn __bool__(&self) -> bool {
         self.valid
+    }
+
+    /// Pickles as its fields, so a report crosses back from a process pool.
+    fn __reduce__<'py>(slf: &Bound<'py, Self>) -> Reduced<'py, (bool, Vec<PyDiagnostic>)> {
+        let r = slf.get();
+        Ok((
+            slf.get_type().getattr("_rebuild")?,
+            (r.valid, r.diagnostics.clone()),
+        ))
+    }
+
+    /// What `__reduce__` hands `pickle` to call.
+    #[classmethod]
+    fn _rebuild(
+        _cls: &Bound<'_, PyType>,
+        valid: bool,
+        diagnostics: Vec<Bound<'_, PyAny>>,
+    ) -> PyResult<Self> {
+        let diagnostics = diagnostics
+            .iter()
+            .map(|d| Ok(d.cast::<PyDiagnostic>()?.get().clone()))
+            .collect::<PyResult<Vec<PyDiagnostic>>>()?;
+        Ok(Self { valid, diagnostics })
     }
 
     /// A summary line and a table of what was found.

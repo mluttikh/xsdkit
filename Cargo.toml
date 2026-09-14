@@ -62,9 +62,17 @@ default-features = false
 optional = true
 features = ["abi3-py39", "macros"]
 
+[dependencies.postcard]
+version = "1.1"
+default-features = false
+optional = true
+features = ["alloc"]
+
 [features]
 default = []
-python = ["dep:pyo3"]
+# The bindings pickle a compiled schema set through serde, so a process pool
+# can share one without compiling it again in every worker.
+python = ["dep:pyo3", "serde", "dep:postcard"]
 # Serialize a compiled `Schemas` and read it back, so a large schema is
 # compiled once and loaded thereafter.
 serde = ["dep:serde"]

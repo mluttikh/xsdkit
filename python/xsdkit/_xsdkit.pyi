@@ -7,7 +7,7 @@ that every exported name exists at runtime.
 import datetime
 import decimal
 import os
-from typing import Any, Callable, Generic, Iterable, Iterator, Literal, Sequence, TypeVar
+from typing import Any, Callable, Generic, Iterable, Iterator, Literal, Mapping, Sequence, TypeVar
 
 __version__: str
 
@@ -413,10 +413,15 @@ class Type:
     @property
     def content_model(self) -> ModelKind | None: ...
     def accepts(self, names: Iterable[Name], /) -> bool: ...
-    def validate(self, lexical: str, /) -> XsdValue:
+    def validate(self, lexical: str, /, *, namespaces: Mapping[str, str] | None = None) -> XsdValue:
         """Raises ``InvalidValueError``, also a ``ValueError``, with the reason
-        when not valid."""
-    def is_valid(self, lexical: str, /) -> bool: ...
+        when not valid.
+
+        ``namespaces`` maps prefixes to namespace URIs, ``""`` for the default
+        namespace, for an ``xs:QName``. A complex type with simple content
+        validates against the simple type of that content.
+        """
+    def is_valid(self, lexical: str, /, *, namespaces: Mapping[str, str] | None = None) -> bool: ...
     @property
     def variety(self) -> Variety | None: ...
     @property
@@ -433,7 +438,8 @@ class Type:
 
         A restriction inherits everything its base constrained, so a type that
         declares only ``maxLength`` still has its base's ``minLength``. This is
-        what ``validate`` applies.
+        what ``validate`` applies. For a complex type with simple content, the
+        facets of that content's simple type.
         """
     @property
     def declared_facets(self) -> Facets | None:
@@ -654,6 +660,20 @@ class SchemaSet:
     ) -> SchemaSet:
         """Loads a schema from several root documents into one set. Refuses a
         single path, and an empty list."""
+    @classmethod
+    def deserialize(cls, data: bytes) -> SchemaSet:
+        """Reads back what ``serialize`` wrote, without compiling again.
+
+        Raises ``ValueError`` for bytes that are not a serialized schema set,
+        or that another xsdkit version wrote. Read only bytes you trust, as
+        with ``pickle``.
+        """
+    def serialize(self) -> bytes:
+        """The compiled schema set as bytes, for a cache or another process.
+
+        Pickling goes through this. Only the xsdkit version that wrote the
+        bytes reads them back, so key a cache on ``xsdkit.__version__``.
+        """
     def __len__(self) -> int:
         """How many global elements *this schema* declares.
 
@@ -706,7 +726,9 @@ class SchemaSet:
 
         Diagnostics name ``uri``, or the file when ``xml`` is a path.
         """
-    def decode(self, xml: Instance, *, uri: str | None = None, lax: bool = False) -> Any:
+    def decode(
+        self, xml: Instance, *, uri: str | None = None, lax: bool = False, root: bool = False
+    ) -> Any:
         """Decodes a document into Python data.
 
         Elements become dictionaries and values arrive in their value space::
@@ -728,7 +750,9 @@ class SchemaSet:
         carries attributes.
 
         Raises ``DocumentError`` if the document is invalid. Pass ``lax=True``
-        to take the data anyway.
+        to take the data anyway; text that is not XML at all raises regardless.
+        Pass ``root=True`` for ``{root name: data}``, which says which global
+        element the document was.
         """
     def iter_typed(self, xml: Instance, *, uri: str | None = None) -> PsviEvents:
         """Reads a document into typed PSVI events, as an iterator.

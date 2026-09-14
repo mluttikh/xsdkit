@@ -354,6 +354,18 @@ facets, and returns the value as its closest native Python type. This is the
 same machinery the document validator uses, so a value that passes here passes
 there.
 
+An `xs:QName` is whatever its prefix is bound to where it was written, so give
+the bindings, with `""` for the default namespace:
+
+```python
+qname = schemas.type("http://www.w3.org/2001/XMLSchema", "QName")
+qname.validate("ex:report", namespaces={"ex": "urn:example"})
+# '{urn:example}report'
+```
+
+A complex type with simple content, such as a price with a currency, validates
+against the simple type of that content, and its `facets` are that type's.
+
 ## Does this sequence fit?
 
 ```python
