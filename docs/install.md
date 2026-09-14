@@ -68,13 +68,16 @@ the difference is large enough to mislead you if you are measuring anything.
 ### The conformance suite
 
 The W3C XML Schema Test Suite is 231 MB and is not vendored. Point `XSDTESTS`
-at a clone and the suite runs; leave it unset and those tests skip.
+at a checkout and the suite runs; leave it unset and those tests skip. Fetch
+the commit `tests/conformance/SUITE` pins, which is the one the baselines were
+blessed against — the suite's default branch moves on without them.
 
 ```bash
-git clone --depth 1 https://github.com/w3c/xsdtests /tmp/xsdtests
+scripts/fetch-w3c-suite.sh /tmp/xsdtests
 export XSDTESTS=/tmp/xsdtests
 
 cargo test --test w3c_suite -- --nocapture   # both halves, ~35 seconds
+python3 scripts/check-w3c-python.py          # the instance cases, through the installed wheel
 ```
 
 Both halves are scored against a committed per-case baseline in

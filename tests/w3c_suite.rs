@@ -10,7 +10,7 @@
 //! <https://github.com/w3c/xsdtests> and the harness runs:
 //!
 //! ```text
-//! git clone --depth 1 https://github.com/w3c/xsdtests /tmp/xsdtests
+//! scripts/fetch-w3c-suite.sh /tmp/xsdtests
 //! XSDTESTS=/tmp/xsdtests cargo test --test w3c_suite -- --nocapture
 //! ```
 //!

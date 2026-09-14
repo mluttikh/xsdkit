@@ -81,13 +81,7 @@ jobs:
       # re-blessing them. Unpinned, an upstream edit would turn some unrelated
       # pull request red.
       - name: Fetch the W3C XML Schema Test Suite
-        run: |
-          suite=$(grep -v '^#' tests/conformance/SUITE | tr -d '[:space:]')
-          echo "pinned at $suite"
-          git init -q /tmp/xsdtests
-          git -C /tmp/xsdtests remote add origin https://github.com/w3c/xsdtests
-          git -C /tmp/xsdtests fetch -q --depth 1 origin "$suite"
-          git -C /tmp/xsdtests checkout -q FETCH_HEAD
+        run: scripts/fetch-w3c-suite.sh /tmp/xsdtests
       # Both halves, against the committed per-case baselines in
       # tests/conformance: 10,515 schema runs and 42,058 instance runs — every
       # group that the suite prescribes for both versions is read as each — in
@@ -167,6 +161,31 @@ jobs:
       # parsed. Several of them did not, for want of an `import`.
       - name: Run the Python snippets in the Markdown docs
         run: python3 scripts/check-doc-snippets-python.py
+
+  # The same instance cases as the conformance job, through the installed
+  # wheel rather than the crate. The Rust harness never reaches
+  # `src/python.rs`, and a conversion there once made `decode` raise on nine
+  # documents `validate` accepted, with nothing to notice. This fails when the
+  # bindings reach a different verdict than the committed baseline, when one
+  # call disagrees with another, or when anything but an `XsdError` escapes.
+  python-conformance:
+    name: Python conformance (W3C suite)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.14"
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Fetch the W3C XML Schema Test Suite
+        run: scripts/fetch-w3c-suite.sh /tmp/xsdtests
+      - name: Build and install the wheel
+        run: pip install .
+      - name: Run the suite through the Python bindings
+        env:
+          XSDTESTS: /tmp/xsdtests
+        run: python3 scripts/check-w3c-python.py
 
   semver:
     name: Semver

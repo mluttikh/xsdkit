@@ -424,7 +424,7 @@ checked out and not vendored; point `XSDTESTS` at a clone of
 <https://github.com/w3c/xsdtests> and it runs, otherwise it skips.
 
 ```bash
-git clone --depth 1 https://github.com/w3c/xsdtests /tmp/xsdtests
+scripts/fetch-w3c-suite.sh /tmp/xsdtests   # the commit the baselines describe
 XSDTESTS=/tmp/xsdtests cargo test --test w3c_suite -- --nocapture
 ```
 
@@ -437,6 +437,22 @@ re-bless it *in the same commit* as the change:
 
 ```bash
 XSDTESTS=/tmp/xsdtests XSDKIT_BLESS=1 cargo test --test w3c_suite
+```
+
+**The instance cases also run through the Python bindings**, against the same
+baseline: `scripts/check-w3c-python.py`, in the `python-conformance` job. The
+Rust harness never reaches `src/python.rs`, and a date conversion there once
+made `decode` raise on nine documents `validate` accepted. The script fails
+when the cases it selects differ from the baseline's rows, when `validate`
+reaches another verdict or other codes, when `iter_typed`, `read_typed` or a
+schema set round-tripped through `serialize` disagrees with `validate`, when
+`decode` raises for a valid document or not for an invalid one, and on any
+exception that is not an `XsdError`. Its case selection mirrors
+`tests/suite/mod.rs` rule for rule, so a rule changed there changes here in
+the same commit, or the job reports the drift. About half a minute:
+
+```bash
+pip install . && XSDTESTS=/tmp/xsdtests python3 scripts/check-w3c-python.py
 ```
 
 Read the diff before you do. The failure output pairs each changed case with
@@ -612,8 +628,10 @@ The docs job also compiles every Rust snippet in `docs/` and `README.md`
 inside `src/`, and the website's went stale after a rename with nothing to say
 so. The Python job runs the Python ones the same way
 (`scripts/check-doc-snippets-python.py`), which it can do literally, since they
-all work against `docs/examples/report.xsd`. Run them all locally before
-pushing; they take seconds.
+all work against `docs/examples/report.xsd`. The `python-conformance` job
+runs the W3C suite's instance cases through the installed wheel, against the
+Rust baseline; see Conformance. Run them all locally before pushing; they
+take seconds.
 
 **Check them by exit code, never by grepping output.** `cargo clippy` caches:
 a second run on unchanged code prints `Finished` and re-emits nothing, so
