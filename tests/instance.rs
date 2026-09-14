@@ -1805,6 +1805,63 @@ fn malformed_xml_is_a_diagnostic_not_a_panic() {
 }
 
 #[test]
+fn nothing_but_whitespace_comments_and_pis_may_surround_the_root() {
+    // The reader checks none of this, so every one of these validated clean:
+    // a second root as a document of its own, and the text, CDATA and
+    // references beside the root dropped without a word.
+    let s = report_schema();
+    let root = r#"<report xmlns="urn:example" id="r1"><title>t</title><count>1</count></report>"#;
+    for doc in [
+        format!("{root}{root}"),
+        format!("{root}<other/>"),
+        format!("{root}junk"),
+        format!("junk{root}"),
+        format!("{root}<![CDATA[x]]>"),
+        format!("<![CDATA[x]]>{root}"),
+        format!("{root}&amp;"),
+        format!("&#65;{root}"),
+    ] {
+        invalid(&s, &doc, DiagCode::MalformedXml);
+    }
+
+    // What XML does allow there.
+    valid(
+        &s,
+        &format!("<?xml version=\"1.0\"?>\n<!-- before -->\n{root}\n<!-- after --><?pi data?>\n"),
+    ); // A byte-order mark is not content, whether or not a caller stripped it.
+    valid(&s, &format!("\u{feff}{root}"));
+}
+
+#[test]
+fn a_second_root_is_not_announced_as_one() {
+    // It was: the events of both roots went out, and a decoder building a
+    // tree from them kept whichever came last.
+    let s = report_schema();
+    let root = r#"<report xmlns="urn:example" id="r1"><title>t</title><count>1</count></report>"#;
+    let mut starts = 0;
+    let report = s
+        .document_validator()
+        .validate_named(&format!("{root}{root}"), "doc.xml", |e| {
+            if let PsviEvent::StartElement { .. } = e {
+                starts += 1;
+            }
+        });
+    assert!(!report.is_valid());
+    assert_eq!(starts, 3, "report, title and count, once");
+    let second = report.diagnostics.errors().next().unwrap();
+    assert!(second.message.contains("second root"), "{second}");
+}
+
+#[test]
+fn text_with_no_element_at_all_is_still_no_root_element() {
+    // Content before the root is only misplaced once a root follows it.
+    let s = report_schema();
+    let d = check(&s, "report.xml");
+    assert_eq!(d.errors().count(), 1, "{d}");
+    assert!(format!("{d}").contains("no root element"), "{d}");
+}
+
+#[test]
 fn a_truncated_document_is_reported() {
     let s = report_schema();
     let d = check(

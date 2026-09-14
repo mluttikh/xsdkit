@@ -280,6 +280,13 @@ cannot express this.
   `Event::Text`. A `match` that falls through on them reads `caf&#233;` as
   `caf` with no diagnostic. The five XML predefines and character references
   are resolved in `instance.rs`; anything else needs a DTD and is reported.
+- **The reader does not check a document's shape.** `quick-xml` reads a second
+  root element, or text, a reference or CDATA beside the root, as happily as
+  anything else. `drive` tracks when the root has ended and reports all of
+  them as `MalformedXml`, and stops reading, as XML's fatal errors require.
+  Content before the root is only reported once an element follows it: text
+  with no element at all is still "no root element", with the hint about
+  passing a file name.
 - **An empty element takes its declaration's `default` or `fixed` value**, the
   same way an absent attribute does, and `PsviEvent::Text::from_schema` says
   so. Whitespace is content, not absence, so `<n> </n>` does not take one.

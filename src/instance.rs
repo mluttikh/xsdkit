@@ -623,6 +623,18 @@ impl<'a, S: FnMut(PsviEvent)> Run<'a, '_, S> {
         self.v.schemas.display_name(q)
     }
 
+    /// Reports content XML allows only inside the root element.
+    ///
+    /// Not being well-formed is a fatal error in XML, so the caller stops
+    /// reading here, as it does for anything the reader itself refuses.
+    fn outside_root(&mut self, line: u32, what: &str, place: &str) {
+        self.error(
+            DiagCode::MalformedXml,
+            line,
+            format!("{what} {place} the root element"),
+        );
+    }
+
     // -- the event loop ----------------------------------------------------
 
     fn drive(&mut self, xml: &str) {
@@ -642,6 +654,15 @@ impl<'a, S: FnMut(PsviEvent)> Run<'a, '_, S> {
         // Counted here rather than read off `self.stack`, because this is
         // what the reader's own nesting counter sees.
         let mut depth = 0usize;
+        // A document is one element, with nothing around it but whitespace,
+        // comments and processing instructions. The reader checks none of
+        // that: a second root validated as a document of its own, and text
+        // beside the root was dropped without a word.
+        let mut root_ended = false;
+        // The first content found before the root. Only misplaced once a root
+        // follows it — with no element at all, "no root element" below is the
+        // truer thing to say.
+        let mut before_root: Option<(u32, &'static str)> = None;
         loop {
             let event = match reader.read_resolved_event() {
                 Ok((ns, event)) => {
@@ -683,6 +704,21 @@ impl<'a, S: FnMut(PsviEvent)> Run<'a, '_, S> {
 
             match event {
                 Event::Start(ref e) | Event::Empty(ref e) => {
+                    if let Some((at, what)) = before_root {
+                        self.outside_root(at, what, "before");
+                        return;
+                    }
+                    if root_ended {
+                        let local = name.as_ref().map_or("", |(_, l)| l.as_str());
+                        self.error(
+                            DiagCode::MalformedXml,
+                            line,
+                            format!(
+                                "`{local}` is a second root element; a document has exactly one"
+                            ),
+                        );
+                        return;
+                    }
                     if matches!(event, Event::Start(_)) {
                         depth += 1;
                         if depth > MAX_INSTANCE_DEPTH {
@@ -702,16 +738,27 @@ impl<'a, S: FnMut(PsviEvent)> Run<'a, '_, S> {
                         // An empty element is a start and an end at once.
                         self.end(line);
                     }
+                    root_ended = depth == 0;
                 }
                 Event::End(_) => {
                     depth = depth.saturating_sub(1);
                     self.end(line);
+                    root_ended = depth == 0;
                 }
                 Event::Text(t) => {
                     // References arrive as their own `GeneralRef` events, so
                     // what reaches here is literal text with nothing left to
                     // unescape.
                     match t.decode() {
+                        Ok(text) if depth == 0 => {
+                            if !is_blank(&text) {
+                                if root_ended {
+                                    self.outside_root(line, "character data", "after");
+                                    return;
+                                }
+                                before_root.get_or_insert((line, "character data"));
+                            }
+                        }
                         Ok(text) => {
                             if let Some(f) = self.stack.last_mut() {
                                 f.text.push_str(&text);
@@ -725,6 +772,14 @@ impl<'a, S: FnMut(PsviEvent)> Run<'a, '_, S> {
                 // `caf` — silently, which is the worst way to be wrong about
                 // a value.
                 Event::GeneralRef(r) => {
+                    if depth == 0 {
+                        if root_ended {
+                            self.outside_root(line, "a reference", "after");
+                            return;
+                        }
+                        before_root.get_or_insert((line, "a reference"));
+                        continue;
+                    }
                     let resolved = match r.resolve_char_ref() {
                         Ok(Some(c)) => Some(c.to_string()),
                         Ok(None) => r
@@ -761,6 +816,14 @@ impl<'a, S: FnMut(PsviEvent)> Run<'a, '_, S> {
                     }
                 }
                 Event::CData(c) => {
+                    if depth == 0 {
+                        if root_ended {
+                            self.outside_root(line, "a CDATA section", "after");
+                            return;
+                        }
+                        before_root.get_or_insert((line, "a CDATA section"));
+                        continue;
+                    }
                     if let Ok(text) = std::str::from_utf8(c.as_ref()) {
                         if let Some(f) = self.stack.last_mut() {
                             f.text.push_str(text);
@@ -1650,6 +1713,12 @@ fn read_attributes(
             }
         })
         .collect()
+}
+
+/// Whether text outside the root element is only what XML allows there:
+/// whitespace as XML defines it, which is narrower than Unicode's.
+fn is_blank(text: &str) -> bool {
+    text.chars().all(|c| matches!(c, ' ' | '\t' | '\r' | '\n'))
 }
 
 /// The five entities XML predefines. Anything else is declared in a DTD,
