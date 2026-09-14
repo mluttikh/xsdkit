@@ -43,7 +43,7 @@ NOTE = re.compile(
     r'<div class="constraintnote">'
     r'<a id="(?P<anchor>[^"]+)"[^>]*></a>'
     r"<b>(?P<kind>[^<:]+):\s*(?P<name>.*?)</b>\s*<br",
-    re.S,
+    re.DOTALL,
 )
 
 

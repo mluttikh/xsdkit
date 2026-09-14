@@ -1,5 +1,7 @@
 import pathlib
+
 import pytest
+
 import xsdkit
 
 REPO = pathlib.Path(__file__).resolve().parents[2]

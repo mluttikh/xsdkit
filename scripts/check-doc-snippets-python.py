@@ -95,7 +95,7 @@ def blocks(path: Path) -> list[tuple[int, str, str]]:
         j = start
         while j < len(lines) and lines[j].strip() != "```":
             j += 1
-        body = [ln[len(indent) :] if ln.startswith(indent) else ln for ln in lines[start:j]]
+        body = [ln.removeprefix(indent) for ln in lines[start:j]]
         found.append((start + 1, info, "\n".join(body)))
         i = j + 1
     return found
@@ -122,7 +122,7 @@ def main() -> int:
             ran += 1
             try:
                 with redirect_stdout(io.StringIO()):
-                    exec(compile(code, f"{rel}:{line}", "exec"), env)
+                    exec(compile(code, f"{rel}:{line}", "exec"), env)  # noqa: S102 - running it is the check
             except Exception as exc:  # noqa: BLE001 — reporting, not handling
                 if expected and type(exc).__name__ == expected.group(1):
                     continue

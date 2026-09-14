@@ -4,6 +4,7 @@ import datetime
 import decimal
 
 import pytest
+
 import xsdkit
 from conftest import NS, build
 
@@ -428,10 +429,10 @@ def test_the_report_waits_for_the_last_event(schemas):
     """Validity is only known at the end of the document, and so is the report."""
     events = schemas.iter_typed(DOC)
     with pytest.raises(RuntimeError, match="validate"):
-        events.report
+        _ = events.report
     assert next(events).kind == "start"
     with pytest.raises(RuntimeError):
-        events.report
+        _ = events.report
     assert list(events)[-1].kind == "end"
     assert events.report.is_valid
     assert list(events) == [], "an exhausted iterator stays exhausted"

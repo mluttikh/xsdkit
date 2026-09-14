@@ -38,6 +38,14 @@ jobs:
       # failure in about a second.
       - name: Check the fuzz targets still build against the API
         run: cargo check --manifest-path fuzz/Cargo.toml --bins
+      # The Python half: the package, its tests and `scripts/`. Ruff comes from
+      # the `lint` dependency group, which pins its version — and with it the
+      # rule set — so a Ruff release cannot turn this job red on its own.
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.14"
+      - name: Lint the Python with Ruff
+        run: python -m pip install --upgrade pip && python -m pip install --group lint && ruff check
 
   test:
     name: Test (${{ matrix.os }})

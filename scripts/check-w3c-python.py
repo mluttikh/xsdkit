@@ -252,7 +252,7 @@ def main() -> int:
             except xsdkit.DocumentError as e:
                 if not any(d.code in NOT_XML for d in e.diagnostics):
                     fail(key, f"decode(lax=True) refused XML: {codes_of_error(e)}")
-        except BaseException as e:  # noqa: BLE001 - every escape is the finding
+        except BaseException as e:  # every escape is the finding
             if isinstance(e, KeyboardInterrupt):
                 raise
             where = traceback.extract_tb(e.__traceback__)[-1]
