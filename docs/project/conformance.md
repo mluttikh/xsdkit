@@ -134,11 +134,12 @@ For the XSD 1.1 features specifically, the suite ships its own taxonomy and
 
 ## Running it yourself
 
-The suite is 231 MB and is not vendored. Point `XSDTESTS` at a clone and it
-runs; leave it unset and those tests skip.
+The suite is 231 MB and is not vendored. Point `XSDTESTS` at a checkout of
+the commit `tests/conformance/SUITE` pins and it runs; leave it unset and those
+tests skip.
 
 ```bash
-git clone --depth 1 https://github.com/w3c/xsdtests /tmp/xsdtests
+scripts/fetch-w3c-suite.sh /tmp/xsdtests
 XSDTESTS=/tmp/xsdtests cargo test --test w3c_suite -- --nocapture
 ```
 
@@ -149,6 +150,19 @@ it was read as, holding what the suite expects, our verdict and the diagnostic
 codes. A change that helps one area and hurts another shows up as two rows
 rather than a percentage that did not move, and CI fails on any row that
 differs. The figures above are those files' headers.
+
+The instance cases run a second time through the Python package, against the
+same baseline, in about half a minute:
+
+```bash
+pip install . && XSDTESTS=/tmp/xsdtests python3 scripts/check-w3c-python.py
+```
+
+Every verdict and every error code must match the Rust run. So must what
+`iter_typed`, `read_typed` and `decode` make of each document, and nothing but
+an `XsdError` may escape. That is where a binding differs from the crate it
+wraps — a value it cannot convert, a report it assembles differently — and
+the Rust harness cannot see it.
 
 ## Why report the failures
 

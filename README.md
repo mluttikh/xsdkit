@@ -315,14 +315,16 @@ documents:
 | invalid documents rejected | **99.7%** (9,057 / 9,083) | **98.3%** (9,515 / 9,680) |
 
 ```bash
-git clone --depth 1 https://github.com/w3c/xsdtests /tmp/xsdtests
+scripts/fetch-w3c-suite.sh /tmp/xsdtests     # the commit the baselines describe
 export XSDTESTS=/tmp/xsdtests
 cargo test --test w3c_suite -- --nocapture   # both halves, ~35 seconds
+python3 scripts/check-w3c-python.py          # the documents again, through Python
 ```
 
 Both halves score against a committed per-case baseline in
 `tests/conformance/`, so a regression names the case it broke rather than
-moving a percentage. CI runs it on every push.
+moving a percentage. The instance cases run a second time through the Python
+package, which has to reach the same verdicts. CI runs both on every push.
 
 ## Security
 
