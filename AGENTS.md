@@ -380,16 +380,17 @@ reused.
 **Cutting a release.**
 
 1. Tag a commit CI is green on. The release workflow does not re-run the
-   test matrix; it builds wheels and runs `python/tests` against four of
+   test matrix; it builds wheels and runs `python/tests` against each of
    them. `ci.yml` triggers on pushes to `main`, not on tags.
 2. Bump `version` in `Cargo.toml`, and run the gate.
 3. `cargo publish --dry-run` — it packages and builds from the packaged
    copy, which is the one check that sees what a consumer will get rather
    than what your working tree holds.
-4. `git tag -a v0.1.0 -m "..." && git push origin v0.1.0`. That builds seven
-   wheels (glibc and musl × x86_64 and aarch64, macOS on both
-   architectures, Windows x64), runs the Python suite against the four the
-   runner can execute, publishes them to PyPI, and cuts a GitHub release
+4. `git tag -a v0.1.0 -m "..." && git push origin v0.1.0`. That builds eight
+   wheels (glibc and musl × x86_64 and aarch64, macOS and Windows on both
+   architectures), runs the Python suite against every one of them — the
+   ones its build runner cannot execute on an ARM runner, in Alpine or under
+   Rosetta — publishes them to PyPI only once all have passed, and cuts a GitHub release
    with the artifacts attached — `pyproject.toml` advertises that page as
    the changelog, so it has to exist.
 5. `cargo publish`. This one is deliberately manual: it cannot be undone —
