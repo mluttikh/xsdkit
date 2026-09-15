@@ -301,7 +301,7 @@ xsdkit.SchemaSet.deserialize(cached).validate(Path("report.xml")).is_valid   # T
 In Rust, turn the feature on:
 
 ```toml
-xsdkit = { version = "0.2", features = ["serde"] }
+xsdkit = { version = "0.3", features = ["serde"] }
 ```
 
 ```rust

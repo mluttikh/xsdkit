@@ -39,7 +39,7 @@ ask for.
 
 ```toml
 [dependencies]
-xsdkit = "0.2"
+xsdkit = "0.3"
 ```
 
 ```rust
@@ -95,7 +95,7 @@ every component it holds — serializable, so a large schema set is compiled
 once and loaded thereafter:
 
 ```toml
-xsdkit = { version = "0.2", features = ["serde"] }
+xsdkit = { version = "0.3", features = ["serde"] }
 ```
 
 ```rust
