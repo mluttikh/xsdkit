@@ -20,6 +20,13 @@ Python 3.10 and newer. The extension is built against the stable ABI
 (`abi3`), so one wheel per platform serves every supported Python — upgrading
 your interpreter does not mean waiting for a new release.
 
+Free-threaded Python 3.14 (`python3.14t`) is the exception: it has no stable
+ABI yet, so it gets wheels of its own, for Linux on x86_64 and aarch64, macOS
+on Apple silicon, and Windows on x64 and ARM64. Importing `xsdkit` leaves the
+GIL disabled, and one `SchemaSet` can be used from many threads at once. On
+other platforms, `pip install xsdkit` under 3.14t builds from the source
+distribution.
+
 The package ships type stubs and a `py.typed` marker, so `mypy` and `pyright`
 check calls into it like any other typed library.
 

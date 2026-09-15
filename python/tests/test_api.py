@@ -5,6 +5,7 @@ import copy
 import datetime
 import math
 import pickle
+import sysconfig
 import weakref
 from decimal import Decimal
 
@@ -12,6 +13,32 @@ import pytest
 
 import xsdkit
 from conftest import NS, XS, build
+
+
+@pytest.mark.skipif(
+    not sysconfig.get_config_var("Py_GIL_DISABLED"),
+    reason="only a free-threaded build can turn the GIL back on",
+)
+def test_importing_xsdkit_leaves_the_gil_off():
+    """A free-threaded interpreter turns the GIL back on for the whole process
+    when it imports a module that does not declare itself safe without one,
+    and only warns about it. So this imports xsdkit in a fresh interpreter, with
+    that warning made an error; the one running the tests has imported far
+    more than xsdkit by now."""
+    import subprocess
+    import sys
+
+    result = subprocess.run(
+        [sys.executable, "-W", "error::RuntimeWarning", "-c",
+         "import sys, xsdkit; print(sys._is_gil_enabled())"],
+        capture_output=True,
+        text=True,
+        timeout=60,
+        check=False,
+    )
+    assert result.returncode == 0, result.stderr
+    assert result.stdout.strip() == "False"
+
 
 # --- loading ---------------------------------------------------------------
 
