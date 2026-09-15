@@ -2,6 +2,8 @@
 
 import datetime
 import decimal
+import gc
+import weakref
 
 import pytest
 
@@ -131,6 +133,23 @@ def test_attributes_arrive_typed(schemas):
     assert attrs["seq"].value == 7, "an xs:int attribute is an int"
     assert attrs["seq"].declaration is not None
     assert attrs["seq"].lexical == "7"
+
+
+def test_typed_events_outlive_their_schema_set():
+    """An event makes `declaration` and `type` when they are read, from the
+    compiled schema it holds, so the `SchemaSet` can be gone by then."""
+    schemas = build(SCHEMA)
+    gone = weakref.ref(schemas)
+    events, _ = schemas.read_typed(DOC)
+    first = next(iter(schemas.iter_typed(DOC)))
+    del schemas
+    gc.collect()
+    assert gone() is None
+    for start in (events[0], first):
+        assert start.declaration.qname == f"{{{NS}}}reading"
+        assert start.type.is_complex
+        attrs = {a.local_name: a for a in start.attributes}
+        assert attrs["seq"].declaration.local_name == "seq"
 
 
 def test_read_typed_returns_every_event_and_the_outcome(schemas):
