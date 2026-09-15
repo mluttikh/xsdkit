@@ -63,6 +63,11 @@ jobs:
       # One wheel per platform, not per platform *and* Python version: the
       # extension is built against the stable ABI (`abi3-py310`), so a single
       # wheel serves 3.10 through whatever ships next.
+      #
+      # Free-threaded CPython is the exception. It has no stable ABI before
+      # 3.15, so PyO3 builds a version-specific extension for it however the
+      # crate's features are set, and each `-ft` row builds one 3.14t wheel.
+      # Platforms without one build from the sdist.
       # `native: true` marks the rows whose wheel the runner that built it can
       # install, and those are tested here. The others — aarch64 cross-compiled
       # on x86_64, musl on a glibc runner, Intel macOS on Apple silicon — are
@@ -84,11 +89,22 @@ jobs:
           - { label: macos-aarch64, os: macos-latest, target: aarch64, manylinux: auto, native: true }
           - { label: windows-x64, os: windows-latest, target: x64, manylinux: auto, native: true }
           - { label: windows-arm64, os: windows-11-arm, target: aarch64, manylinux: auto, native: true }
+          - { label: linux-x86_64-ft, os: ubuntu-latest, target: x86_64, manylinux: auto, native: true, python: "3.14t", interpreter: python3.14t }
+          # Natively on the ARM runner, in the official manylinux image: the
+          # default aarch64 container cross-compiles, and is built for x86_64
+          # hosts.
+          - { label: linux-aarch64-ft, os: ubuntu-24.04-arm, target: aarch64, manylinux: auto, native: true, python: "3.14t", interpreter: python3.14t, container: "quay.io/pypa/manylinux2014_aarch64" }
+          - { label: macos-aarch64-ft, os: macos-latest, target: aarch64, manylinux: auto, native: true, python: "3.14t", interpreter: python3.14t }
+          - { label: windows-x64-ft, os: windows-latest, target: x64, manylinux: auto, native: true, python: "3.14t", interpreter: python3.14t }
+          - { label: windows-arm64-ft, os: windows-11-arm, target: aarch64, manylinux: auto, native: true, python: "3.14t", interpreter: python3.14t }
     steps:
       - uses: actions/checkout@v5
+      # The Python that tests the wheel, and on macOS and Windows the one it is
+      # built for; a manylinux build runs in its container, which carries its
+      # own interpreters.
       - uses: actions/setup-python@v6
         with:
-          python-version: "3.12"
+          python-version: ${{ matrix.python || '3.12' }}
       # The Windows ARM image is newer than the others and cannot be relied on
       # to carry a Rust toolchain; the rest use the one their image ships.
       - uses: dtolnay/rust-toolchain@stable
@@ -97,7 +113,8 @@ jobs:
         with:
           target: ${{ matrix.target }}
           manylinux: ${{ matrix.manylinux }}
-          args: --release --out dist
+          container: ${{ matrix.container }}
+          args: --release --out dist ${{ matrix.interpreter && format('--interpreter {0}', matrix.interpreter) || '' }}
           sccache: "true"
       # Building a wheel proves it links, not that it works. The suite is in
       # the checkout and the wheel is the thing users install, so run one

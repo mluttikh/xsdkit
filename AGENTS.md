@@ -386,9 +386,11 @@ reused.
 3. `cargo publish --dry-run` — it packages and builds from the packaged
    copy, which is the one check that sees what a consumer will get rather
    than what your working tree holds.
-4. `git tag -a v0.1.0 -m "..." && git push origin v0.1.0`. That builds eight
-   wheels (glibc and musl × x86_64 and aarch64, macOS and Windows on both
-   architectures), runs the Python suite against every one of them — the
+4. `git tag -a v0.1.0 -m "..." && git push origin v0.1.0`. That builds
+   thirteen wheels — eight abi3 ones (glibc and musl × x86_64 and aarch64,
+   macOS and Windows on both architectures) and five for free-threaded 3.14t
+   (glibc on both, macOS arm64, Windows on both) — runs the Python suite
+   against every one of them — the
    ones its build runner cannot execute on an ARM runner, in Alpine or under
    Rosetta — publishes them to PyPI only once all have passed, and cuts a GitHub release
    with the artifacts attached — `pyproject.toml` advertises that page as
@@ -399,7 +401,13 @@ reused.
 
 **One wheel per platform, not per Python.** The extension is built against
 the stable ABI (`abi3-py310`), so one wheel serves 3.10 upward. That is why the
-matrix has no Python dimension.
+matrix has no Python dimension — except for free-threaded CPython, which has no
+stable ABI before 3.15 (`abi3t`). PyO3 builds a version-specific extension for
+a free-threaded interpreter even with `abi3-py310` on, so the `-ft` rows build
+one 3.14t wheel each; 3.15t will need rows of its own, or `abi3t-py315`.
+`#[pymodule]` leaves `gil_used` at its default, false, which is what keeps the
+GIL off when a free-threaded interpreter imports the module, and
+`test_importing_xsdkit_leaves_the_gil_off` fails if that ever stops holding.
 
 **One-time setup, before the first tag.**
 

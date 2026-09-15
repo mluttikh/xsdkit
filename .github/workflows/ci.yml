@@ -148,6 +148,9 @@ jobs:
           - { os: macos-latest, python: "3.14", label: macos-latest }
           - { os: windows-latest, python: "3.14", label: windows-latest }
           - { os: ubuntu-latest, python: "3.10", label: "3.10, ubuntu-latest" }
+          # Free-threaded CPython builds its own version-specific extension, and
+          # runs the suite without a GIL to hide a race.
+          - { os: ubuntu-latest, python: "3.14t", label: "3.14t, ubuntu-latest" }
     steps:
       - uses: actions/checkout@v5
       - uses: actions/setup-python@v6
