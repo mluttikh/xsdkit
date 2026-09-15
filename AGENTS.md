@@ -1102,6 +1102,19 @@ practice, since each was a real complaint:
   `Tree` exist for notebooks and have no business in a Rust API. That is the
   whole list. Anything else appearing on one side and not the other is drift,
   not a decision.
+- **Keep shared counts off per-event paths.** On free-threaded Python a count
+  every thread touches — an `Arc`, a Python refcount — is written from every
+  core at once, and on a path taken once per event that is where the time
+  goes. So typed events are the exception to holding handles: a `PsviEvent`
+  holds ids and one `Arc<EventSource>` per call, and makes its `Element`,
+  `Type` and `Attribute` handles when they are read. A handle per event cloned
+  the set's one `Arc<Schemas>` from every thread, and `read_typed` stopped
+  getting faster at four. PyO3 has a cost of the same shape that xsdkit cannot
+  remove: freeing a `#[pyclass]` instance writes its type object's refcount,
+  shared by every thread (0.28 increfs and decrefs it, 0.29 still decrefs),
+  and that is what still limits `iter_typed`, which frees an event object per
+  event. On macOS, `sample <pid>` shows it as `_Py_IncRef` and
+  `_Py_DecRefShared` under PyO3's `tp_dealloc`.
 - **The stub is checked in both directions, by test.** `_xsdkit.pyi` is
   hand-written and is the only type surface Python users have.
   `python/tests/test_stubs.py` asserts that everything stubbed exists at

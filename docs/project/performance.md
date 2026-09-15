@@ -72,6 +72,19 @@ GIL, so threads help it less than they help `validate`: sixteen decodes of a
 validations ran 5.9× faster. Each type's dictionary keys and the `Decimal` and
 `datetime` classes are looked up once per document, not once per value.
 
+On free-threaded Python (3.14t) no call waits for a lock. Sixteen jobs on a
+2.9 MB document of 20,000 items, on an Apple M1 Max with eight performance
+cores, ran on eight threads 5.7× faster than on one for `validate`, 4.7× for
+`decode` and 3.3× for `read_typed`, where a loop of pure Python ran 5.0×
+faster. An event makes its `declaration` and `type` when they are read, so a
+loop that never reads them does not pay for them. `iter_typed` peaked at 2.1×,
+on four threads: each event is a Python object, and freeing one writes to its
+class's reference count, which every thread shares. That cost is in PyO3, the
+binding library, not in xsdkit. For many small documents on many threads,
+`read_typed` finished the sixteen sooner — 0.63 s on eight threads against
+about 1 s for `iter_typed` — and `iter_typed` remains the one for a document too
+large to hold.
+
 ## Where the remaining time goes
 
 For a large schema, roughly: XML parsing, then component construction, then

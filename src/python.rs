@@ -339,15 +339,15 @@ struct Iteration {
 // stops reading, rather than validating the rest of the document for nobody.
 #[pyclass(name = "PsviEvents", module = "xsdkit", frozen)]
 pub struct PyPsviEvents {
-    schemas: PySchemaSet,
+    source: Arc<EventSource>,
     iteration: Mutex<Iteration>,
 }
 
 impl PyPsviEvents {
     /// An iteration with nothing to read, only an outcome.
-    fn finished(schemas: PySchemaSet, report: PyValidationReport) -> Self {
+    fn finished(source: Arc<EventSource>, report: PyValidationReport) -> Self {
         Self {
-            schemas,
+            source,
             iteration: Mutex::new(Iteration {
                 pending: std::collections::VecDeque::new(),
                 stream: Stream::Finished(report),
@@ -383,7 +383,7 @@ impl PyPsviEvents {
                 let mut state = self.state();
                 if let Some(event) = state.pending.pop_front() {
                     drop(state);
-                    return self.schemas.psvi_to_py(py, event).map(Some);
+                    return self.source.psvi_to_py(py, event).map(Some);
                 }
                 match std::mem::replace(&mut state.stream, Stream::Busy) {
                     Stream::Reading { batches, worker } => (batches, worker),
@@ -1471,16 +1471,16 @@ impl PySchemaSet {
     #[pyo3(signature = (xml, *, uri=None))]
     fn iter_typed(&self, xml: &Bound<'_, PyAny>, uri: Option<&str>) -> PyResult<PyPsviEvents> {
         let doc = read_instance(xml, uri)?;
-        let schemas = PySchemaSet {
-            inner: self.inner.clone(),
-        };
+        let source = Arc::new(EventSource {
+            schemas: self.inner.clone(),
+        });
         let text = match doc.text {
             Ok(text) => text,
             // Nothing to read: finished before it starts, with the diagnostic
             // saying why.
             Err(d) => {
                 return Ok(PyPsviEvents::finished(
-                    schemas,
+                    source,
                     PyValidationReport::undecodable(d),
                 ));
             }
@@ -1520,7 +1520,7 @@ impl PySchemaSet {
                 PyOSError::new_err(format!("cannot start a thread to read the document: {e}"))
             })?;
         Ok(PyPsviEvents {
-            schemas,
+            source,
             iteration: Mutex::new(Iteration {
                 pending: std::collections::VecDeque::new(),
                 stream: Stream::Reading { batches, worker },
@@ -1544,6 +1544,9 @@ impl PySchemaSet {
             Ok(text) => text,
             Err(d) => return Ok((Vec::new(), PyValidationReport::undecodable(d))),
         };
+        let source = Arc::new(EventSource {
+            schemas: self.inner.clone(),
+        });
         let mut events = Vec::new();
         let mut failed: Option<PyErr> = None;
         // The GIL is held throughout, because each event becomes a Python
@@ -1552,14 +1555,16 @@ impl PySchemaSet {
         let report = self
             .inner
             .document_validator()
-            .validate_until(&text, &doc.uri, |event| match self.psvi_to_py(py, event) {
-                Ok(obj) => {
-                    events.push(obj);
-                    std::ops::ControlFlow::Continue(())
-                }
-                Err(e) => {
-                    failed = Some(e);
-                    std::ops::ControlFlow::Break(())
+            .validate_until(&text, &doc.uri, |event| {
+                match source.psvi_to_py(py, event) {
+                    Ok(obj) => {
+                        events.push(obj);
+                        std::ops::ControlFlow::Continue(())
+                    }
+                    Err(e) => {
+                        failed = Some(e);
+                        std::ops::ControlFlow::Break(())
+                    }
                 }
             });
         if let Some(e) = failed {
@@ -1671,13 +1676,30 @@ impl PySchemaSet {
     }
 }
 
-impl PySchemaSet {
+/// The schema set behind one call's typed events.
+///
+/// An event holds this and ids rather than ready-made `Element` and `Type`
+/// handles, and makes a handle when one is read. Every handle holds the set's
+/// own `Arc`, so making them for every event wrote to that one count from every
+/// thread reading a document: on free-threaded Python the count moved between
+/// cores on each event, and eight threads read typed events no faster than
+/// four. This `Arc` belongs to one call, and only the thread reading that
+/// call's events writes to it.
+struct EventSource {
+    schemas: Arc<Schemas>,
+}
+
+impl EventSource {
     /// Turns one PSVI event into its Python wrapper.
-    fn psvi_to_py<'py>(&self, py: Python<'py>, ev: RustPsvi) -> PyResult<Bound<'py, PyPsviEvent>> {
+    fn psvi_to_py<'py>(
+        self: &Arc<Self>,
+        py: Python<'py>,
+        ev: RustPsvi,
+    ) -> PyResult<Bound<'py, PyPsviEvent>> {
         let name_of = |q: crate::names::QName| {
             (
-                self.inner.namespace_of(q).map(str::to_string),
-                self.inner.local_of(q).to_string(),
+                self.schemas.namespace_of(q).map(str::to_string),
+                self.schemas.local_of(q).to_string(),
             )
         };
         // A name the schema never interned has no symbols to look up, and
@@ -1706,27 +1728,20 @@ impl PySchemaSet {
                         None => None,
                     };
                     attrs.push(PyAttributeValue {
+                        source: self.clone(),
                         name: psvi_name_of(&a.name),
-                        declaration: a.declaration.map(|id| PyAttribute {
-                            s: self.inner.clone(),
-                            id,
-                        }),
+                        declaration: a.declaration,
                         value,
                         lexical: a.lexical,
                         from_schema: a.from_schema,
                     });
                 }
                 PyPsviEvent {
+                    source: self.clone(),
                     kind: "start",
                     name: Some(psvi_name_of(&name)),
-                    declaration: declaration.map(|id| PyElement {
-                        s: self.inner.clone(),
-                        id,
-                    }),
-                    type_: Some(PyType_ {
-                        s: self.inner.clone(),
-                        id: type_id,
-                    }),
+                    declaration,
+                    type_id: Some(type_id),
                     type_from_instance,
                     nil,
                     attributes: attrs,
@@ -1743,13 +1758,11 @@ impl PySchemaSet {
                 from_schema,
                 line,
             } => PyPsviEvent {
+                source: self.clone(),
                 kind: "text",
                 name: None,
                 declaration: None,
-                type_: Some(PyType_ {
-                    s: self.inner.clone(),
-                    id: type_id,
-                }),
+                type_id: Some(type_id),
                 type_from_instance: false,
                 nil: false,
                 attributes: Vec::new(),
@@ -1766,13 +1779,11 @@ impl PySchemaSet {
                 declaration,
                 line,
             } => PyPsviEvent {
+                source: self.clone(),
                 kind: "end",
                 name: Some(psvi_name_of(&name)),
-                declaration: declaration.map(|id| PyElement {
-                    s: self.inner.clone(),
-                    id,
-                }),
-                type_: None,
+                declaration,
+                type_id: None,
                 type_from_instance: false,
                 nil: false,
                 attributes: Vec::new(),
@@ -4376,8 +4387,10 @@ impl PyValidationReport {
     skip_from_py_object
 )]
 pub struct PyAttributeValue {
+    /// Where `declaration` is made from when it is read; see `EventSource`.
+    source: Arc<EventSource>,
     name: (Option<String>, String),
-    declaration: Option<PyAttribute>,
+    declaration: Option<AttributeId>,
     value: Option<Py<PyAny>>,
     lexical: String,
     from_schema: bool,
@@ -4387,8 +4400,9 @@ pub struct PyAttributeValue {
 impl Clone for PyAttributeValue {
     fn clone(&self) -> Self {
         Python::attach(|py| Self {
+            source: self.source.clone(),
             name: self.name.clone(),
-            declaration: self.declaration.clone(),
+            declaration: self.declaration,
             value: self.value.as_ref().map(|v| v.clone_ref(py)),
             lexical: self.lexical.clone(),
             from_schema: self.from_schema,
@@ -4411,7 +4425,10 @@ impl PyAttributeValue {
     /// The declaration this matched, absent under a `skip` wildcard.
     #[getter]
     fn declaration(&self) -> Option<PyAttribute> {
-        self.declaration.clone()
+        self.declaration.map(|id| PyAttribute {
+            s: self.source.schemas.clone(),
+            id,
+        })
     }
     /// The typed value, or `None` when it did not validate.
     #[getter]
@@ -4447,11 +4464,14 @@ impl PyAttributeValue {
 /// consuming loop is invariably a dispatch on kind.
 #[pyclass(module = "xsdkit", name = "PsviEvent", frozen, skip_from_py_object)]
 pub struct PyPsviEvent {
+    /// Where `declaration` and `type` are made from when they are read; see
+    /// `EventSource`.
+    source: Arc<EventSource>,
     kind: &'static str,
     /// Absent on a `"text"` event, which belongs to the element around it.
     name: Option<(Option<String>, String)>,
-    declaration: Option<PyElement>,
-    type_: Option<PyType_>,
+    declaration: Option<ElementId>,
+    type_id: Option<TypeId>,
     type_from_instance: bool,
     nil: bool,
     attributes: Vec<PyAttributeValue>,
@@ -4485,12 +4505,18 @@ impl PyPsviEvent {
     /// Absent under a `skip` wildcard, or a `lax` one with nothing to match.
     #[getter]
     fn declaration(&self) -> Option<PyElement> {
-        self.declaration.clone()
+        self.declaration.map(|id| PyElement {
+            s: self.source.schemas.clone(),
+            id,
+        })
     }
     /// The type in force, after any `xsi:type` override.
     #[getter]
     fn r#type(&self) -> Option<PyType_> {
-        self.type_.clone()
+        self.type_id.map(|id| PyType_ {
+            s: self.source.schemas.clone(),
+            id,
+        })
     }
     /// Whether `xsi:type` chose the type, rather than the declaration.
     #[getter]
