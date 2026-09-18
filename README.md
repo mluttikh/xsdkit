@@ -311,7 +311,7 @@ documents:
 
 | | XSD 1.0 | XSD 1.1 |
 |---|---|---|
-| valid documents accepted | **99.9%** (11,309 / 11,325) | **99.6%** (11,863 / 11,906) |
+| valid documents accepted | **99.9%** (11,310 / 11,325) | **99.6%** (11,864 / 11,906) |
 | invalid documents rejected | **99.7%** (9,057 / 9,083) | **98.3%** (9,515 / 9,680) |
 
 ```bash

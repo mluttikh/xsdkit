@@ -65,6 +65,29 @@ def test_a_repeating_child_is_always_a_list(body, expected):
     assert len(d["item"]) == expected
 
 
+@pytest.mark.parametrize(
+    "content",
+    [
+        '<xs:sequence maxOccurs="2"><xs:element name="e" type="xs:int"/></xs:sequence>',
+        (
+            '<xs:sequence><xs:sequence maxOccurs="2"><xs:element name="e" type="xs:int"/>'
+            '<xs:element name="g" type="xs:int" minOccurs="0"/></xs:sequence></xs:sequence>'
+        ),
+        (
+            '<xs:choice maxOccurs="3"><xs:sequence minOccurs="0" maxOccurs="2">'
+            '<xs:element name="e" type="xs:int" minOccurs="0"/></xs:sequence>'
+            '<xs:element name="f" type="xs:int"/></xs:choice>'
+        ),
+    ],
+)
+def test_a_child_repeated_by_a_bounded_group_is_a_list(content):
+    """A group with a `maxOccurs` of 2 or 3 repeats its children as surely as
+    an unbounded one: one `e` is a list of one, not a value."""
+    s = build(f'<xs:element name="r"><xs:complexType>{content}</xs:complexType></xs:element>')
+    assert s.decode(f'<r xmlns="{NS}"><e>1</e></r>')["e"] == [1]
+    assert s.decode(f'<r xmlns="{NS}"><e>1</e><e>2</e></r>')["e"] == [1, 2]
+
+
 def test_a_single_child_that_is_absent_has_no_key():
     s = build(REPORT)
     d = s.decode(doc("<title>t</title>"))

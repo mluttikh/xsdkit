@@ -169,6 +169,44 @@ fn numeric_ranges_enforce_both_bounds() {
     }
 }
 
+/// `T{n,}` is `n` copies with the last one repeating. Looping the whole
+/// unrolled block instead accepted only multiples of `n`: three children
+/// failed `minOccurs="2" maxOccurs="unbounded"`, and four passed. Found by
+/// comparing verdicts with libxml2 on generated schemas.
+#[test]
+fn an_unbounded_range_repeats_its_last_copy() {
+    let names = |n: usize| vec!["a"; n].join(" ");
+    for min in [2usize, 3] {
+        let s = build(&ty(&format!(
+            r#"<xs:sequence>
+                <xs:element name="a" type="xs:string" minOccurs="{min}" maxOccurs="unbounded"/>
+            </xs:sequence>"#
+        )));
+        let t = type_t(&s);
+        for n in 0..=7 {
+            assert_eq!(accepts(&s, t, &names(n)), n >= min, "{n} of a{{{min},}}");
+        }
+    }
+
+    let s = build(&ty(r#"<xs:choice minOccurs="0" maxOccurs="unbounded">
+        <xs:element name="a" type="xs:string" minOccurs="2" maxOccurs="unbounded"/>
+    </xs:choice>"#));
+    let t = type_t(&s);
+    for n in 0..=7 {
+        assert_eq!(accepts(&s, t, &names(n)), n != 1, "{n} of (a{{2,}})*");
+    }
+
+    let s = build(&ty(r#"<xs:sequence minOccurs="2" maxOccurs="unbounded">
+        <xs:element name="a" type="xs:string"/>
+        <xs:element name="b" type="xs:string"/>
+    </xs:sequence>"#));
+    let t = type_t(&s);
+    for reps in 0..=5 {
+        let seq = vec!["a b"; reps].join(" ");
+        assert_eq!(accepts(&s, t, &seq), reps >= 2, "{reps} of (a b){{2,}}");
+    }
+}
+
 #[test]
 fn nested_groups_compose() {
     let s = build(&ty(r#"<xs:choice>
@@ -450,6 +488,51 @@ fn child_repeats_covers_the_element_and_its_ancestors() {
         s.child_repeats(t, child("grouped")),
         "a repeating ancestor group makes its children repeat"
     );
+}
+
+/// A bounded group unrolls into copies with no cycle among them, so its
+/// children repeat by way of a path through two copies. `e` inside
+/// `<xs:sequence maxOccurs="2">` decoded as a value when a document had one
+/// and as a list when it had two. Found by comparing `decode` with xmlschema
+/// on generated schemas.
+#[test]
+fn a_bounded_repeating_group_makes_its_children_repeat() {
+    for content in [
+        r#"<xs:sequence maxOccurs="2"><xs:element name="e" type="xs:string"/></xs:sequence>"#,
+        r#"<xs:sequence><xs:sequence maxOccurs="2">
+            <xs:element name="e" type="xs:string"/>
+            <xs:element name="g" type="xs:string" minOccurs="0"/>
+        </xs:sequence></xs:sequence>"#,
+        r#"<xs:choice maxOccurs="3">
+            <xs:sequence minOccurs="0" maxOccurs="2">
+                <xs:element name="e" type="xs:string" minOccurs="0"/>
+            </xs:sequence>
+            <xs:element name="f" type="xs:string"/>
+        </xs:choice>"#,
+    ] {
+        let s = build(&ty(content));
+        for (name, repeats, _) in facts(&s) {
+            assert!(repeats, "{name} repeats in {content}");
+        }
+        agree(&s);
+    }
+
+    // One element declared on two branches of a choice is two positions that
+    // no path passes both of.
+    let s = build(&ty(r#"<xs:choice>
+        <xs:sequence>
+            <xs:element name="e" type="xs:string"/>
+            <xs:element name="a" type="xs:string"/>
+        </xs:sequence>
+        <xs:sequence>
+            <xs:element name="b" type="xs:string"/>
+            <xs:element name="e" type="xs:string"/>
+        </xs:sequence>
+    </xs:choice>"#));
+    for (name, repeats, _) in facts(&s) {
+        assert!(!repeats, "{name} does not repeat");
+    }
+    agree(&s);
 }
 
 #[test]
