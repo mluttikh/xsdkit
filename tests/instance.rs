@@ -1215,6 +1215,66 @@ fn facets_are_enforced_on_instance_values() {
     );
 }
 
+/// `xs:NMTOKENS`, `xs:IDREFS` and `xs:ENTITIES` are declared with a
+/// `minLength` of 1, so none of them is empty, and a restriction inherits the
+/// bound. A list type of the schema's own has no such bound. All three used
+/// to accept an empty value.
+#[test]
+fn a_built_in_list_is_never_empty() {
+    let s = schema(
+        r#"<xs:simpleType name="Few">
+             <xs:restriction base="xs:NMTOKENS"><xs:maxLength value="3"/></xs:restriction>
+           </xs:simpleType>
+           <xs:simpleType name="Tokens"><xs:list itemType="xs:NMTOKEN"/></xs:simpleType>
+           <xs:element name="root">
+             <xs:complexType><xs:sequence>
+               <xs:element name="t" type="xs:NMTOKENS" minOccurs="0"/>
+               <xs:element name="few" type="tns:Few" minOccurs="0"/>
+               <xs:element name="own" type="tns:Tokens" minOccurs="0"/>
+             </xs:sequence>
+             <xs:attribute name="refs" type="xs:IDREFS"/>
+             <xs:attribute name="ents" type="xs:ENTITIES"/>
+             </xs:complexType>
+           </xs:element>"#,
+    );
+    let doc = |body: &str| format!(r#"<root xmlns="urn:example" {body}</root>"#);
+    valid(&s, &doc("><t> a b </t><few>a</few><own/>"));
+    valid(&s, &doc("><own>  </own>"));
+    for bad in [
+        "><t/>",
+        "><t>   </t>",
+        "><few/>",
+        r#"refs="">"#,
+        r#"refs="  ">"#,
+        r#"ents="">"#,
+    ] {
+        invalid(&s, &doc(bad), DiagCode::InvalidValue);
+    }
+}
+
+/// A restriction of a built-in list may not lower the `minLength` it
+/// inherits.
+#[test]
+fn a_restriction_of_a_built_in_list_cannot_allow_it_empty() {
+    let d = SchemaSetBuilder::new()
+        .text(
+            format!(
+                r#"<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema" targetNamespace="{NS}">
+                     <xs:simpleType name="T">
+                       <xs:restriction base="xs:IDREFS"><xs:minLength value="0"/></xs:restriction>
+                     </xs:simpleType>
+                   </xs:schema>"#
+            ),
+            "mem://main.xsd",
+        )
+        .compile()
+        .diagnostics;
+    assert!(
+        d.errors().any(|e| e.code == DiagCode::ConflictingFacets),
+        "{d}"
+    );
+}
+
 /// Numeric text is whitespace-collapsed before parsing, so this is valid.
 #[test]
 fn numeric_values_tolerate_surrounding_whitespace() {

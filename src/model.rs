@@ -770,13 +770,23 @@ pub struct NotationDecl {
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct AppInfo {
     pub source: Option<String>,
-    /// The `appinfo` element's children, re-serialized.
+    /// The `appinfo` element's content as the schema document wrote it, with
+    /// the namespaces in scope declared on each top-level element, so every
+    /// element parses on its own and a prefix inside it, such as the `xs:` of
+    /// a type name in an attribute, still resolves.
+    ///
+    /// Escapes, comments, CDATA sections and processing instructions are kept
+    /// as written. An entity declared in the document's DTD stays a
+    /// reference, since the DTD does not travel with the text. Empty when the
+    /// element is.
     pub xml: String,
 }
 
 #[derive(Clone, Default, PartialEq, Eq, Debug)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct Annotation {
+    /// The text of each `xs:documentation`, in order: all of it, with the
+    /// markup around it dropped and the whitespace at either end trimmed.
     pub documentation: Vec<String>,
     pub appinfo: Vec<AppInfo>,
 }

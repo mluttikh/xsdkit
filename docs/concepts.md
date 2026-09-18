@@ -202,7 +202,8 @@ schemas.types["{urn:example}Sku"].doc
 `appinfo` is kept **verbatim**, as XML text, because it is where schema
 families put the machine-readable conventions the standard never specified —
 database mappings, code lists, UI hints. Summarising it would destroy exactly the
-information someone reaching for it needs.
+information someone reaching for it needs. Each element in it declares the
+namespaces in scope, so an XML parser takes it as it is.
 
 ## Next
 

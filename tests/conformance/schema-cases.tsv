@@ -9393,7 +9393,7 @@ RestrictionOfComplexTypes/s3_4_6si02@1.1	invalid	accept	-
 RestrictionOfComplexTypes/s3_4_6si03@1.1	invalid	reject	XSD1005+XSD1302
 RestrictionOfComplexTypes/s3_4_6si04@1.1	invalid	reject	XSD1302+XSD1310
 RestrictionOfComplexTypes/s3_4_6si05@1.1	invalid	reject	XSD1302+XSD1310
-RestrictionOfComplexTypes/s3_4_6si06@1.1	invalid	reject	XSD1302+XSD1310
+RestrictionOfComplexTypes/s3_4_6si06@1.1	invalid	reject	XSD1005+XSD1302+XSD1310
 RestrictionOfComplexTypes/s3_4_6si07@1.1	invalid	reject	XSD1302+XSD1310
 RestrictionOfComplexTypes/s3_4_6v01@1.1	valid	accept	-
 RestrictionOfComplexTypes/s3_4_6v04@1.1	valid	accept	-

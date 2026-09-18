@@ -3378,8 +3378,13 @@ pub struct PyAppInfo {
     /// The `source` attribute — a URI naming what convention the payload
     /// follows, when the schema said.
     pub source: Option<String>,
-    /// The `appinfo` element's children, re-serialized. Element and attribute
-    /// names are in Clark notation, so no prefix can be lost.
+    /// The `appinfo` element's content as the schema document wrote it. Each
+    /// top-level element declares the namespaces in scope, so
+    /// `xml.etree.ElementTree.fromstring` accepts it on its own and a prefix
+    /// inside it, such as the `xs:` of a type name, still resolves.
+    ///
+    /// Escapes, comments and CDATA sections are kept as written. An entity
+    /// declared in the document's DTD stays a reference.
     pub xml: String,
 }
 

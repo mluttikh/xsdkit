@@ -427,6 +427,13 @@ impl<'r> Loader<'r> {
                 TypeId(self.types.push(TypeDefinition::Complex(t)))
             } else {
                 let variety = b.variety().unwrap_or(Variety::Atomic);
+                // The three built-in lists are declared with a `minLength` of
+                // 1, so an empty `xs:NMTOKENS`, `xs:IDREFS` or `xs:ENTITIES`
+                // is invalid, and a restriction of one inherits the bound.
+                let mut facets = FacetSet::new();
+                if variety == Variety::List {
+                    facets.min_length = Some(1);
+                }
                 let t = SimpleType {
                     name: Some(name),
                     base: TypeId::PLACEHOLDER,
@@ -435,7 +442,7 @@ impl<'r> Loader<'r> {
                     builtin: Some(b),
                     item_type: None,
                     member_types: Vec::new(),
-                    facets: FacetSet::new(),
+                    facets,
                     final_: DerivationSet::default(),
                     annotation: None,
                     span: span.clone(),
@@ -2136,39 +2143,50 @@ impl<'r> Loader<'r> {
     }
 
     fn occurrences(&mut self, node: roxmltree::Node, span: &Span) -> (u32, MaxOccurs) {
-        let min = node
-            .attribute("minOccurs")
-            .and_then(|v| v.parse::<u32>().ok())
-            .unwrap_or(1);
-        let max = match node.attribute("maxOccurs") {
-            None => MaxOccurs::Bounded(1),
-            Some("unbounded") => MaxOccurs::Unbounded,
-            Some(v) => match v.parse::<u32>() {
-                Ok(n) => MaxOccurs::Bounded(n),
-                Err(_) => {
-                    self.diags.push(
-                        Diagnostic::error(
-                            DiagCode::InvalidAttributeValue,
-                            format!("`maxOccurs` is `{v}`, expected a number or `unbounded`"),
-                        )
-                        .at(span.clone()),
-                    );
-                    MaxOccurs::Bounded(1)
-                }
-            },
+        // Both are read as the schema for schemas types them, so ` 2 ` and
+        // `+02` are the same bound as `2`. A bound past `u32::MAX` is held as
+        // `u32::MAX`, which no document can tell apart; the comparison below
+        // is on the digits, so it stays exact either way.
+        let mut invalid = |attribute: &str, value: &str, expected: &str| {
+            self.diags.push(
+                Diagnostic::error(
+                    DiagCode::InvalidAttributeValue,
+                    format!("`{attribute}` is `{value}`, expected {expected}"),
+                )
+                .at(span.clone()),
+            );
         };
-        if let MaxOccurs::Bounded(m) = max {
-            if min > m {
+        let min = match node.attribute("minOccurs") {
+            None => "1",
+            Some(v) => non_negative_digits(v).unwrap_or_else(|| {
+                invalid("minOccurs", v, "a non-negative integer");
+                "1"
+            }),
+        };
+        let max = match node.attribute("maxOccurs") {
+            None => Some("1"),
+            Some(v) if v.trim_matches(XML_SPACE) == "unbounded" => None,
+            Some(v) => Some(non_negative_digits(v).unwrap_or_else(|| {
+                invalid("maxOccurs", v, "a non-negative integer or `unbounded`");
+                "1"
+            })),
+        };
+        if let Some(max) = max {
+            if (min.len(), min) > (max.len(), max) {
                 self.diags.push(
                     Diagnostic::error(
                         DiagCode::InvalidOccurrence,
-                        format!("minOccurs ({min}) exceeds maxOccurs ({m})"),
+                        format!("minOccurs ({min}) exceeds maxOccurs ({max})"),
                     )
                     .at(span.clone()),
                 );
             }
         }
-        (min, max)
+        let count = |digits: &str| digits.parse::<u32>().unwrap_or(u32::MAX);
+        (
+            count(min),
+            max.map_or(MaxOccurs::Unbounded, |m| MaxOccurs::Bounded(count(m))),
+        )
     }
 
     fn read_wildcard(&mut self, node: roxmltree::Node, ctx: &DocCtx) -> Wildcard {
@@ -2440,14 +2458,23 @@ impl<'r> Loader<'r> {
         for c in ann.children().filter(|n| reads(n, ctx.version)) {
             match c.tag_name().name() {
                 "documentation" => {
-                    let text = c.text().unwrap_or_default().trim();
+                    // All of its text, not the first run of it: documentation
+                    // that embeds markup — `<b>`, `<p>`, a link — used to stop
+                    // at the first element. It is prose, so the markup goes
+                    // and the words stay.
+                    let text: String = c
+                        .descendants()
+                        .filter(|n| n.is_text())
+                        .filter_map(|n| n.text())
+                        .collect();
+                    let text = text.trim();
                     if !text.is_empty() {
                         out.documentation.push(text.to_string());
                     }
                 }
                 "appinfo" => out.appinfo.push(AppInfo {
                     source: c.attribute("source").map(str::to_string),
-                    xml: serialize_children(c),
+                    xml: appinfo_xml(c),
                 }),
                 _ => {}
             }
@@ -3120,54 +3147,116 @@ fn value_constraint(node: roxmltree::Node) -> Option<ValueConstraint> {
     }
 }
 
-/// Re-serializes an element's children, for keeping `appinfo` verbatim.
-fn serialize_children(node: roxmltree::Node) -> String {
-    let mut out = String::new();
-    for c in node.children() {
-        serialize_node(c, &mut out);
+/// An `appinfo` element's content as the document wrote it, with every
+/// namespace binding in scope declared on each element at its top level.
+///
+/// The text is the source's own — comments, CDATA sections, character and
+/// entity references as written — so nothing a convention might depend on is
+/// lost. It used to be rebuilt from the parsed tree instead, which dropped
+/// comments, emitted `&` and `<` in text unescaped, and wrote names in Clark
+/// notation: not XML, and not what the author wrote. The declarations are what
+/// make each element parse on its own, the way lxml serialises a subtree, and
+/// all of them are added rather than only the prefixes names use, because a
+/// convention may put a QName in an attribute value or in text.
+fn appinfo_xml(node: roxmltree::Node) -> String {
+    let text = node.document().input_text();
+    let b = text.as_bytes();
+    let range = node.range();
+    // Between the start tag and the end tag. Read off the element's own range
+    // rather than its children's, which for markup an entity reference
+    // inserted point into the internal DTD subset.
+    let open = tag_end(b, range.start + 1);
+    if open >= range.end || b[open - 1] == b'/' {
+        return String::new();
     }
+    let content = open + 1
+        ..text[..range.end]
+            .rfind("</")
+            .unwrap_or(open + 1)
+            .max(open + 1);
+
+    let scope: Vec<(Option<&str>, &str)> = node
+        .namespaces()
+        .filter(|ns| ns.name() != Some("xml"))
+        .map(|ns| (ns.name(), ns.uri()))
+        .collect();
+    let mut out = String::with_capacity(content.len());
+    let mut at = content.start;
+    for child in node.children().filter(roxmltree::Node::is_element) {
+        let start = child.range().start;
+        // An element an entity reference inserted is not in this text at all.
+        if start < at || start >= content.end || b[start] != b'<' {
+            continue;
+        }
+        let name_end = start
+            + 1
+            + text[start + 1..]
+                .find(|c: char| c.is_whitespace() || c == '/' || c == '>')
+                .unwrap_or(0);
+        let own = declared_prefixes(&text[name_end..tag_end(b, start + 1).min(content.end)]);
+        out.push_str(&text[at..name_end]);
+        for (prefix, uri) in &scope {
+            if own.contains(prefix) {
+                continue;
+            }
+            match prefix {
+                Some(p) => out.push_str(&format!(" xmlns:{p}=\"{}\"", escape_attr(uri))),
+                None => out.push_str(&format!(" xmlns=\"{}\"", escape_attr(uri))),
+            }
+        }
+        at = name_end;
+    }
+    out.push_str(&text[at..content.end]);
     out.trim().to_string()
 }
 
-fn serialize_node(node: roxmltree::Node, out: &mut String) {
-    if node.is_text() {
-        out.push_str(node.text().unwrap_or_default());
-        return;
-    }
-    if !node.is_element() {
-        return;
-    }
-    let name = qualified_tag(node);
-    out.push('<');
-    out.push_str(&name);
-    for a in node.attributes() {
-        out.push(' ');
-        if let Some(ns) = a.namespace() {
-            // Keep the URI rather than a prefix that may not survive.
-            out.push_str(&format!("{{{ns}}}"));
+/// The prefixes a start tag's attributes declare, `None` for the default
+/// namespace. Scanned from the text, because the parsed tree folds an
+/// element's own declarations in with the ones it inherits, and declaring a
+/// prefix twice on one element is not well-formed.
+fn declared_prefixes(attributes: &str) -> Vec<Option<&str>> {
+    let mut out = Vec::new();
+    let mut rest = attributes;
+    while let Some(eq) = rest.find('=') {
+        let name = rest[..eq].trim();
+        let value = rest[eq + 1..].trim_start();
+        let Some(quote) = value.chars().next().filter(|c| matches!(c, '"' | '\'')) else {
+            break;
+        };
+        let Some(len) = value[1..].find(quote) else {
+            break;
+        };
+        if name == "xmlns" {
+            out.push(None);
+        } else if let Some(prefix) = name.strip_prefix("xmlns:") {
+            out.push(Some(prefix));
         }
-        out.push_str(a.name());
-        out.push_str("=\"");
-        out.push_str(&escape_attr(a.value()));
-        out.push('"');
+        rest = &value[1 + len + 1..];
     }
-    if !node.has_children() {
-        out.push_str("/>");
-        return;
-    }
-    out.push('>');
-    for c in node.children() {
-        serialize_node(c, out);
-    }
-    out.push_str("</");
-    out.push_str(&name);
-    out.push('>');
+    out
 }
 
-fn qualified_tag(node: roxmltree::Node) -> String {
-    match node.tag_name().namespace() {
-        Some(ns) => format!("{{{ns}}}{}", node.tag_name().name()),
-        None => node.tag_name().name().to_string(),
+/// The whitespace XML allows around an attribute value's content.
+const XML_SPACE: &[char] = &[' ', '\t', '\n', '\r'];
+
+/// The digits of an `xs:nonNegativeInteger`, less the whitespace, sign and
+/// leading zeroes its lexical space allows: ` +007 ` is `7`, and zero may be
+/// written `-0`. `None` when the value is not one.
+fn non_negative_digits(value: &str) -> Option<&str> {
+    let value = value.trim_matches(XML_SPACE);
+    let (negative, digits) = match value.as_bytes().first() {
+        Some(b'+') => (false, &value[1..]),
+        Some(b'-') => (true, &value[1..]),
+        _ => (false, value),
+    };
+    if digits.is_empty() || !digits.bytes().all(|b| b.is_ascii_digit()) {
+        return None;
+    }
+    let digits = digits.trim_start_matches('0');
+    match (digits.is_empty(), negative) {
+        (true, _) => Some("0"),
+        (false, true) => None,
+        (false, false) => Some(digits),
     }
 }
 

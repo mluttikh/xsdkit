@@ -236,6 +236,86 @@ fn min_occurs_above_max_occurs_is_an_error() {
     );
 }
 
+/// The occurrence of each child of `root`, as `(minOccurs, maxOccurs)`.
+fn occurrences(s: &Schemas) -> Vec<(u32, MaxOccurs)> {
+    let ty = s[s.element_id(Some(NS), "root").unwrap()].type_id;
+    let p = s[ty].as_complex().unwrap().content.particle().unwrap();
+    s.child_particles(p)
+        .iter()
+        .map(|&k| (s[k].min_occurs, s[k].max_occurs))
+        .collect()
+}
+
+/// Both bounds are `xs:nonNegativeInteger`s, and read as one: whitespace
+/// around them, a plus sign and leading zeroes are all allowed. A bound past
+/// what a `u32` holds is kept as `u32::MAX` rather than refused.
+#[test]
+fn occurrence_bounds_are_read_as_non_negative_integers() {
+    let s = build(&schema(
+        r#"<xs:element name="root"><xs:complexType><xs:sequence>
+             <xs:element name="a" type="xs:string" minOccurs=" 0 " maxOccurs="+03"/>
+             <xs:element name="b" type="xs:string" minOccurs="-0" maxOccurs=" unbounded "/>
+             <xs:element name="c" type="xs:string" minOccurs="007" maxOccurs="99999999999"/>
+             <xs:element name="d" type="xs:string" minOccurs="4294967296"
+                         maxOccurs="100000000000000000000000000000000000000000"/>
+           </xs:sequence></xs:complexType></xs:element>"#,
+    ));
+    assert_eq!(
+        occurrences(&s),
+        [
+            (0, MaxOccurs::Bounded(3)),
+            (0, MaxOccurs::Unbounded),
+            (7, MaxOccurs::Bounded(u32::MAX)),
+            (u32::MAX, MaxOccurs::Bounded(u32::MAX)),
+        ]
+    );
+}
+
+/// A `minOccurs` that is not a count used to be read as 1 without a word,
+/// so `minOccurs="-1"` made an element required.
+#[test]
+fn an_invalid_occurrence_bound_is_an_error() {
+    for (min, max) in [
+        ("-1", "1"),
+        ("abc", "1"),
+        ("", "1"),
+        ("1.0", "1"),
+        ("unbounded", "unbounded"),
+        ("+", "1"),
+        ("0", "-1"),
+        ("0", "1.5"),
+        ("0", "Unbounded"),
+        ("0", ""),
+    ] {
+        let d = errors(&schema(&format!(
+            r#"<xs:element name="root"><xs:complexType><xs:sequence>
+                 <xs:element name="x" type="xs:string" minOccurs="{min}" maxOccurs="{max}"/>
+               </xs:sequence></xs:complexType></xs:element>"#
+        )));
+        assert!(
+            d.errors()
+                .any(|e| e.code == DiagCode::InvalidAttributeValue),
+            "minOccurs={min:?} maxOccurs={max:?}: {d}"
+        );
+    }
+}
+
+/// `minOccurs` above `maxOccurs` is caught on the numbers as written, even
+/// where both would be held as `u32::MAX`.
+#[test]
+fn min_occurs_above_max_occurs_is_caught_past_u32() {
+    let d = errors(&schema(
+        r#"<xs:element name="root"><xs:complexType><xs:sequence>
+             <xs:element name="x" type="xs:string"
+                         minOccurs="4294967296" maxOccurs="4294967295"/>
+           </xs:sequence></xs:complexType></xs:element>"#,
+    ));
+    assert!(
+        d.errors().any(|e| e.code == DiagCode::InvalidOccurrence),
+        "{d}"
+    );
+}
+
 // ---------------------------------------------------------------------------
 // Attributes and attribute groups
 // ---------------------------------------------------------------------------
@@ -851,13 +931,121 @@ fn appinfo_is_kept_verbatim() {
     assert_eq!(ann.doc(), "Ambient pressure.");
     assert_eq!(ann.appinfo.len(), 1);
     assert_eq!(ann.appinfo[0].source.as_deref(), Some("urn:units"));
-    // The raw XML has to survive: a unit in appinfo cannot be recovered from
-    // a summary.
-    assert!(ann.appinfo[0].xml.contains("hPa"), "{}", ann.appinfo[0].xml);
-    assert!(
-        ann.appinfo[0].xml.contains("{urn:u}unit"),
-        "{}",
-        ann.appinfo[0].xml
+    // The source text, with the namespaces in scope declared on the element
+    // so it stands on its own.
+    assert_eq!(
+        ann.appinfo[0].xml,
+        r#"<u:unit xmlns:xs="http://www.w3.org/2001/XMLSchema" xmlns:tns="urn:example" xmlns:u="urn:u">hPa</u:unit>"#
+    );
+}
+
+/// The annotation on the global element `e`.
+fn annotation_of(body: &str) -> Annotation {
+    let s = build(&schema(body));
+    let e = s.element_id(Some(NS), "e").unwrap();
+    s.get_annotation(s[e].annotation.expect("annotation"))
+        .unwrap()
+        .clone()
+}
+
+/// `appinfo` is the source text, so escapes, comments and CDATA sections stay
+/// as they were written, and what comes back is XML a parser accepts. It used
+/// to be re-serialized with names in Clark notation and text unescaped, so
+/// `&lt;markup&gt;` came back as an element.
+#[test]
+fn appinfo_keeps_escapes_comments_and_cdata() {
+    let a = annotation_of(
+        r#"<xs:element name="e"><xs:annotation><xs:appinfo>
+             <h:p xmlns:h="http://www.w3.org/1999/xhtml" class="c">text &amp; &lt;markup&gt; <!-- c --><![CDATA[<raw>]]></h:p>
+             tail &amp; <?pi data?>
+           </xs:appinfo></xs:annotation></xs:element>"#,
+    );
+    let xml = &a.appinfo[0].xml;
+    assert_eq!(
+        xml,
+        concat!(
+            r#"<h:p xmlns:xs="http://www.w3.org/2001/XMLSchema" xmlns:tns="urn:example" "#,
+            r#"xmlns:h="http://www.w3.org/1999/xhtml" class="c">text &amp; &lt;markup&gt; "#,
+            r#"<!-- c --><![CDATA[<raw>]]></h:p>"#,
+            "\n             tail &amp; <?pi data?>",
+        )
+    );
+    let wrapped = format!("<w>{xml}</w>");
+    let doc = roxmltree::Document::parse(&wrapped).expect("well-formed");
+    let p = doc.root_element().first_element_child().unwrap();
+    assert_eq!(
+        p.tag_name().namespace(),
+        Some("http://www.w3.org/1999/xhtml")
+    );
+    assert_eq!(p.text(), Some("text & <markup> "));
+}
+
+/// A prefix used in content, such as the `xs:` of a type name, still resolves:
+/// every namespace in scope is declared on each element, unless the element
+/// declares that prefix itself.
+#[test]
+fn appinfo_carries_the_namespaces_in_scope() {
+    let a = annotation_of(
+        r#"<xs:element name="e"><xs:annotation><xs:appinfo xmlns:h="urn:h" xmlns="urn:default">
+             <rule type="xs:date"/>
+             <h:q xmlns:h="urn:other" type="tns:T"/>
+           </xs:appinfo></xs:annotation></xs:element>"#,
+    );
+    let wrapped = format!("<w>{}</w>", a.appinfo[0].xml);
+    let doc = roxmltree::Document::parse(&wrapped).expect("well-formed, no duplicate declaration");
+    let children: Vec<_> = doc
+        .root_element()
+        .children()
+        .filter(|n| n.is_element())
+        .collect();
+    assert_eq!(children.len(), 2);
+    let rule = children[0];
+    assert_eq!(rule.tag_name().namespace(), Some("urn:default"));
+    assert_eq!(
+        rule.lookup_namespace_uri(Some("xs")),
+        Some("http://www.w3.org/2001/XMLSchema")
+    );
+    assert_eq!(rule.lookup_namespace_uri(Some("h")), Some("urn:h"));
+    let q = children[1];
+    assert_eq!(q.tag_name().namespace(), Some("urn:other"));
+    assert_eq!(q.lookup_namespace_uri(Some("tns")), Some("urn:example"));
+}
+
+/// An entity declared in the schema document's DTD stays a reference: the
+/// text is what was written, and the DTD does not travel with it.
+#[test]
+fn appinfo_leaves_entity_references_as_written() {
+    let xsd = format!(
+        r#"<!DOCTYPE xs:schema [<!ENTITY unit "<u:unit xmlns:u='urn:u'>hPa</u:unit>">]>
+           <xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema" targetNamespace="{NS}">
+             <xs:element name="e"><xs:annotation>
+               <xs:appinfo>&unit;</xs:appinfo>
+               <xs:appinfo/>
+             </xs:annotation></xs:element>
+           </xs:schema>"#
+    );
+    let s = build(&xsd);
+    let e = s.element_id(Some(NS), "e").unwrap();
+    let a = s.get_annotation(s[e].annotation.unwrap()).unwrap();
+    assert_eq!(a.appinfo[0].xml, "&unit;");
+    assert_eq!(a.appinfo[1].xml, "");
+}
+
+/// All of the text, markup included. Only the first run of it was kept, so
+/// documentation with an inline element stopped at that element.
+#[test]
+fn documentation_keeps_the_text_around_markup() {
+    let a = annotation_of(
+        r#"<xs:element name="e"><xs:annotation>
+             <xs:documentation xmlns:h="http://www.w3.org/1999/xhtml">
+               Hello <h:b>bold</h:b> world, and 1 &lt; 2 <![CDATA[& 3]]> too.
+             </xs:documentation>
+             <xs:documentation><h:p xmlns:h="http://www.w3.org/1999/xhtml">Inside.</h:p></xs:documentation>
+           </xs:annotation></xs:element>"#,
+    );
+    assert_eq!(
+        a.documentation,
+        ["Hello bold world, and 1 < 2 & 3 too.", "Inside."]
     );
 }
 
