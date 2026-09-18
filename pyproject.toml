@@ -49,7 +49,10 @@ include = ["python/xsdkit/*.pyi", "python/xsdkit/py.typed"]
 # What the tests import, and what CI and the release workflow install:
 # `pip install --group test`. IPython is here because the notebook tests
 # render through its own formatter rather than calling `_repr_html_`.
-test = ["pytest>=8", "ipython>=8"]
+# Hypothesis, lxml and xmlschema are for the differential tests, which compare
+# xsdkit with libxml2 and xmlschema on generated schemas; lxml has wheels for
+# every platform the release workflow tests a wheel on.
+test = ["pytest>=8", "ipython>=8", "hypothesis>=6", "lxml>=5", "xmlschema>=4"]
 # stubtest checks the stub against the built module.
 typecheck = ["mypy>=2"]
 # Ruff, pinned exactly: its default rules change between releases, and what CI

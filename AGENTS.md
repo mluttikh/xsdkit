@@ -693,6 +693,23 @@ Lint job runs it. A deliberate exception is a `# noqa: RULE` with its reason on
 the line, not a rule switched off in `pyproject.toml` for every file. On a machine with
 conda active, maturin refuses to run while both `VIRTUAL_ENV` and
 `CONDA_PREFIX` are set — `env -u CONDA_PREFIX` in front of the command.
+
+**`python/tests/test_differential.py` checks xsdkit against two other
+implementations** on schemas and documents Hypothesis generates: `validate`
+against lxml (libxml2), and `decode` against `xmlschema.to_dict`. Its first
+run found two content-model bugs that no hand-written test had —
+`minOccurs="2" maxOccurs="unbounded"` refused three children, and a child
+repeated by a bounded group decoded as a value. Neither engine is an oracle:
+libxml2 rejects whitespace around dates and `INF`, and xmlschema rejects some
+valid counted content. What they get wrong is kept out of the generated
+subset, or checked another way — whether `decode` gives a list is checked
+against the generated schema, because xmlschema's own rule misses some
+repeating children — with a note where it is, so a new disagreement is either
+an xsdkit bug or a new note. The lxml half skips
+on a free-threaded build, because importing lxml turns the GIL back on for
+the whole run. CI runs the same examples every time, so a failure reproduces;
+for fresh ones,
+`XSDKIT_DIFFERENTIAL=thorough pytest python/tests/test_differential.py`.
 The `python` feature targets the Python 3.10 stable ABI, so PyO3's build
 script refuses an older interpreter: if the `python3` it finds is 3.9,
 `cargo clippy --features python` fails before compiling anything, with
