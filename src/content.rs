@@ -317,6 +317,18 @@ struct Builder<'a> {
     schemas: &'a Schemas,
     positions: Vec<Position>,
     follow: Vec<Vec<PositionId>>,
+    /// Which positions each `follow` row already holds, one bit each.
+    ///
+    /// `link` asked the row itself with `contains`, which made linking
+    /// quadratic per row and building a wide model cubic: a repeated choice
+    /// links every one of its *n* positions to all *n*. A row grows its bits
+    /// only as far as the highest position it holds, and the whole of it is
+    /// dropped with the builder.
+    follow_bits: Vec<Vec<u64>>,
+    /// Scratch for [`Self::extend_unique`]: the generation that last marked
+    /// each position, so the array never needs clearing.
+    mark: Vec<u32>,
+    generation: u32,
     approximated: bool,
     /// Guards a group definition that reaches itself. XSD forbids this, but
     /// a malformed schema must not hang the compiler.
@@ -329,6 +341,9 @@ impl<'a> Builder<'a> {
             schemas,
             positions: Vec::new(),
             follow: Vec::new(),
+            follow_bits: Vec::new(),
+            mark: Vec::new(),
+            generation: 0,
             approximated: false,
             visiting: Vec::new(),
         }
@@ -346,16 +361,53 @@ impl<'a> Builder<'a> {
             admits,
         });
         self.follow.push(Vec::new());
+        self.follow_bits.push(Vec::new());
         id
     }
 
+    /// Adds `from × to` to the follow relation, each edge once, in the order
+    /// first added — which is the order the matcher tries them in, so it is
+    /// part of the automaton's meaning on a model that breaches UPA.
     fn link(&mut self, from: &[PositionId], to: &[PositionId]) {
         for &f in from {
             let row = &mut self.follow[f as usize];
+            let bits = &mut self.follow_bits[f as usize];
             for &t in to {
-                if !row.contains(&t) {
+                let (word, bit) = (t as usize / 64, 1u64 << (t % 64));
+                if word >= bits.len() {
+                    bits.resize(word + 1, 0);
+                }
+                if bits[word] & bit == 0 {
+                    bits[word] |= bit;
                     row.push(t);
                 }
+            }
+        }
+    }
+
+    /// Appends what `src` holds and `dst` does not, in `src`'s order.
+    ///
+    /// The first and last sets of a sequence of optional particles grow by
+    /// one per particle, and asking `dst.contains` for each made building one
+    /// cubic; a generation-stamped mark makes it linear in the two lists.
+    fn extend_unique(&mut self, dst: &mut Vec<PositionId>, src: &[PositionId]) {
+        if src.is_empty() {
+            return;
+        }
+        if self.generation == u32::MAX {
+            self.mark.fill(0);
+            self.generation = 0;
+        }
+        self.generation += 1;
+        let g = self.generation;
+        self.mark.resize(self.positions.len(), 0);
+        for &d in dst.iter() {
+            self.mark[d as usize] = g;
+        }
+        for &s in src {
+            if self.mark[s as usize] != g {
+                self.mark[s as usize] = g;
+                dst.push(s);
             }
         }
     }
@@ -367,11 +419,11 @@ impl<'a> Builder<'a> {
 
         let mut first = a.first.clone();
         if a.nullable {
-            extend_unique(&mut first, &b.first);
+            self.extend_unique(&mut first, &b.first);
         }
         let mut last = b.last.clone();
         if b_nullable {
-            extend_unique(&mut last, &a.last);
+            self.extend_unique(&mut last, &a.last);
         }
         Frag {
             first,
@@ -387,8 +439,8 @@ impl<'a> Builder<'a> {
             nullable: false,
         };
         for f in frags {
-            extend_unique(&mut out.first, &f.first);
-            extend_unique(&mut out.last, &f.last);
+            self.extend_unique(&mut out.first, &f.first);
+            self.extend_unique(&mut out.last, &f.last);
             out.nullable |= f.nullable;
         }
         out
@@ -534,14 +586,6 @@ impl<'a> Builder<'a> {
                 self.link(&last, &first);
                 f
             }
-        }
-    }
-}
-
-fn extend_unique(dst: &mut Vec<PositionId>, src: &[PositionId]) {
-    for &s in src {
-        if !dst.contains(&s) {
-            dst.push(s);
         }
     }
 }
@@ -711,6 +755,14 @@ fn build_all_group(schemas: &Schemas, particles: &[ParticleId]) -> AllGroup {
 ///
 /// This is the whole of UPA: a content model is 1-unambiguous exactly when
 /// its position automaton is deterministic.
+///
+/// Every state is a set of targets, and asking every pair of them was cubic in
+/// a wide model: a repeated choice of *n* elements has *n* states of *n*
+/// targets each, and a sequence of *n* optional elements nearly as many — a
+/// thousand of either took seconds to compile, and the shape is ordinary.
+/// [`PairFinder`] asks only the pairs that could overlap, and a state whose
+/// targets another state already had is not asked again: it can only find
+/// pairs that were already reported.
 fn check_upa(
     schemas: &Schemas,
     def: &TypeDefinition,
@@ -720,88 +772,189 @@ fn check_upa(
     version: crate::load::Version,
     diags: &mut Diagnostics,
 ) {
+    let (names, distinct) = name_ids(schemas, a.positions().iter().map(|p| p.admits.as_slice()));
+    let mut finder = PairFinder::new(distinct);
     let mut reported: FxHashSet<(ParticleId, ParticleId)> = FxHashSet::default();
+    let mut checked: FxHashSet<&[PositionId]> = FxHashSet::default();
+    let mut targets: Vec<Competitor<'_>> = Vec::new();
 
-    let mut check_state = |targets: &[PositionId], diags: &mut Diagnostics| {
-        for i in 0..targets.len() {
-            for j in (i + 1)..targets.len() {
-                let (p, q) = (a.position(targets[i]), a.position(targets[j]));
-                if p.particle == q.particle {
-                    // Two unrolled copies of one particle are a chain, not a
-                    // choice; they can never be confused for each other.
-                    continue;
-                }
-                let Some(overlap) = overlap(schemas, p.into(), q.into(), siblings) else {
-                    continue;
-                };
-                // XSD 1.1 resolves an element competing with a wildcard in
-                // favour of the element, so it is no longer ambiguous.
-                if version == crate::load::Version::Xsd11
-                    && matches!(overlap, Overlap::ElementAndWildcard(_))
-                {
-                    continue;
-                }
-                let key = if p.particle < q.particle {
-                    (p.particle, q.particle)
-                } else {
-                    (q.particle, p.particle)
-                };
-                if !reported.insert(key) {
-                    continue;
-                }
-                diags.push(upa_diagnostic(
-                    schemas,
-                    def,
-                    p.particle,
-                    q.particle,
-                    overlap,
-                    a.approximated(),
-                    mode,
-                ));
-            }
+    let states = std::iter::once(a.first())
+        .chain((0..a.positions().len() as PositionId).map(|p| a.follow(p)));
+    for state in states {
+        if !checked.insert(state) {
+            continue;
         }
-    };
-
-    check_state(a.first(), diags);
-    for p in 0..a.positions().len() as PositionId {
-        let targets = a.follow(p).to_vec();
-        check_state(&targets, diags);
+        targets.clear();
+        targets.extend(state.iter().map(|&t| {
+            let p = a.position(t);
+            Competitor {
+                particle: p.particle,
+                label: &p.label,
+                admits: &p.admits,
+                names: &names[t as usize],
+            }
+        }));
+        for (i, j) in finder.pairs(&targets, version) {
+            let (p, q) = (targets[i], targets[j]);
+            let Some(overlap) = overlap(schemas, p, q, siblings) else {
+                continue;
+            };
+            let key = if p.particle < q.particle {
+                (p.particle, q.particle)
+            } else {
+                (q.particle, p.particle)
+            };
+            if !reported.insert(key) {
+                continue;
+            }
+            diags.push(upa_diagnostic(
+                schemas,
+                def,
+                p.particle,
+                q.particle,
+                overlap,
+                a.approximated(),
+                mode,
+            ));
+        }
     }
 }
 
-/// The three things an overlap question needs of a candidate: which particle
-/// it came from, what kind of label it carries, and which declarations it
-/// admits.
+/// The things an overlap question needs of a candidate: which particle it came
+/// from, what kind of label it carries, which declarations it admits, and the
+/// names of those as dense ids.
 ///
-/// A [`Position`] and an [`AllMember`] both have exactly these, and the
-/// question "could one element match both of these?" is the same question in
-/// an automaton and in an `xs:all`. Sharing the predicate is what keeps the
-/// two from drifting — the `xs:all` half went unchecked entirely until
+/// A [`Position`] and an [`AllMember`] both have these, and the question
+/// "could one element match both of these?" is the same question in an
+/// automaton and in an `xs:all`. Sharing the predicate is what keeps the two
+/// from drifting — the `xs:all` half went unchecked entirely until
 /// `saxonData/All`'s all240 to all243 said so.
 #[derive(Copy, Clone)]
 struct Competitor<'a> {
     particle: ParticleId,
     label: &'a Label,
     admits: &'a [ElementId],
+    /// The names in `admits`, distinct, as ids from [`name_ids`].
+    names: &'a [u32],
 }
 
-impl<'a> From<&'a Position> for Competitor<'a> {
-    fn from(p: &'a Position) -> Self {
-        Competitor {
-            particle: p.particle,
-            label: &p.label,
-            admits: &p.admits,
+/// Dense ids for the names each candidate admits, and how many there are.
+///
+/// Two element candidates overlap exactly when they admit a common name, so
+/// with the names numbered a state's shared names are found by array lookups
+/// rather than by comparing its candidates two at a time.
+fn name_ids<'a>(
+    schemas: &Schemas,
+    admits: impl Iterator<Item = &'a [ElementId]>,
+) -> (Vec<Vec<u32>>, usize) {
+    let mut ids: FxHashMap<QName, u32> = FxHashMap::default();
+    let per_candidate = admits
+        .map(|list| {
+            let mut out: Vec<u32> = Vec::with_capacity(list.len());
+            for e in list {
+                let next = ids.len() as u32;
+                let id = *ids.entry(schemas[*e].name).or_insert(next);
+                if !out.contains(&id) {
+                    out.push(id);
+                }
+            }
+            out
+        })
+        .collect();
+    (per_candidate, ids.len())
+}
+
+/// Finds the pairs of candidates that could both match one element, without
+/// trying every pair.
+///
+/// A superset of what [`overlap`] confirms, and a small one. Two element
+/// candidates can only overlap on a name they both admit, so they are paired
+/// through their names, and the only such pairs are the ones that get
+/// reported. A wildcard can overlap anything, so it is paired with every
+/// element candidate — except in XSD 1.1, which settles an element competing
+/// with a wildcard in the element's favour — and with every other wildcard;
+/// models have few of them. Two unrolled copies of one particle are a chain,
+/// not a choice, and are never paired.
+///
+/// The pairs come back sorted, which is the order a walk over every pair
+/// would have found them in, so the diagnostics come out unchanged.
+struct PairFinder {
+    /// Per name id, the last [`Self::stamp`] that saw it, so the arrays need
+    /// no clearing between states.
+    seen: Vec<u32>,
+    /// Per name id, the first candidate admitting it in the current state.
+    first: Vec<u32>,
+    stamp: u32,
+}
+
+impl PairFinder {
+    fn new(names: usize) -> Self {
+        Self {
+            seen: vec![0; names],
+            first: vec![0; names],
+            stamp: 0,
         }
     }
-}
 
-impl<'a> From<&'a AllMember> for Competitor<'a> {
-    fn from(m: &'a AllMember) -> Self {
-        Competitor {
-            particle: m.particle,
-            label: &m.label,
-            admits: &m.admits,
+    fn pairs(
+        &mut self,
+        candidates: &[Competitor<'_>],
+        version: crate::load::Version,
+    ) -> Vec<(usize, usize)> {
+        self.stamp += 1;
+        let mut repeats: Vec<(u32, usize)> = Vec::new();
+        let (mut elements, mut wildcards) = (Vec::new(), Vec::new());
+        for (j, c) in candidates.iter().enumerate() {
+            match c.label {
+                Label::Wildcard => wildcards.push(j),
+                Label::Element(_) => {
+                    elements.push(j);
+                    for &n in c.names {
+                        let at = n as usize;
+                        if self.seen[at] == self.stamp {
+                            repeats.push((n, j));
+                        } else {
+                            self.seen[at] = self.stamp;
+                            self.first[at] = j as u32;
+                        }
+                    }
+                }
+            }
         }
+
+        let mut pairs = Vec::new();
+        let mut push = |i: usize, j: usize| {
+            if candidates[i].particle != candidates[j].particle {
+                pairs.push((i.min(j), i.max(j)));
+            }
+        };
+        // Every name more than one candidate admits: every pair of those.
+        repeats.sort_unstable();
+        for group in repeats.chunk_by(|a, b| a.0 == b.0) {
+            let at: Vec<usize> = std::iter::once(self.first[group[0].0 as usize] as usize)
+                .chain(group.iter().map(|&(_, j)| j))
+                .collect();
+            for (k, &i) in at.iter().enumerate() {
+                for &j in &at[k + 1..] {
+                    push(i, j);
+                }
+            }
+        }
+        if version == crate::load::Version::Xsd10 {
+            for &w in &wildcards {
+                for &e in &elements {
+                    push(w, e);
+                }
+            }
+        }
+        for (k, &w) in wildcards.iter().enumerate() {
+            for &v in &wildcards[k + 1..] {
+                push(w, v);
+            }
+        }
+        pairs.sort_unstable();
+        pairs.dedup();
+        pairs
     }
 }
 
@@ -813,10 +966,10 @@ impl<'a> From<&'a AllMember> for Competitor<'a> {
 /// the members are matched in any order, so if one element could satisfy two
 /// of them the matcher cannot attribute it, and no amount of ordering helps.
 ///
-/// Every member competes with every other, which makes this the whole
-/// automaton check with the reachability question deleted. Two members are
-/// always distinct particles — there is no unrolling here — so the
-/// same-particle case the automaton has to skip cannot arise.
+/// Every member competes with every other, which makes this the automaton
+/// check over a single state holding every member. Two members are always
+/// distinct particles — there is no unrolling here — so every pair reported
+/// is new.
 fn check_all_upa(
     schemas: &Schemas,
     def: &TypeDefinition,
@@ -826,27 +979,29 @@ fn check_all_upa(
     version: crate::load::Version,
     diags: &mut Diagnostics,
 ) {
-    let members = &all.members;
-    for i in 0..members.len() {
-        for j in (i + 1)..members.len() {
-            let (p, q) = (&members[i], &members[j]);
-            let Some(overlap) = overlap(schemas, p.into(), q.into(), siblings) else {
-                continue;
-            };
-            // As in an automaton: 1.1 resolves an element competing with a
-            // wildcard in favour of the element.
-            if version == crate::load::Version::Xsd11
-                && matches!(overlap, Overlap::ElementAndWildcard(_))
-            {
-                continue;
-            }
-            diags.push(upa_diagnostic(
-                schemas, def, p.particle, q.particle, overlap,
-                // Nothing was widened: an `xs:all` member keeps the bounds it
-                // was written with, so the verdict is exact.
-                false, mode,
-            ));
-        }
+    let (names, distinct) = name_ids(schemas, all.members.iter().map(|m| m.admits.as_slice()));
+    let members: Vec<Competitor<'_>> = all
+        .members
+        .iter()
+        .zip(&names)
+        .map(|(m, names)| Competitor {
+            particle: m.particle,
+            label: &m.label,
+            admits: &m.admits,
+            names,
+        })
+        .collect();
+    for (i, j) in PairFinder::new(distinct).pairs(&members, version) {
+        let (p, q) = (members[i], members[j]);
+        let Some(overlap) = overlap(schemas, p, q, siblings) else {
+            continue;
+        };
+        diags.push(upa_diagnostic(
+            schemas, def, p.particle, q.particle, overlap,
+            // Nothing was widened: an `xs:all` member keeps the bounds it
+            // was written with, so the verdict is exact.
+            false, mode,
+        ));
     }
 }
 
@@ -2063,5 +2218,188 @@ impl Schemas {
             }
         }
         s
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::load::Version;
+
+    /// A small xorshift, so the models below are the same on every run.
+    struct Rng(u64);
+
+    impl Rng {
+        fn below(&mut self, n: u64) -> u64 {
+            self.0 ^= self.0 << 13;
+            self.0 ^= self.0 >> 7;
+            self.0 ^= self.0 << 17;
+            self.0 % n
+        }
+        fn pick<'a>(&mut self, xs: &[&'a str]) -> &'a str {
+            xs[self.below(xs.len() as u64) as usize]
+        }
+    }
+
+    const NAMES: [&str; 4] = ["a", "b", "c", "s"];
+
+    fn occurs(r: &mut Rng) -> String {
+        let min = r.below(3);
+        match r.below(4) {
+            0 => format!(r#" minOccurs="{min}" maxOccurs="unbounded""#),
+            k => format!(r#" minOccurs="{min}" maxOccurs="{}""#, min.max(1) + k - 1),
+        }
+    }
+
+    /// A particle built to collide: few names, local and global declarations
+    /// of each, a substitution group, and wildcards of every namespace kind.
+    fn particle(r: &mut Rng, depth: u32, out: &mut String) {
+        use std::fmt::Write;
+        match r.below(if depth > 2 { 3 } else { 5 }) {
+            0 | 1 => {
+                let (n, o) = (r.pick(&NAMES), occurs(r));
+                if r.below(2) == 0 {
+                    write!(out, r#"<xs:element ref="t:{n}"{o}/>"#).unwrap();
+                } else {
+                    write!(out, r#"<xs:element name="{n}" type="xs:string"{o}/>"#).unwrap();
+                }
+            }
+            2 => {
+                let ns = r.pick(&["##any", "##other", "##local", "##targetNamespace", "urn:x"]);
+                let o = occurs(r);
+                write!(
+                    out,
+                    r#"<xs:any namespace="{ns}" processContents="lax"{o}/>"#
+                )
+                .unwrap();
+            }
+            _ => {
+                let (c, o) = (r.pick(&["sequence", "choice"]), occurs(r));
+                write!(out, "<xs:{c}{o}>").unwrap();
+                for _ in 0..1 + r.below(4) {
+                    particle(r, depth + 1, out);
+                }
+                write!(out, "</xs:{c}>").unwrap();
+            }
+        }
+    }
+
+    fn schema(r: &mut Rng) -> Schemas {
+        let mut xsd = String::from(
+            r#"<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema" xmlns:t="urn:t"
+                          targetNamespace="urn:t" elementFormDefault="qualified">
+                 <xs:element name="a" type="xs:string"/>
+                 <xs:element name="b" type="xs:string"/>
+                 <xs:element name="c" type="xs:string" substitutionGroup="t:a"/>
+                 <xs:element name="s" type="xs:string" substitutionGroup="t:c"/>"#,
+        );
+        for i in 0..3 {
+            xsd.push_str(&format!(r#"<xs:complexType name="T{i}">"#));
+            particle(r, 0, &mut xsd);
+            xsd.push_str("</xs:complexType>");
+        }
+        xsd.push_str("</xs:schema>");
+        crate::SchemaSetBuilder::new()
+            .conformance(crate::Conformance::Lax)
+            .text(xsd, "mem://random.xsd")
+            .compile()
+            .schemas
+    }
+
+    /// Every pair a walk over all pairs would report, for one set of
+    /// candidates: the definition [`PairFinder`] has to stay a superset of.
+    fn every_overlapping_pair(
+        schemas: &Schemas,
+        candidates: &[Competitor<'_>],
+        siblings: &FxHashSet<QName>,
+        version: Version,
+    ) -> Vec<(usize, usize)> {
+        let mut out = Vec::new();
+        for i in 0..candidates.len() {
+            for j in i + 1..candidates.len() {
+                let (p, q) = (candidates[i], candidates[j]);
+                if p.particle == q.particle {
+                    continue;
+                }
+                match overlap(schemas, p, q, siblings) {
+                    None => {}
+                    Some(Overlap::ElementAndWildcard(_)) if version == Version::Xsd11 => {}
+                    Some(_) => out.push((i, j)),
+                }
+            }
+        }
+        out
+    }
+
+    /// The pair finder only decides which pairs `overlap` is asked about, so
+    /// the one way it can be wrong is by leaving out a pair that overlaps —
+    /// and a missed ambiguity is silent. Every state of every automaton of up
+    /// to 64 positions in 150 models built to collide, in both versions,
+    /// checked against asking every pair. An `xs:all` is one such state, so
+    /// the same finder covers it.
+    #[test]
+    fn the_pair_finder_misses_no_overlapping_pair() {
+        let mut r = Rng(0x2545_F491_4F6C_DD1D);
+        let (mut states, mut overlapping) = (0usize, 0usize);
+        for _ in 0..150 {
+            let schemas = schema(&mut r);
+            for version in [Version::Xsd10, Version::Xsd11] {
+                for (id, _) in schemas.iter_types() {
+                    let Some(content) = schemas.content(id) else {
+                        continue;
+                    };
+                    // Large models add little: the brute-force side is what
+                    // costs, and the shapes repeat.
+                    let ContentModel::Automaton(a) = &content.model else {
+                        continue;
+                    };
+                    if a.positions().len() > 64 {
+                        continue;
+                    }
+                    let (names, distinct) =
+                        name_ids(&schemas, a.positions().iter().map(|p| p.admits.as_slice()));
+                    let mut finder = PairFinder::new(distinct);
+                    let all_states = std::iter::once(a.first())
+                        .chain((0..a.positions().len() as PositionId).map(|p| a.follow(p)));
+                    for state in all_states {
+                        let candidates: Vec<Competitor<'_>> = state
+                            .iter()
+                            .map(|&t| {
+                                let p = a.position(t);
+                                Competitor {
+                                    particle: p.particle,
+                                    label: &p.label,
+                                    admits: &p.admits,
+                                    names: &names[t as usize],
+                                }
+                            })
+                            .collect();
+                        let want = every_overlapping_pair(
+                            &schemas,
+                            &candidates,
+                            &content.siblings,
+                            version,
+                        );
+                        let got: Vec<_> = finder
+                            .pairs(&candidates, version)
+                            .into_iter()
+                            .filter(|&(i, j)| {
+                                overlap(&schemas, candidates[i], candidates[j], &content.siblings)
+                                    .is_some()
+                            })
+                            .collect();
+                        assert_eq!(got, want, "a state of {:?}", schemas[id].name());
+                        states += 1;
+                        overlapping += want.len();
+                    }
+                }
+            }
+        }
+        // A floor, so that a generator which stopped producing collisions
+        // cannot pass this by checking nothing.
+        assert!(
+            states > 5_000 && overlapping > 40_000,
+            "only {states} states and {overlapping} overlapping pairs"
+        );
     }
 }

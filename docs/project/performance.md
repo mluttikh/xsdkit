@@ -20,6 +20,17 @@ shape rather than the absolute numbers: doubling the input doubles the time.
 `tests/performance.rs` holds it to that shape: four times the input may not cost
 more than eight times the time.
 
+One shape grows faster, because its content model does: a repeated choice of
+*n* elements, or a sequence of *n* optional ones, lets nearly every element
+follow nearly every other, so the compiled automaton has close to *n²*
+transitions. Compiling it is proportional to that and no worse.
+
+| elements | repeated choice | optional sequence |
+|---|---|---|
+| 1,000 | 5 ms | 10 ms |
+| 2,000 | 18 ms | 36 ms |
+| 4,000 | 66 ms | 124 ms |
+
 ## Build once, query many times
 
 Compilation is the expensive half, and it is meant to be. Reference resolution,

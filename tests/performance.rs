@@ -198,3 +198,59 @@ fn a_validation_does_not_pay_for_every_pattern_in_the_schema() {
          something is compiling the schema's patterns per call again"
     );
 }
+
+/// A content model `n` elements wide, as a repeated choice or as a sequence
+/// of optional elements. Both are ordinary: a document-style vocabulary
+/// offers hundreds of inline elements anywhere, and a data vocabulary lists
+/// hundreds of optional fields.
+fn wide_model(shape: &str, n: usize) -> String {
+    let (open, close, occurs) = match shape {
+        "choice" => (r#"<xs:choice maxOccurs="unbounded">"#, "</xs:choice>", ""),
+        _ => ("<xs:sequence>", "</xs:sequence>", r#" minOccurs="0""#),
+    };
+    let mut s =
+        format!(r#"<xs:schema xmlns:xs="{XS}"><xs:element name="root"><xs:complexType>{open}"#);
+    for i in 0..n {
+        s.push_str(&format!(
+            r#"<xs:element name="e{i}" type="xs:string"{occurs}/>"#
+        ));
+    }
+    s.push_str(&format!(
+        "{close}</xs:complexType></xs:element></xs:schema>"
+    ));
+    s
+}
+
+#[test]
+fn a_wide_content_model_does_not_compile_in_cubic_time() {
+    // Both shapes have a state for every position with an edge to nearly
+    // every other, so the automaton itself is quadratic in the width. The
+    // UPA check compared every pair of a state's targets, and building the
+    // automaton asked each follow row whether it already held an edge, and
+    // each made the whole cubic: a thousand elements took 6.4 s as a
+    // sequence and 19 s as a choice, in a release build.
+    let compile = |src: &str| {
+        let start = Instant::now();
+        SchemaSetBuilder::new()
+            .text(src, "urn:scale")
+            .compile()
+            .into_result()
+            .expect("the generated schema must compile");
+        start.elapsed()
+    };
+    for shape in ["choice", "optional sequence"] {
+        compile(&wide_model(shape, 16)); // warm up
+        let (small, large) = (wide_model(shape, 250), wide_model(shape, 1000));
+        let best = |src: &str| (0..3).map(|_| compile(src)).min().unwrap();
+        let (small, large) = (best(&small), best(&large));
+
+        // Four times the width is sixteen times the edges. Quadratic says
+        // sixteen; cubic says sixty-four.
+        let ratio = large.as_secs_f64() / small.as_secs_f64().max(1e-6);
+        assert!(
+            ratio < 32.0,
+            "a {shape} grew {ratio:.1}x for 4x the width ({small:?} -> {large:?}); \
+             the UPA check or automaton construction has gone cubic again"
+        );
+    }
+}
