@@ -187,7 +187,7 @@ ev.name, ev.local_name  # ('urn:example', 'price'), 'price'; None on a text even
 ev.declaration          # the Element declaration; None under skip, or lax with no match
 ev.type                 # the type in force, after any xsi:type override
 ev.type_from_instance   # True when xsi:type chose it
-ev.nil                  # xsi:nil="true"
+ev.nil                  # xsi:nil="true", where the declaration allows it
 ev.value, ev.lexical    # typed value and the text it came from
 ev.line                 # where in the document
 ev.attributes           # AttributeValue, each with its own typed value
@@ -218,7 +218,9 @@ when a default means something different from an explicit value.
 - `xsi:type` overrides — the prefix resolved against the namespaces in
   scope, the derivation checked against the declared type, the `block` on
   both, and abstractness.
-- `xsi:nil`, with `nillable` enforced.
+- `xsi:nil`, with `nillable` and `fixed` enforced, and a nil element held to
+  having no content at all — no child elements, and no text, whitespace
+  included.
 - `xs:QName` and `xs:NOTATION` values, resolved against the namespaces in
   scope — the document's for a value, the schema's for an `xs:enumeration`
   literal, which are not the same bindings and need not agree on a prefix.

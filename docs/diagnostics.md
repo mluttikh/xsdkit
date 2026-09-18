@@ -184,6 +184,7 @@ in.
 | `XSD2016` | An `xs:keyref` matches no key |
 | `XSD2017` | An `xs:ENTITY` names no unparsed entity in the DTD |
 | `XSD2018` | A wildcard admitted a name the model declares with another type |
+| `XSD2019` | `xsi:nil` on an element whose declaration is not `nillable`, or has a `fixed` value |
 
 ## Rendering
 

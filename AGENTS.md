@@ -300,6 +300,15 @@ cannot express this.
   so. Whitespace is content, not absence, so `<n> </n>` does not take one.
   `fixed` also constrains content the document *did* write, compared in the
   value space — `1.0` satisfies a decimal fixed at `1.00`.
+- **`xsi:nil` is the declaration's to allow.** A declaration that is not
+  `nillable` admits no `xsi:nil` at all, `"false"` included, and a `fixed`
+  one cannot be nil; either is `XSD2019`, and the element's content is then
+  checked as though the attribute were absent. It used to be read without
+  asking the declaration, so any element could be marked nil and emptied of
+  whatever its content model required. A nil element may hold no child
+  elements and no text, whitespace included — Saxonica's `all004.n02` and
+  libxml2 both say so — and `PsviEvent`'s `nil` is true only when the
+  element really is nil, not whenever the attribute says `true`.
 - **An `xs:boolean` attribute has four spellings.** `mixed`, `nillable`,
   `abstract`, `appliesToEmpty` and `xsi:nil` all take `true`, `false`, `1` and
   `0`, and the value is whitespace-collapsed first. Read them with `flag()` in
@@ -559,7 +568,7 @@ splits the same way:
 | | XSD 1.0 | XSD 1.1 |
 |---|---|---|
 | valid documents accepted | **99.9%** (11,310/11,325) | **99.6%** (11,864/11,906) |
-| invalid documents rejected | **99.7%** (9,057/9,083) | **98.3%** (9,515/9,680) |
+| invalid documents rejected | **99.8%** (9,065/9,083) | **98.4%** (9,525/9,680) |
 
 15 false alarms under 1.0 against 42 under 1.1, which is the same story: the
 1.1-only sets are the features that are not there yet.

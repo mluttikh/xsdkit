@@ -73,8 +73,8 @@ and two are `queried`.
 | | XSD 1.0 | XSD 1.1 |
 |---|---|---|
 | valid documents accepted | **99.9%** (11,310 / 11,325) | **99.6%** (11,864 / 11,906) |
-| invalid documents rejected | **99.7%** (9,057 / 9,083) | **98.3%** (9,515 / 9,680) |
-| overall correct | **99.8%** (20,367 / 20,408) | **99.0%** (21,379 / 21,586) |
+| invalid documents rejected | **99.8%** (9,065 / 9,083) | **98.4%** (9,525 / 9,680) |
+| overall correct | **99.8%** (20,375 / 20,408) | **99.1%** (21,389 / 21,586) |
 
 Here the rows are much closer, because validating a document against a model
 you already built is the part that is finished.
@@ -105,7 +105,7 @@ to a value satisfies both, so this follows the specification and reports the
 duplicate. Both are 1.1-only groups, which is why that row is empty in the 1.0
 column.
 
-The false *acceptances* — invalid documents we pass — are 26 as 1.0 and 165
+The false *acceptances* — invalid documents we pass — are 18 as 1.0 and 155
 as 1.1, and by test set they are mostly the two features this version stores
 and never evaluates. XSD 1.1 **assertions** are 67 of them (`Assert` 43,
 `assertion` 24) and **conditional type assignment** 24 (`CTA` 19,

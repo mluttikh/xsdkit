@@ -4,8 +4,8 @@
 #
 # runs                      41994
 # not scored                64
-# as XSD 1.0   valid accepted 11310/11325   invalid rejected 9057/9083
-# as XSD 1.1   valid accepted 11864/11906   invalid rejected 9515/9680
+# as XSD 1.0   valid accepted 11310/11325   invalid rejected 9065/9083
+# as XSD 1.1   valid accepted 11864/11906   invalid rejected 9525/9680
 #
 # Re-bless with XSDKIT_BLESS=1; see tests/w3c_suite.rs.
 
@@ -33,7 +33,7 @@ All/all003/all003.v01.xml@1.1	valid	accept	-
 All/all003/all003.v02.xml@1.1	valid	accept	-
 All/all003/all003.v03.xml@1.1	valid	accept	-
 All/all004/all004.n01.xml@1.1	invalid	reject	XSD2009
-All/all004/all004.n02.xml@1.1	invalid	accept	-
+All/all004/all004.n02.xml@1.1	invalid	reject	XSD2009
 All/all004/all004.v01.xml@1.1	valid	accept	-
 All/all004/all004.v02.xml@1.1	valid	accept	-
 All/all005/all005.n01.xml@1.1	invalid	reject	XSD2002+XSD2003
@@ -617,14 +617,14 @@ Complex/complex011/complex011.n1.xml@1.0	invalid	reject	XSD2004
 Complex/complex011/complex011.n1.xml@1.1	invalid	reject	XSD2004
 Complex/complex011/complex011.n2.xml@1.0	invalid	reject	XSD2009
 Complex/complex011/complex011.n2.xml@1.1	invalid	reject	XSD2009
-Complex/complex011/complex011.n3.xml@1.0	invalid	reject	XSD2002
-Complex/complex011/complex011.n3.xml@1.1	invalid	reject	XSD2002
+Complex/complex011/complex011.n3.xml@1.0	invalid	reject	XSD2002+XSD2009
+Complex/complex011/complex011.n3.xml@1.1	invalid	reject	XSD2002+XSD2009
 Complex/complex011/complex011.v1.xml@1.0	valid	accept	-
 Complex/complex011/complex011.v1.xml@1.1	valid	accept	-
 Complex/complex011/complex011.v2.xml@1.0	valid	accept	-
 Complex/complex011/complex011.v2.xml@1.1	valid	accept	-
-Complex/complex012/complex012.n1.xml@1.0	invalid	accept	-
-Complex/complex012/complex012.n1.xml@1.1	invalid	accept	-
+Complex/complex012/complex012.n1.xml@1.0	invalid	reject	XSD2009
+Complex/complex012/complex012.n1.xml@1.1	invalid	reject	XSD2009
 Complex/complex012/complex012.n2.xml@1.0	invalid	reject	XSD2009
 Complex/complex012/complex012.n2.xml@1.1	invalid	reject	XSD2009
 Complex/complex012/complex012.n3.xml@1.0	invalid	reject	XSD2009
@@ -641,16 +641,16 @@ Complex/complex012/complex012.v5.xml@1.0	valid	accept	-
 Complex/complex012/complex012.v5.xml@1.1	valid	accept	-
 Complex/complex012/complex012.v6.xml@1.0	valid	accept	-
 Complex/complex012/complex012.v6.xml@1.1	valid	accept	-
-Complex/complex013/complex013.n1.xml@1.0	invalid	accept	-
-Complex/complex013/complex013.n1.xml@1.1	invalid	accept	-
+Complex/complex013/complex013.n1.xml@1.0	invalid	reject	XSD2009
+Complex/complex013/complex013.n1.xml@1.1	invalid	reject	XSD2009
 Complex/complex013/complex013.n2.xml@1.0	invalid	reject	XSD2003
 Complex/complex013/complex013.n2.xml@1.1	invalid	reject	XSD2003
 Complex/complex013/complex013.v1.xml@1.0	valid	accept	-
 Complex/complex013/complex013.v1.xml@1.1	valid	accept	-
 Complex/complex013/complex013.v2.xml@1.0	valid	accept	-
 Complex/complex013/complex013.v2.xml@1.1	valid	accept	-
-Complex/complex014/complex013.n1.xml@1.0	invalid	accept	-
-Complex/complex014/complex013.n1.xml@1.1	invalid	accept	-
+Complex/complex014/complex013.n1.xml@1.0	invalid	reject	XSD2009
+Complex/complex014/complex013.n1.xml@1.1	invalid	reject	XSD2009
 Complex/complex014/complex013.n2.xml@1.0	invalid	reject	XSD2003
 Complex/complex014/complex013.n2.xml@1.1	invalid	reject	XSD2003
 Complex/complex014/complex013.v1.xml@1.0	valid	accept	-
@@ -879,24 +879,24 @@ ElemDecl/name00805/name00805_p.xml@1.0	valid	accept	-
 ElemDecl/name00805/name00805_p.xml@1.1	valid	accept	-
 ElemDecl/nillable00101m1/nillable00101m1_p.xml@1.0	valid	accept	-
 ElemDecl/nillable00101m1/nillable00101m1_p.xml@1.1	valid	accept	-
-ElemDecl/nillable00101m2/nillable00101m2_n.xml@1.0	invalid	accept	-
-ElemDecl/nillable00101m2/nillable00101m2_n.xml@1.1	invalid	accept	-
+ElemDecl/nillable00101m2/nillable00101m2_n.xml@1.0	invalid	reject	XSD2004+XSD2019
+ElemDecl/nillable00101m2/nillable00101m2_n.xml@1.1	invalid	reject	XSD2004+XSD2019
 ElemDecl/nillable00102m/nillable00102m1_n.xml@1.0	invalid	reject	XSD2004
 ElemDecl/nillable00102m/nillable00102m1_n.xml@1.1	invalid	reject	XSD2004
 ElemDecl/nillable00102m/nillable00102m1_p.xml@1.0	valid	accept	-
 ElemDecl/nillable00102m/nillable00102m1_p.xml@1.1	valid	accept	-
-ElemDecl/nillable00201m/nillable00201m1_n.xml@1.0	invalid	accept	-
-ElemDecl/nillable00201m/nillable00201m1_n.xml@1.1	invalid	accept	-
-ElemDecl/nillable00201m/nillable00201m2_n.xml@1.0	invalid	accept	-
-ElemDecl/nillable00201m/nillable00201m2_n.xml@1.1	invalid	accept	-
+ElemDecl/nillable00201m/nillable00201m1_n.xml@1.0	invalid	reject	XSD2019
+ElemDecl/nillable00201m/nillable00201m1_n.xml@1.1	invalid	reject	XSD2019
+ElemDecl/nillable00201m/nillable00201m2_n.xml@1.0	invalid	reject	XSD2019
+ElemDecl/nillable00201m/nillable00201m2_n.xml@1.1	invalid	reject	XSD2019
 ElemDecl/nillable00201m/nillable00201m3_p.xml@1.0	valid	accept	-
 ElemDecl/nillable00201m/nillable00201m3_p.xml@1.1	valid	accept	-
 ElemDecl/nillable00301m/nillable00301m1_n.xml@1.0	invalid	reject	XSD2009
 ElemDecl/nillable00301m/nillable00301m1_n.xml@1.1	invalid	reject	XSD2009
 ElemDecl/nillable00301m/nillable00301m1_p.xml@1.0	valid	accept	-
 ElemDecl/nillable00301m/nillable00301m1_p.xml@1.1	valid	accept	-
-ElemDecl/nillable00302m/nillable00302m1_n.xml@1.0	invalid	accept	-
-ElemDecl/nillable00302m/nillable00302m1_n.xml@1.1	invalid	accept	-
+ElemDecl/nillable00302m/nillable00302m1_n.xml@1.0	invalid	reject	XSD2009
+ElemDecl/nillable00302m/nillable00302m1_n.xml@1.1	invalid	reject	XSD2009
 ElemDecl/nillable00302m/nillable00302m1_p.xml@1.0	valid	accept	-
 ElemDecl/nillable00302m/nillable00302m1_p.xml@1.1	valid	accept	-
 ElemDecl/nillable00401m1/nillable00401m1_p.xml@1.0	valid	accept	-
@@ -40878,7 +40878,7 @@ Wild/wild030/wild030.v1.xml@1.1	valid	accept	-
 Wild/wild030/wild030.v2.xml@1.1	valid	accept	-
 Wild/wild040/wild040.n1.xml@1.1	invalid	reject	XSD2008
 Wild/wild040/wild040.v1.xml@1.1	valid	accept	-
-Wild/wild042/wild042.n1.xml@1.1	invalid	accept	-
+Wild/wild042/wild042.n1.xml@1.1	invalid	reject	XSD2004
 Wild/wild042/wild042.v1.xml@1.1	valid	accept	-
 Wild/wild043/wild043.n1.xml@1.1	invalid	reject	XSD2005
 Wild/wild043/wild043.n2.xml@1.1	invalid	reject	XSD2005
@@ -41962,8 +41962,8 @@ suntest/xsd011/xsd011.n00.xml@1.0	invalid	reject	XSD2003
 suntest/xsd011/xsd011.n00.xml@1.1	invalid	reject	XSD2003
 suntest/xsd011/xsd011.n01.xml@1.0	invalid	reject	XSD2003
 suntest/xsd011/xsd011.n01.xml@1.1	invalid	reject	XSD2003
-suntest/xsd011/xsd011.n02.xml@1.0	invalid	accept	-
-suntest/xsd011/xsd011.n02.xml@1.1	invalid	accept	-
+suntest/xsd011/xsd011.n02.xml@1.0	invalid	reject	XSD2009
+suntest/xsd011/xsd011.n02.xml@1.1	invalid	reject	XSD2009
 suntest/xsd011/xsd011.n03.xml@1.0	invalid	reject	XSD2004
 suntest/xsd011/xsd011.n03.xml@1.1	invalid	reject	XSD2004
 suntest/xsd011/xsd011.n04.xml@1.0	invalid	reject	XSD2009

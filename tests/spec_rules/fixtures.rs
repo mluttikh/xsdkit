@@ -21,6 +21,7 @@ use xsdkit::{Conformance, DiagCode, Diagnostics, Resolver, SchemaSetBuilder, Sch
 pub const COVERED: &[&str] = &[
     "structures#cos-all-limited",
     "structures#cos-nonambig",
+    "structures#cvc-elt",
     "structures#sic-attr-decl",
     "structures#sic-attrDefault",
     "structures#sic-elt-decl",
@@ -667,6 +668,56 @@ fn cos_nonambig_resolves_an_element_against_a_wildcard_only_in_1_1() {
         DiagCode::AmbiguousContentModel,
     );
     expect_clean(&build(Version::Xsd11, body));
+}
+
+// ---------------------------------------------------------------------------
+// structures#cvc-elt — Element Locally Valid (Element)
+// ---------------------------------------------------------------------------
+//
+// A validation rule, so each fixture is a schema that builds and a document
+// that breaks it. Clause 3 is the one with fixtures: `xsi:nil` was read
+// without asking the declaration, so any element could be marked nil and
+// emptied of whatever its content model required.
+
+/// Clause 3.1: a declaration that is not nillable admits no `xsi:nil`.
+#[test]
+fn cvc_elt_rejects_xsi_nil_on_an_element_that_is_not_nillable() {
+    let s = schema(r#"<xs:element name="v" type="xs:int"/>"#);
+    let r = s.document_validator().validate(
+        r#"<t:v xmlns:t="urn:t" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+                xsi:nil="true"/>"#,
+    );
+    expect_code(&r.diagnostics, DiagCode::NilNotAllowed);
+}
+
+/// Clause 3.2.3.2: nil would take away the value a `fixed` pins.
+#[test]
+fn cvc_elt_rejects_xsi_nil_on_an_element_with_a_fixed_value() {
+    let s = schema(r#"<xs:element name="v" type="xs:int" nillable="true" fixed="5"/>"#);
+    let r = s.document_validator().validate(
+        r#"<t:v xmlns:t="urn:t" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+                xsi:nil="true"/>"#,
+    );
+    expect_code(&r.diagnostics, DiagCode::NilNotAllowed);
+}
+
+/// The near-miss: the same document against a nillable declaration is nil,
+/// valid, and says so in the PSVI.
+#[test]
+fn cvc_elt_accepts_xsi_nil_on_a_nillable_element() {
+    let s = schema(r#"<xs:element name="v" type="xs:int" nillable="true"/>"#);
+    let mut nil = None;
+    let r = s.document_validator().validate_with(
+        r#"<t:v xmlns:t="urn:t" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+                xsi:nil="true"/>"#,
+        |ev| {
+            if let PsviEvent::StartElement { nil: n, .. } = ev {
+                nil = Some(n);
+            }
+        },
+    );
+    assert!(r.is_valid(), "{}", r.diagnostics);
+    assert_eq!(nil, Some(true));
 }
 
 // ---------------------------------------------------------------------------

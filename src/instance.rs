@@ -65,6 +65,9 @@ pub enum PsviEvent {
         type_id: TypeId,
         /// Whether `xsi:type` chose that type rather than the declaration.
         type_from_instance: bool,
+        /// Whether the element is nil: it says `xsi:nil="true"`, and its
+        /// declaration is `nillable` with no `fixed` value. An `xsi:nil` the
+        /// declaration does not allow is an error, and leaves this false.
         nil: bool,
         attributes: Vec<AttributePsvi>,
         line: u32,
@@ -145,6 +148,9 @@ struct Frame<'a> {
     matcher: Option<ContentMatcher<'a>>,
     /// Character data accumulated for this element.
     text: String,
+    /// Whether any element has started inside this one, which a nil element
+    /// may not contain any more than it may contain text.
+    has_children: bool,
     nil: bool,
     /// Inside a `processContents="skip"` wildcard nothing is checked until
     /// the subtree closes.
@@ -934,6 +940,10 @@ impl<'a, S: FnMut(PsviEvent) -> ControlFlow<()>> Run<'a, '_, S> {
         // `end`, after the subtree has been accounted for.
         self.path
             .push(qname.unwrap_or(crate::names::QName::UNKNOWN));
+        // A nil element may not contain one, so its parent has to know.
+        if let Some(parent) = self.stack.last_mut() {
+            parent.has_children = true;
+        }
 
         // Inside a skipped subtree nothing is checked, but nesting still has
         // to be tracked so the right `End` closes it.
@@ -949,6 +959,7 @@ impl<'a, S: FnMut(PsviEvent) -> ControlFlow<()>> Run<'a, '_, S> {
                 type_id: self.v.schemas.builtin(crate::datatypes::Builtin::AnyType),
                 matcher: None,
                 text: String::new(),
+                has_children: false,
                 nil: false,
                 skipped: true,
                 announced: false,
@@ -1026,12 +1037,7 @@ impl<'a, S: FnMut(PsviEvent) -> ControlFlow<()>> Run<'a, '_, S> {
             );
         }
 
-        // `xsi:nil` is an `xs:boolean`, so `1` says the same as `true`.
-        let nil = attrs.iter().any(|a| {
-            a.namespace.as_deref() == Some(XSI)
-                && a.local == "nil"
-                && matches!(a.value.trim(), "true" | "1")
-        });
+        let nil = !skipped && self.resolve_nil(&attrs, declaration, &shown, line);
 
         if !skipped {
             self.open_identity(declaration);
@@ -1087,11 +1093,80 @@ impl<'a, S: FnMut(PsviEvent) -> ControlFlow<()>> Run<'a, '_, S> {
             type_id,
             matcher,
             text: String::new(),
+            has_children: false,
             nil,
             skipped,
             announced: true,
             line,
         });
+    }
+
+    /// Whether the element is nil, reporting an `xsi:nil` its declaration
+    /// does not allow.
+    ///
+    /// *Element Locally Valid (Element)* clause 3, which reads the same in
+    /// both versions. A declaration that is not `nillable` admits no `xsi:nil`
+    /// at all — `xsi:nil="false"` included, because the attribute is the
+    /// problem, not its value. A nillable one with a `fixed` value cannot be
+    /// nil either, since nil would take away the value the schema fixed.
+    ///
+    /// Either way the element is not nil, so its content is checked as though
+    /// the attribute were absent. That is what keeps `xsi:nil` from switching
+    /// off a content model it was never allowed to touch.
+    ///
+    /// An element with no declaration — one a `lax` wildcard admitted and
+    /// nothing declares — has no `nillable` to break and cannot be nil.
+    fn resolve_nil(
+        &mut self,
+        attrs: &[RawAttr],
+        declaration: Option<ElementId>,
+        shown: &str,
+        line: u32,
+    ) -> bool {
+        let Some(attr) = attrs
+            .iter()
+            .find(|a| a.namespace.as_deref() == Some(XSI) && a.local == "nil")
+        else {
+            return false;
+        };
+        // `xsi:nil` is an `xs:boolean`, so `1` says the same as `true`.
+        let said = match attr.value.trim() {
+            "true" | "1" => true,
+            "false" | "0" => false,
+            other => {
+                self.error(
+                    DiagCode::InvalidValue,
+                    line,
+                    format!("`xsi:nil` on `{shown}` is `{other}`, which is not an xs:boolean"),
+                );
+                return false;
+            }
+        };
+        let Some(d) = declaration else {
+            return false;
+        };
+        let decl = &self.v.schemas[d];
+        let reason = if !decl.nillable {
+            "its declaration is not nillable"
+        } else if said && decl.value_constraint.as_ref().is_some_and(|c| c.is_fixed()) {
+            "its declaration has a fixed value"
+        } else {
+            return said;
+        };
+        let span = Span::new(&self.uri, line);
+        self.diags.push(
+            Diagnostic::error(
+                DiagCode::NilNotAllowed,
+                format!("`{shown}` carries `xsi:nil`, but {reason}"),
+            )
+            .at(span)
+            .with_help(if decl.nillable {
+                "a fixed value and nil are alternatives: leave out `xsi:nil`, or the `fixed`"
+            } else {
+                "declare the element with `nillable=\"true\"`, or leave out `xsi:nil`"
+            }),
+        );
+        false
     }
 
     /// Asks the enclosing content model whether this element belongs here,
@@ -1604,7 +1679,10 @@ impl<'a, S: FnMut(PsviEvent) -> ControlFlow<()>> Run<'a, '_, S> {
         let shown = self.show(frame.name);
 
         if frame.nil {
-            if !frame.text.trim().is_empty() {
+            // No character or element children at all — whitespace included,
+            // since it is character data like any other. The content model is
+            // not asked: nil is what satisfies it.
+            if frame.has_children || !frame.text.is_empty() {
                 self.error(
                     DiagCode::NilElementNotEmpty,
                     line,
