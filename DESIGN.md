@@ -241,9 +241,12 @@ Anything else — normalising it, summarising it, parsing it against a guess at
 the convention — destroys precisely the information the caller reached for it
 to get.
 
-**Design consequence:** `appinfo` is stored verbatim, with prefixes resolved
-so no namespace binding is lost. Interpreting it is the caller's job, because
-only the caller knows the convention.
+**Design consequence:** `appinfo` is stored verbatim, as the source text of
+its content. Each top-level element in it gains a declaration for every
+namespace in scope, as lxml does when it serializes a subtree, so it parses
+on its own and no binding is lost, including one that only a QName in an
+attribute uses. Interpreting it is the caller's job, because only the caller
+knows the convention.
 
 ### 1.10 Practical hazards worth designing against
 

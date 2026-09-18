@@ -107,6 +107,42 @@ fn the_scale_survives_parsing() {
     assert_eq!(scale("NaN"), None);
 }
 
+/// The exponent is an `i32`, and the scale is that exponent negated. The one
+/// exponent whose negation has no `i32` is refused, and so is anything that
+/// only reaches it once the fractional digits are counted in.
+/// `1e-2147483648` used to be accepted, and rendering it asked for more
+/// zeroes than memory has room for, which aborted the process.
+#[test]
+fn the_exponent_stays_inside_what_the_scale_can_hold() {
+    let scale = |s: &str| match ok(s) {
+        Value::PrecisionDecimal(p) => p.scale(),
+        other => panic!("expected a precisionDecimal, got {other}"),
+    };
+    assert_eq!(scale("1e2147483647"), Some(-2147483647));
+    assert_eq!(scale("1e-2147483647"), Some(2147483647));
+    assert_eq!(scale("1.5e-2147483646"), Some(2147483647));
+    assert_eq!(ok("1e2147483647").to_string(), "1E2147483647");
+    assert_eq!(ok("1e-2147483647").to_string(), "1E-2147483647");
+    assert_eq!(ok("-15e-2147483647").to_string(), "-15E-2147483647");
+
+    rejects("1e-2147483648");
+    rejects("1.5e-2147483647");
+    rejects("1.5e-2147483648");
+    rejects("1e2147483648");
+    rejects("1e-9999999999");
+
+    // Comparing works out where the number sits, which is the exponent plus
+    // the digits before it. That used to overflow at the top of the range.
+    use std::cmp::Ordering::*;
+    let cmp = |a: &str, b: &str| ok(a).partial_cmp_value(&ok(b));
+    assert_eq!(cmp("10e2147483647", "1e2147483647"), Some(Greater));
+    assert_eq!(cmp("99e2147483647", "1e2147483647"), Some(Greater));
+    assert_eq!(cmp("1e2147483647", "10e2147483646"), Some(Equal));
+    assert_eq!(cmp("1e-2147483647", "1e-2147483646"), Some(Less));
+    assert_eq!(cmp("-1e-2147483647", "1e-2147483647"), Some(Less));
+    assert_eq!(cmp("1e-2147483647", "1e2147483647"), Some(Less));
+}
+
 /// `totalDigits` counts the digits as *written*, where for an `xs:decimal` it
 /// counts them canonically. `1.000` has four here and one there.
 #[test]

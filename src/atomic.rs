@@ -1617,9 +1617,16 @@ impl PrecisionDecimal {
         // Each fractional digit is one power of ten the exponent has to
         // absorb, which is what turns `1.00` into 100 × 10^-2 and gives the
         // value its scale.
+        //
+        // `i32::MIN` is out as well: the scale is the exponent negated, and
+        // [`Self::scale`] hands it out as an `i32`, which has no room for its
+        // negation. Rendering one used to negate it anyway, and asking for
+        // that many zeroes panicked on a capacity overflow. `1e-2147483648`
+        // was enough, from any document.
         let exponent = i32::try_from(frac.len())
             .ok()
             .and_then(|f| exp.checked_sub(f))
+            .filter(|&e| e != i32::MIN)
             .ok_or("the exponent is out of range")?;
         Ok(Self(Pd::Finite {
             negative,
@@ -1733,7 +1740,9 @@ impl PartialOrd for PrecisionDecimal {
 fn compare_magnitude(a: (u128, i32), b: (u128, i32)) -> std::cmp::Ordering {
     let (ad, bd) = (a.0.to_string(), b.0.to_string());
     // Where the number sits, independent of how many digits were written.
-    let adjusted = |digits: &str, exponent: i32| exponent + digits.len() as i32 - 1;
+    // In `i64`: an exponent near `i32::MAX` plus a few digits does not fit
+    // back into an `i32`.
+    let adjusted = |digits: &str, exponent: i32| i64::from(exponent) + digits.len() as i64 - 1;
     match adjusted(&ad, a.1).cmp(&adjusted(&bd, b.1)) {
         std::cmp::Ordering::Equal => {}
         other => return other,

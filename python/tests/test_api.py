@@ -8,6 +8,7 @@ import pickle
 import sysconfig
 import weakref
 from decimal import Decimal
+from xml.etree import ElementTree
 
 import pytest
 
@@ -306,8 +307,27 @@ def test_appinfo_is_verbatim():
     assert e.doc == "Ambient pressure."
     (info,) = e.appinfo
     assert info.source == "urn:units"
-    assert "hPa" in info.xml
-    assert "{urn:u}unit" in info.xml, "prefixes are resolved so none can be lost"
+    # The source text, with every namespace in scope declared on the element,
+    # so an XML parser takes it as it is and `xs:` prefixes in it resolve.
+    unit = ElementTree.fromstring(info.xml)
+    assert unit.tag == "{urn:u}unit"
+    assert unit.text == "hPa"
+    assert 'xmlns:xs="http://www.w3.org/2001/XMLSchema"' in info.xml
+
+
+def test_appinfo_keeps_escapes_and_documentation_keeps_markup_text():
+    s = build(
+        '<xs:element name="e" type="xs:string"><xs:annotation>'
+        "<xs:documentation>Hello <b>bold</b> world, 1 &lt; 2.</xs:documentation>"
+        "<xs:appinfo><note>a &amp; b &lt;c&gt;</note></xs:appinfo>"
+        "</xs:annotation></xs:element>"
+    )
+    e = s.element(NS, "e")
+    assert e.doc == "Hello bold world, 1 < 2."
+    (info,) = e.appinfo
+    note = ElementTree.fromstring(info.xml)
+    assert note.text == "a & b <c>"
+    assert len(note) == 0, "escaped markup is text, not an element"
 
 
 # --- the real schema -------------------------------------------------------
@@ -348,6 +368,19 @@ def test_xsd_11_is_reachable():
 
     with pytest.raises(ValueError, match="1.0"):
         xsdkit.SchemaSet.from_string(xsd, version="1.2")
+
+
+def test_an_out_of_range_precision_decimal_is_invalid_not_a_panic():
+    """`1e-2147483648` used to be accepted, and turning it into a Python value
+    asked for more zeroes than memory holds, which raised `PanicException`."""
+    xsd = (
+        f'<xs:schema xmlns:xs="{XS}" xmlns:tns="{NS}" targetNamespace="{NS}">'
+        '<xs:element name="e" type="xs:precisionDecimal"/>'
+        "</xs:schema>"
+    )
+    s = xsdkit.SchemaSet.from_string(xsd, version="1.1")
+    assert not s.validate(f'<e xmlns="{NS}">1e-2147483648</e>').is_valid
+    assert s.decode(f'<e xmlns="{NS}">1e-2147483647</e>') == "1E-2147483647"
 
 
 def test_schema_set_is_a_mapping_of_global_elements():

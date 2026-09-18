@@ -472,6 +472,10 @@ fn parse_normalized(
                 )
             })
             .collect::<Result<Vec<_>, _>>()?;
+        // Each of the three is declared with a `minLength` of 1.
+        if items.is_empty() {
+            return Err(err(builtin, raw, "expected at least one item"));
+        }
         return Ok(Value::List(items));
     }
 
@@ -1156,6 +1160,12 @@ mod tests {
             parse(Builtin::IdRefs, "ok 1bad").is_err(),
             "items are validated too"
         );
+        // Declared with a `minLength` of 1, so none of the three is empty.
+        for b in [Builtin::NmTokens, Builtin::IdRefs, Builtin::Entities] {
+            for empty in ["", "   ", "\t\n"] {
+                assert!(parse(b, empty).is_err(), "{b} {empty:?}");
+            }
+        }
     }
 
     #[test]
