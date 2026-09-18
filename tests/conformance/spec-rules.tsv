@@ -65,7 +65,7 @@ datatypes	totalDigits-valid-restriction	Schema Component Constraint	totalDigits 
 datatypes	whiteSpace-valid-restriction	Schema Component Constraint	whiteSpace valid restriction	no	-	a step may widen whiteSpace from collapse back to preserve	-
 datatypes	src-enumeration-value	Schema Representation Constraint	Enumeration value	yes	src/facets.rs	each enumerated literal is a value of the base	-
 datatypes	src-list-itemType-or-simpleType	Schema Representation Constraint	itemType attribute or simpleType child	yes	src/load.rs	itemType beside an inline simpleType	-
-datatypes	src-pattern-value	Schema Representation Constraint	Pattern value	yes	src/regex.rs	the pattern compiles as an XSD regular expression	-
+datatypes	src-pattern-value	Schema Representation Constraint	Pattern value	yes	src/regex.rs, src/facets.rs	the pattern translates as an XSD regular expression, and one that does not is reported where it is declared; an unknown block name is a warning and matches every character, as XSD 1.1 G.4.2.4 prescribes	fixtures
 datatypes	src-restriction-base-or-simpleType	Schema Representation Constraint	base attribute or simpleType child	yes	src/load.rs	base beside an inline simpleType	-
 datatypes	src-union-memberTypes-or-simpleTypes	Schema Representation Constraint	memberTypes attribute or simpleType children	yes	src/load.rs	memberTypes beside inline simpleTypes	-
 datatypes	cvc-assertions-valid	Validation Rule	Assertions Valid	no	-	assertions are not evaluated	-

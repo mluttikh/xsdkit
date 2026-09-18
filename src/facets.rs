@@ -27,15 +27,19 @@
 //! AGENTS.md §7); these four are each complete on their own.
 
 use crate::datatypes::{Builtin, FacetKind, FacetSet, Variety};
-use crate::diagnostics::{DiagCode, Diagnostic, Diagnostics, Span};
+use crate::diagnostics::{DiagCode, Diagnostic, Diagnostics, Severity, Span};
+use crate::load::Conformance;
 use crate::model::{Schemas, SimpleType, TypeId};
-use crate::validate::{self, ValueValidator};
+use crate::validate::{self, PatternIssue, ValueValidator};
 use crate::values::{self, ParseContext};
 use std::cmp::Ordering;
 
-pub(crate) fn check_all(schemas: &Schemas) -> Diagnostics {
+pub(crate) fn check_all(schemas: &Schemas, mode: Conformance) -> Diagnostics {
     let mut diags = Diagnostics::new();
+    // Building the validator is what compiles every pattern, once, for this
+    // check and every value check after it.
     let v = schemas.value_validator();
+    patterns_compile(schemas, mode, &mut diags);
     for (id, def) in schemas.iter_types() {
         let Some(s) = def.as_simple() else { continue };
         // The built-ins are installed by this crate, not read from a
@@ -59,6 +63,68 @@ fn check_one(
     values_are_in_the_base_space(schemas, id, s, diags);
     consistent(s, &s.span, diags);
     narrows(schemas, v, id, s, diags);
+}
+
+/// *Pattern value*: an `xs:pattern` has to be an XSD regular expression.
+///
+/// A pattern that was not compiled is a constraint that is not enforced, and
+/// it used to be dropped without a word: the schema built clean and the type
+/// accepted anything. Each is now reported once, at the type that declared
+/// it, in one of three ways:
+///
+/// - not a regular expression at all — an error, as for any facet value the
+///   schema gets wrong;
+/// - valid, but more than the `regex` crate will compile — an error, since
+///   the type would otherwise be quietly permissive, and a warning under
+///   `Conformance::Lax`, where a caller has said imperfect is acceptable;
+/// - a `\p{IsX}` naming a block this build does not know — a warning, as XSD
+///   1.1 §G.4.2.4 asks, since the escape then matches every character. The
+///   same section lets a processor refuse the name only when the user asks.
+fn patterns_compile(schemas: &Schemas, mode: Conformance, diags: &mut Diagnostics) {
+    for (id, issue) in &schemas.prepared_types().pattern_issues {
+        let span = schemas[*id].span().clone();
+        let d = match issue {
+            PatternIssue::Invalid(e) => Diagnostic::error(
+                DiagCode::InvalidFacetValue,
+                format!(
+                    "`xs:pattern` value `{}` is not an XSD regular expression: {}",
+                    e.pattern, e.reason
+                ),
+            )
+            .at(span),
+            PatternIssue::Unsupported(e) => {
+                let mut d = Diagnostic::error(
+                    DiagCode::Unsupported,
+                    format!(
+                        "`xs:pattern` value `{}` cannot be compiled, so it is not enforced: {}",
+                        e.pattern, e.reason
+                    ),
+                )
+                .at(span)
+                .with_help(
+                    "the pattern is valid XSD; the regular expression engine refused it, \
+                     most often for its size",
+                );
+                if mode == Conformance::Lax {
+                    d.severity = Severity::Warning;
+                }
+                d
+            }
+            PatternIssue::UnknownBlock { pattern, block } => Diagnostic::warning(
+                DiagCode::InvalidFacetValue,
+                format!(
+                    "`xs:pattern` value `{pattern}` names `Is{block}`, which is not a Unicode {} \
+                     block, so it matches every character",
+                    crate::regex::UNICODE_VERSION
+                ),
+            )
+            .at(span)
+            .with_help(
+                "block names drop spaces and keep hyphens and case, as in `IsLatin-1Supplement`",
+            ),
+        };
+        diags.push(d);
+    }
 }
 
 /// Rule 4: a restriction may only narrow.

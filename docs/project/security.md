@@ -74,6 +74,12 @@ crate, which has no backtracking and therefore no catastrophic-backtracking
 class of denial of service — a pattern is linear in the input, whatever it
 looks like. A pattern is also one of the fuzz targets.
 
+The `regex` crate does cap how large a compiled expression may grow, so a
+valid pattern such as `(a{1000}){1000}` can be refused. That is reported as
+`XSD1104` at the type that declared it — an error by default, a warning under
+`lax` — rather than dropped, since a pattern that is not enforced is a type
+that accepts more than it says.
+
 ## Fuzzed
 
 Four `cargo-fuzz` targets, seeded from the W3C corpus:

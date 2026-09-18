@@ -903,6 +903,12 @@ pub struct Schemas {
     /// attribute (that is [`SourceDocument::version`]) — this is the language
     /// the reader applied, and the two lexical spaces differ.
     pub(crate) xsd_version: crate::load::Version,
+    /// Every simple type prepared for value checks, patterns compiled.
+    ///
+    /// Not serialized — a compiled regular expression has no wire form — so a
+    /// schema read back from a cache builds it again on first use.
+    #[cfg_attr(feature = "serde", serde(skip))]
+    pub(crate) prepared_types: std::sync::OnceLock<crate::validate::PreparedTypes>,
 }
 
 macro_rules! arena_index {

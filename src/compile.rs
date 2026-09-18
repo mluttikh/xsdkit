@@ -76,6 +76,7 @@ pub(crate) fn compile(mut loader: Loader<'_>, mode: Conformance) -> (Schemas, Di
         content_models: Vec::new(),
         documents,
         xsd_version: version,
+        prepared_types: std::sync::OnceLock::new(),
     };
 
     // Step 6 needs the query API, so it runs on the assembled value.
@@ -85,7 +86,9 @@ pub(crate) fn compile(mut loader: Loader<'_>, mode: Conformance) -> (Schemas, Di
     diags.extend(content_diags);
     // Steps 7 and 8 likewise: the facet rules need the base type resolved,
     // and the declaration rules need the composed facet set on top of that.
-    diags.extend(crate::facets::check_all(&schemas));
+    // The facet rules are also where every pattern is compiled, once, and
+    // kept on the schema for every value check after.
+    diags.extend(crate::facets::check_all(&schemas, mode));
     diags.extend(crate::declarations::check_all(&schemas));
     diags.extend(crate::derivation::check_all(&schemas));
     diags.extend(crate::groups::check_all(&schemas));

@@ -228,6 +228,36 @@ def test_facets_expose_the_and_or_pattern_structure():
     assert f.patterns == [["[A-Z]+", "[0-9]+"]]
 
 
+def test_a_pattern_that_cannot_be_enforced_is_a_schema_error():
+    """A pattern that did not compile used to be dropped without a word, so the
+    schema loaded and its type accepted anything. Nothing on the Python side
+    could see that it had happened."""
+    body = '<xs:simpleType name="T"><xs:restriction base="xs:string"><xs:pattern value="{}"/></xs:restriction></xs:simpleType>'
+    with pytest.raises(xsdkit.SchemaError) as excinfo:
+        build(body.format("[^]"))
+    assert "XSD1306" in {d.code for d in excinfo.value.diagnostics}
+
+    # Valid XSD the regex engine refuses is this library's limit, so `lax`
+    # takes the schema with a warning saying the pattern is not enforced.
+    with pytest.raises(xsdkit.SchemaError):
+        build(body.format("(a{1000}){1000}"))
+    s = build(body.format("(a{1000}){1000}"), conformance="lax")
+    assert s.type(NS, "T").is_valid("anything")
+
+
+def test_an_unknown_unicode_block_matches_anything_with_a_warning():
+    """XSD 1.1 says an unrecognised block name matches every character and is
+    worth a warning, not an error — so a schema written against a newer Unicode
+    still loads."""
+    xsd = (
+        f'<xs:schema xmlns:xs="{XS}"><xs:simpleType name="T"><xs:restriction base="xs:string">'
+        '<xs:pattern value="\\p{IsKlingon}+"/></xs:restriction></xs:simpleType></xs:schema>'
+    )
+    s, diagnostics = xsdkit.load_string(xsd, conformance="strict")
+    assert [(d.code, d.severity) for d in diagnostics] == [("XSD1306", "warning")]
+    assert s.type(None, "T").is_valid("anything at all")
+
+
 def test_list_and_union_varieties():
     s = build(
         '<xs:simpleType name="Ints"><xs:list itemType="xs:int"/></xs:simpleType>'

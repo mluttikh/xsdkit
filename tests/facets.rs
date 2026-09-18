@@ -244,6 +244,168 @@ fn qname_and_notation_facet_values_are_left_alone() {
 }
 
 // ---------------------------------------------------------------------------
+// Patterns that cannot be enforced
+// ---------------------------------------------------------------------------
+//
+// A pattern that was not compiled used to be dropped in silence: the schema
+// built clean, and the type accepted anything. `simple021` in the W3C suite
+// is `[^]`, an empty class, and was accepted as a valid schema in both
+// versions.
+
+fn pattern_type(pattern: &str) -> String {
+    format!(
+        r#"<xs:simpleType name="T">
+             <xs:restriction base="xs:string"><xs:pattern value="{pattern}"/></xs:restriction>
+           </xs:simpleType>
+           <xs:element name="e" type="tns:T"/>"#
+    )
+}
+
+fn build_as(mode: Conformance, body: &str) -> Compilation {
+    SchemaSetBuilder::new()
+        .conformance(mode)
+        .text(schema(body), "mem://main.xsd")
+        .compile()
+}
+
+/// Not a regular expression at all is the schema's mistake, whatever the
+/// conformance mode — the same as any other facet value it gets wrong.
+#[test]
+fn a_pattern_that_is_not_a_regular_expression_is_an_error() {
+    for pattern in ["[^]", "[a-z", "\\q", "\\p{Greek}"] {
+        for mode in [Conformance::Strict, Conformance::Lax] {
+            let d = build_as(mode, &pattern_type(pattern)).diagnostics;
+            assert!(
+                d.errors()
+                    .any(|e| e.code == DiagCode::InvalidFacetValue && e.message.contains(pattern)),
+                "`{pattern}` under {mode:?}:\n{d}"
+            );
+        }
+    }
+}
+
+/// A valid pattern the engine will not compile is this crate's limit, not
+/// the schema's mistake, so it is `Unsupported`. Still an error by default —
+/// the type would otherwise accept what its pattern forbids — and a warning
+/// under `Conformance::Lax`.
+#[test]
+fn a_pattern_the_engine_refuses_is_reported_not_dropped() {
+    let body = pattern_type("(a{1000}){1000}");
+    let strict = build_as(Conformance::Strict, &body).diagnostics;
+    assert!(
+        strict
+            .errors()
+            .any(|e| e.code == DiagCode::Unsupported && e.message.contains("size limit")),
+        "{strict}"
+    );
+
+    let lax = build_as(Conformance::Lax, &body);
+    assert!(!lax.diagnostics.has_errors(), "{}", lax.diagnostics);
+    assert!(
+        lax.diagnostics
+            .iter()
+            .any(|d| d.code == DiagCode::Unsupported && d.severity == Severity::Warning),
+        "{}",
+        lax.diagnostics
+    );
+}
+
+/// One bad pattern is one diagnostic, at the type that wrote it — not one for
+/// every type that inherits it.
+#[test]
+fn a_bad_pattern_is_reported_once_where_it_is_declared() {
+    let body = r#"<xs:simpleType name="Base">
+                    <xs:restriction base="xs:string"><xs:pattern value="[^]"/></xs:restriction>
+                  </xs:simpleType>
+                  <xs:simpleType name="A"><xs:restriction base="tns:Base"/></xs:simpleType>
+                  <xs:simpleType name="B"><xs:restriction base="tns:A"/></xs:simpleType>"#;
+    assert_eq!(count(body, DiagCode::InvalidFacetValue), 1);
+}
+
+/// Steps that compile keep applying when another one does not. A single bad
+/// step used to take every pattern on the type down with it.
+#[test]
+fn the_steps_that_compile_still_apply_beside_one_that_does_not() {
+    let body = r#"<xs:simpleType name="Digits">
+                    <xs:restriction base="xs:string"><xs:pattern value="[0-9]+"/></xs:restriction>
+                  </xs:simpleType>
+                  <xs:simpleType name="T">
+                    <xs:restriction base="tns:Digits"><xs:pattern value="(a{1000}){1000}"/></xs:restriction>
+                  </xs:simpleType>"#;
+    let s = build_as(Conformance::Lax, body).schemas;
+    let t = s.type_id(Some(NS), "T").expect("T");
+    let v = s.value_validator();
+    assert!(v.validate(t, "123").is_ok());
+    assert!(
+        v.validate(t, "abc").is_err(),
+        "the base's pattern still applies"
+    );
+    assert_eq!(v.pattern_errors().len(), 1);
+    assert_eq!(
+        v.pattern_errors()[0].0,
+        t,
+        "reported against the type that wrote it"
+    );
+}
+
+/// XSD 1.1 §G.4.2.4: a block name this build does not know is not an error.
+/// The escape matches every character and the processor warns, which is what
+/// keeps a schema written against a newer Unicode loading on an older one.
+#[test]
+fn an_unknown_block_is_a_warning_and_matches_everything() {
+    let compiled = build_as(Conformance::Strict, &pattern_type("\\p{IsKlingon}+"));
+    assert!(
+        !compiled.diagnostics.has_errors(),
+        "{}",
+        compiled.diagnostics
+    );
+    assert!(
+        compiled
+            .diagnostics
+            .iter()
+            .any(|d| d.severity == Severity::Warning
+                && d.code == DiagCode::InvalidFacetValue
+                && d.message.contains("IsKlingon")),
+        "{}",
+        compiled.diagnostics
+    );
+    let s = compiled.schemas;
+    let t = s.type_id(Some(NS), "T").expect("T");
+    assert!(s.value_validator().validate(t, "anything at all").is_ok());
+}
+
+/// A block outside the 27 the table used to list. It failed to translate,
+/// and the pattern went with it.
+#[test]
+fn every_unicode_block_is_enforced() {
+    let compiled = build_as(
+        Conformance::Strict,
+        &pattern_type("\\p{IsCJKCompatibility}+"),
+    );
+    assert!(compiled.diagnostics.is_empty(), "{}", compiled.diagnostics);
+    let s = compiled.schemas;
+    let t = s.type_id(Some(NS), "T").expect("T");
+    let v = s.value_validator();
+    assert!(v.validate(t, "\u{3300}\u{33FF}").is_ok());
+    assert!(v.validate(t, "abc").is_err());
+}
+
+/// Read back from a cache, a schema has no compiled patterns — a regular
+/// expression has no wire form — and has to build them on first use rather
+/// than check nothing.
+#[cfg(feature = "serde")]
+#[test]
+fn patterns_survive_a_round_trip_through_serde() {
+    let s = build_as(Conformance::Strict, &pattern_type("[0-9]{3}")).schemas;
+    let bytes = postcard::to_allocvec(&s).expect("serialize");
+    let back: Schemas = postcard::from_bytes(&bytes).expect("deserialize");
+    let t = back.type_id(Some(NS), "T").expect("T");
+    let v = back.value_validator();
+    assert!(v.validate(t, "123").is_ok());
+    assert!(v.validate(t, "12a").is_err());
+}
+
+// ---------------------------------------------------------------------------
 // Facets that contradict each other
 // ---------------------------------------------------------------------------
 

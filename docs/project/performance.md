@@ -25,7 +25,10 @@ more than eight times the time.
 Compilation is the expensive half, and it is meant to be. Reference resolution,
 attribute group flattening, substitution group closure and automaton
 construction all happen once, so that afterwards `children`, `repeats` and
-`accepts` are lookups rather than searches.
+`accepts` are lookups rather than searches. The same goes for simple types:
+each one's facets are composed and its patterns compiled while the schema
+compiles, so a `validate`, `decode` or `Type.validate` call pays for the
+document it is given and not for the size of the schema.
 
 A `Schemas` is `Send + Sync` and immutable. One compiled schema can serve every
 thread in a process, and the Python bindings release the GIL around `build()`,

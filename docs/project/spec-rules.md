@@ -36,7 +36,7 @@ name a site and every diagnostic code to be attributable to a row here.
 
 A ✓ in the last column means this crate has its **own** fixtures for the
 rule — the smallest schema that violates it, and a near-miss that must still
-load — in `tests/spec_rules/fixtures.rs`. 11 of 143 rules so far. The W3C
+load — in `tests/spec_rules/fixtures.rs`. 12 of 143 rules so far. The W3C
 suite cannot supply those: it offers about 220 negative schema cases per
 version to share among 66 Schema Component Constraints, so a rule can be
 enforced by a check nobody has ever seen fire.
@@ -199,7 +199,7 @@ enforced by a check nobody has ever seen fire.
 | [Enumeration value](https://www.w3.org/TR/xmlschema11-2/#src-enumeration-value) | yes | `src/facets.rs` — each enumerated literal is a value of the base |  |
 | [itemType attribute or simpleType child](https://www.w3.org/TR/xmlschema11-2/#src-list-itemType-or-simpleType) | yes | `src/load.rs` — itemType beside an inline simpleType |  |
 | [memberTypes attribute or simpleType children](https://www.w3.org/TR/xmlschema11-2/#src-union-memberTypes-or-simpleTypes) | yes | `src/load.rs` — memberTypes beside inline simpleTypes |  |
-| [Pattern value](https://www.w3.org/TR/xmlschema11-2/#src-pattern-value) | yes | `src/regex.rs` — the pattern compiles as an XSD regular expression |  |
+| [Pattern value](https://www.w3.org/TR/xmlschema11-2/#src-pattern-value) | yes | `src/regex.rs, src/facets.rs` — the pattern translates as an XSD regular expression, and one that does not is reported where it is declared; an unknown block name is a warning and matches every character, as XSD 1.1 G.4.2.4 prescribes | ✓ |
 
 ### Validation Rules
 
