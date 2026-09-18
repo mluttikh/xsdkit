@@ -91,6 +91,12 @@ cannot express this.
 - **UPA is automaton determinism.** A content model is 1-unambiguous exactly
   when no state has two out-transitions with overlapping labels. Do not write
   a separate UPA checker; extend the overlap test instead.
+  `PairFinder` decides which pairs `overlap` is asked about — two elements
+  only through a name they share, a wildcard with everything — so it must
+  stay a superset: a candidate that can overlap without sharing a name has to
+  be paired there as well, or the ambiguity is missed in silence.
+  `the_pair_finder_misses_no_overlapping_pair` checks it against asking every
+  pair.
 - **Occurrence ranges are unrolled, not counted.** `a{2,4}` becomes three
   positions. This keeps the automaton ordinary — no counter machinery — and
   it is what makes `a{2,2}, a` correctly *not* a UPA breach, where collapsing
@@ -371,6 +377,16 @@ cannot express this.
   compiled regex has no wire form, so a deserialized schema rebuilds it on
   first use). `tests/performance.rs` holds 200 validations to the same cost
   against four times the patterns.
+- **A content model costs its follow relation, and no more.** A repeated
+  choice of *n* elements, or a sequence of *n* optional ones, has close to
+  *n²* edges, so quadratic is the floor. It was cubic twice over: the UPA check
+  compared every pair of every state's targets, building a hash set for each
+  comparison, and `Builder::link` asked each follow row whether it already
+  held an edge with `contains`. A thousand elements took 6.4 s as a sequence
+  and 19 s as a choice; they take 10 ms and 5 ms. `PairFinder` and a bitset per
+  follow row are why, and both keep the output identical — the same
+  diagnostics, and the same follow rows in the same order, which is the order
+  the matcher tries them in.
 
 ### 9. Security
 - Network fetching is **opt-in**: `FileResolver` refuses `http(s)://`.
