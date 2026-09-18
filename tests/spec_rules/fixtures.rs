@@ -19,6 +19,7 @@ use xsdkit::{Conformance, DiagCode, Diagnostics, Resolver, SchemaSetBuilder, Sch
 
 /// The rules with fixtures below, as `spec#anchor`.
 pub const COVERED: &[&str] = &[
+    "datatypes#src-pattern-value",
     "structures#cos-all-limited",
     "structures#cos-nonambig",
     "structures#cvc-elt",
@@ -668,6 +669,39 @@ fn cos_nonambig_resolves_an_element_against_a_wildcard_only_in_1_1() {
         DiagCode::AmbiguousContentModel,
     );
     expect_clean(&build(Version::Xsd11, body));
+}
+
+// ---------------------------------------------------------------------------
+// datatypes#src-pattern-value — Pattern value
+// ---------------------------------------------------------------------------
+//
+// The row claimed this for as long as the translator existed, but a pattern
+// that failed to translate was dropped without a diagnostic, so nothing ever
+// fired: `saxonData/Simple/simple021` loaded clean in both versions.
+
+/// `[^]` is a negated class with nothing in it, which the grammar does not
+/// allow: a `charClassExpr` holds at least one member.
+#[test]
+fn src_pattern_value_rejects_a_pattern_that_is_not_a_regular_expression() {
+    for d in build_both(
+        r#"<xs:simpleType name="T">
+             <xs:restriction base="xs:string"><xs:pattern value="[^]"/></xs:restriction>
+           </xs:simpleType>"#,
+    ) {
+        expect_code(&d, DiagCode::InvalidFacetValue);
+    }
+}
+
+/// The near-miss: one member is enough.
+#[test]
+fn src_pattern_value_accepts_a_negated_class_with_a_member() {
+    for d in build_both(
+        r#"<xs:simpleType name="T">
+             <xs:restriction base="xs:string"><xs:pattern value="[^a]"/></xs:restriction>
+           </xs:simpleType>"#,
+    ) {
+        expect_clean(&d);
+    }
 }
 
 // ---------------------------------------------------------------------------

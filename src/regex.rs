@@ -19,6 +19,9 @@
 use regex::Regex;
 use std::fmt;
 
+mod blocks;
+pub(crate) use blocks::UNICODE_VERSION;
+
 /// Why an XSD pattern could not be compiled.
 #[derive(Clone, PartialEq, Eq, Debug)]
 pub struct PatternError {
@@ -41,20 +44,70 @@ impl std::error::Error for PatternError {}
 #[derive(Clone, Debug)]
 pub struct PatternStep(Regex);
 
+/// Why one restriction step's patterns could not be compiled, told apart by
+/// whose limitation it is.
+#[derive(Clone, Debug)]
+pub(crate) enum StepError {
+    /// Not an XSD regular expression at all, so the schema is in error.
+    Invalid(PatternError),
+    /// A valid XSD pattern that the `regex` crate will not compile — most
+    /// often one past its size limit. The schema is fine; this crate cannot
+    /// enforce the step.
+    Unsupported(PatternError),
+}
+
+impl StepError {
+    pub(crate) fn into_error(self) -> PatternError {
+        match self {
+            StepError::Invalid(e) | StepError::Unsupported(e) => e,
+        }
+    }
+}
+
 impl PatternStep {
     /// Compiles the alternatives declared at one restriction step.
     pub fn compile(alternatives: &[String]) -> Result<Self, PatternError> {
+        Self::compile_noting(alternatives)
+            .map(|(step, _)| step)
+            .map_err(StepError::into_error)
+    }
+
+    /// [`Self::compile`], saying why a step failed and which block names it
+    /// used that this build does not recognise.
+    ///
+    /// An unrecognised block is not a failure: XSD 1.1 §G.4.2.4 says the
+    /// escape matches every character, and that a processor should warn.
+    pub(crate) fn compile_noting(
+        alternatives: &[String],
+    ) -> Result<(Self, Vec<String>), StepError> {
         let mut branches = Vec::with_capacity(alternatives.len());
+        let mut unknown_blocks = Vec::new();
         for a in alternatives {
-            branches.push(format!("(?:{})", translate(a)?));
+            let (translated, unknown) = translate_noting(a).map_err(StepError::Invalid)?;
+            branches.push(format!("(?:{translated})"));
+            unknown_blocks.extend(unknown);
         }
         // Implicitly anchored: an XSD pattern matches the *whole* value.
         let joined = format!("^(?:{})$", branches.join("|"));
         Regex::new(&joined)
-            .map(PatternStep)
-            .map_err(|e| PatternError {
-                pattern: alternatives.join("|"),
-                reason: e.to_string(),
+            .map(|r| (PatternStep(r), unknown_blocks))
+            .map_err(|e| {
+                // The engine's own report quotes the translated expression,
+                // which is not what the schema wrote; its last line is the
+                // reason.
+                let full = e.to_string();
+                let reason = full
+                    .lines()
+                    .rev()
+                    .map(str::trim)
+                    .find(|l| !l.is_empty())
+                    .unwrap_or(&full)
+                    .trim_start_matches("error: ")
+                    .to_string();
+                StepError::Unsupported(PatternError {
+                    pattern: alternatives.join("|"),
+                    reason,
+                })
             })
     }
 
@@ -107,17 +160,23 @@ impl FromIterator<PatternStep> for Patterns {
 
 /// Translates one XSD pattern into `regex` syntax.
 pub fn translate(pattern: &str) -> Result<String, PatternError> {
+    translate_noting(pattern).map(|(translated, _)| translated)
+}
+
+/// [`translate`], with the block names used that this build does not know.
+fn translate_noting(pattern: &str) -> Result<(String, Vec<String>), PatternError> {
     let mut t = Translator {
         chars: pattern.chars().collect(),
         pos: 0,
         out: String::with_capacity(pattern.len() + 8),
         source: pattern,
+        unknown_blocks: Vec::new(),
     };
     t.regex()?;
     if t.pos != t.chars.len() {
         return Err(t.error("unbalanced `)`"));
     }
-    Ok(t.out)
+    Ok((t.out, t.unknown_blocks))
 }
 
 struct Translator<'a> {
@@ -125,6 +184,8 @@ struct Translator<'a> {
     pos: usize,
     out: String,
     source: &'a str,
+    /// `\p{IsX}` names that are not blocks this build knows, in order.
+    unknown_blocks: Vec<String>,
 }
 
 impl Translator<'_> {
@@ -362,14 +423,11 @@ impl Translator<'_> {
             'I' => format!("^{NAME_START}"),
             'c' => NAME_CHAR.into(),
             'C' => format!("^{NAME_CHAR}"),
-            'p' | 'P' => {
-                let cls = self.unicode_property(c == 'P')?;
-                // Unwrap a bracketed block range for use inside a class.
-                cls.strip_prefix('[')
-                    .and_then(|s| s.strip_suffix(']'))
-                    .unwrap_or(&cls)
-                    .to_string()
-            }
+            // A category is `\p{Lu}`, which the `regex` crate reads inside a
+            // class as it does outside one. A block is a bracketed class of
+            // its own, and a class may nest another: splicing its contents in
+            // instead turned `\P{IsX}` into a literal `^` beside the block.
+            'p' | 'P' => self.unicode_property(c == 'P')?,
             other => return Err(self.error(&format!("unknown class escape `\\{other}`"))),
         })
     }
@@ -391,15 +449,81 @@ impl Translator<'_> {
         self.pos += 1;
 
         if let Some(block) = name.strip_prefix("Is") {
-            let (lo, hi) = unicode_block(block)
-                .ok_or_else(|| self.error(&format!("unknown Unicode block `Is{block}`")))?;
-            return Ok(format!(
-                "[{}\\u{{{lo:04X}}}-\\u{{{hi:04X}}}]",
-                if negated { "^" } else { "" }
-            ));
+            // `IsBlock ::= 'Is' [a-zA-Z0-9#x2D]+`. Anything else is not a
+            // block escape, and so not a regular expression.
+            if block.is_empty() || !block.chars().all(|c| c.is_ascii_alphanumeric() || c == '-') {
+                return Err(self.error(&format!("`Is{block}` is not a block name")));
+            }
+            return Ok(self.block_class(block, negated));
+        }
+        // The categories are a fixed grammar, not whatever the `regex` crate
+        // happens to accept: `\p{Greek}` is a script there and nothing here,
+        // and `\p{Cs}` is excluded because no XML character is a surrogate.
+        if !is_xsd_category(&name) {
+            return Err(self.error(&format!(
+                "`{name}` is neither a Unicode category nor an `Is` block name"
+            )));
         }
         Ok(format!("\\{}{{{}}}", if negated { 'P' } else { 'p' }, name))
     }
+
+    /// `\p{IsX}` or `\P{IsX}`, as a bracketed class that reads the same on its
+    /// own and nested inside another class.
+    ///
+    /// Two sets need spelling out, since the `regex` crate has no syntax for
+    /// either: every character, and none.
+    fn block_class(&mut self, name: &str, negated: bool) -> String {
+        const EVERY: &str = "[\\u{0}-\\u{10FFFF}]";
+        const NONE: &str = "[^\\u{0}-\\u{10FFFF}]";
+        let Ok(at) = blocks::BLOCKS.binary_search_by(|(n, _)| (*n).cmp(name)) else {
+            // XSD 1.1 §G.4.2.4: an unrecognised block name is not an error by
+            // default. `\p{IsX}` and `\P{IsX}` both denote every character, so
+            // the constraint goes unenforced, and the processor should warn.
+            self.unknown_blocks.push(name.to_string());
+            return EVERY.to_string();
+        };
+        let ranges: String = scalar_ranges(blocks::BLOCKS[at].1)
+            .map(|(lo, hi)| format!("\\u{{{lo:X}}}-\\u{{{hi:X}}}"))
+            .collect();
+        // The surrogate blocks hold no character a document can contain, so
+        // the block is empty and its complement is everything.
+        match (ranges.is_empty(), negated) {
+            (true, false) => NONE.to_string(),
+            (true, true) => EVERY.to_string(),
+            (false, false) => format!("[{ranges}]"),
+            (false, true) => format!("[^{ranges}]"),
+        }
+    }
+}
+
+/// A block's ranges with the surrogates cut out, which the `regex` crate
+/// refuses to name because they are not Unicode scalar values.
+fn scalar_ranges(ranges: &[(u32, u32)]) -> impl Iterator<Item = (u32, u32)> + '_ {
+    ranges.iter().flat_map(|&(lo, hi)| {
+        [(lo, hi.min(0xD7FF)), (lo.max(0xE000), hi)]
+            .into_iter()
+            .filter(|(a, b)| a <= b)
+    })
+}
+
+/// `IsCategory` in XSD: a general category or one of its groups. `Cs` is
+/// absent on purpose.
+fn is_xsd_category(name: &str) -> bool {
+    let mut chars = name.chars();
+    let (Some(group), rest) = (chars.next(), chars.as_str()) else {
+        return false;
+    };
+    let members = match group {
+        'L' => "ultmo",
+        'M' => "nce",
+        'N' => "dlo",
+        'P' => "cdseifo",
+        'Z' => "slp",
+        'S' => "mcko",
+        'C' => "cfon",
+        _ => return false,
+    };
+    rest.is_empty() || (rest.len() == 1 && members.contains(rest))
 }
 
 fn single_char_class(c: char) -> String {
@@ -426,43 +550,6 @@ const NAME_CHAR: &str = ":A-Z_a-z\\u{C0}-\\u{D6}\\u{D8}-\\u{F6}\\u{F8}-\\u{2FF}\
 \\u{370}-\\u{37D}\\u{37F}-\\u{1FFF}\\u{200C}-\\u{200D}\\u{2070}-\\u{218F}\
 \\u{2C00}-\\u{2FEF}\\u{3001}-\\u{D7FF}\\u{F900}-\\u{FDCF}\\u{FDF0}-\\u{FFFD}\
 \\u{10000}-\\u{EFFFF}\\-.0-9\\u{B7}\\u{300}-\\u{36F}\\u{203F}-\\u{2040}";
-
-/// The Unicode blocks XSD names with `\p{IsXxx}`.
-///
-/// Only the blocks that appear in real schemas; an unknown one is a
-/// diagnostic rather than a silent mismatch.
-fn unicode_block(name: &str) -> Option<(u32, u32)> {
-    Some(match name {
-        "BasicLatin" => (0x0000, 0x007F),
-        "Latin-1Supplement" => (0x0080, 0x00FF),
-        "LatinExtended-A" => (0x0100, 0x017F),
-        "LatinExtended-B" => (0x0180, 0x024F),
-        "IPAExtensions" => (0x0250, 0x02AF),
-        "SpacingModifierLetters" => (0x02B0, 0x02FF),
-        "CombiningDiacriticalMarks" => (0x0300, 0x036F),
-        "Greek" | "GreekandCoptic" => (0x0370, 0x03FF),
-        "Cyrillic" => (0x0400, 0x04FF),
-        "Hebrew" => (0x0590, 0x05FF),
-        "Arabic" => (0x0600, 0x06FF),
-        "Thai" => (0x0E00, 0x0E7F),
-        "GeneralPunctuation" => (0x2000, 0x206F),
-        "SuperscriptsandSubscripts" => (0x2070, 0x209F),
-        "CurrencySymbols" => (0x20A0, 0x20CF),
-        "LetterlikeSymbols" => (0x2100, 0x214F),
-        "NumberForms" => (0x2150, 0x218F),
-        "Arrows" => (0x2190, 0x21FF),
-        "MathematicalOperators" => (0x2200, 0x22FF),
-        "BoxDrawing" => (0x2500, 0x257F),
-        "GeometricShapes" => (0x25A0, 0x25FF),
-        "MiscellaneousSymbols" => (0x2600, 0x26FF),
-        "Hiragana" => (0x3040, 0x309F),
-        "Katakana" => (0x30A0, 0x30FF),
-        "CJKUnifiedIdeographs" => (0x4E00, 0x9FFF),
-        "HangulSyllables" => (0xAC00, 0xD7AF),
-        "Specials" => (0xFFF0, 0xFFFF),
-        _ => return None,
-    })
-}
 
 #[cfg(test)]
 mod tests {
@@ -616,9 +703,122 @@ mod tests {
         }
     }
 
+    /// XSD 1.1 §G.4.2.4: a name that fits `IsBlock` but names no block this
+    /// processor knows is not an error. `\p{IsX}` and `\P{IsX}` both denote
+    /// every character, and the name is handed back so a warning can say so.
     #[test]
-    fn an_unknown_block_is_named_in_the_error() {
-        let e = PatternStep::compile(&["\\p{IsKlingon}".into()]).unwrap_err();
-        assert!(e.to_string().contains("IsKlingon"), "{e}");
+    fn an_unknown_block_matches_every_character_and_is_named() {
+        for escape in ["\\p{IsKlingon}", "\\P{IsKlingon}", "[\\p{IsKlingon}]"] {
+            let (step, unknown) = PatternStep::compile_noting(&[format!("{escape}+")])
+                .unwrap_or_else(|e| panic!("{escape}: {:?}", e));
+            assert_eq!(unknown, vec!["Klingon".to_string()], "{escape}");
+            for value in ["a", "é", "日本", "\n\r"] {
+                assert!(step.is_match(value), "{escape} on {value:?}");
+            }
+        }
+    }
+
+    /// Every block Unicode defines, not the few that used to be listed — a
+    /// name outside the old table failed to translate, and the whole pattern
+    /// was then dropped without a word.
+    #[test]
+    fn every_unicode_block_is_recognised() {
+        assert!(matches("\\p{IsCJKCompatibility}", "\u{3300}"));
+        assert!(!matches("\\p{IsCJKCompatibility}", "a"));
+        assert!(matches("\\p{IsLatin-1Supplement}+", "éü"));
+        assert!(matches(
+            "\\p{IsMathematicalAlphanumericSymbols}",
+            "\u{1D400}"
+        ));
+        // Hyphens and case are part of the name; nothing is normalised.
+        let (_, unknown) = PatternStep::compile_noting(&["\\p{Islatin-1supplement}".into()])
+            .expect("an unknown name still compiles");
+        assert_eq!(unknown, vec!["latin-1supplement".to_string()]);
+        assert_eq!(blocks::UNICODE_VERSION, "16.0.0");
+        assert!(
+            blocks::BLOCKS.windows(2).all(|w| w[0].0 < w[1].0),
+            "the table must be sorted and unique for its binary search"
+        );
+    }
+
+    /// XSD 1.1 asks for the Unicode 3.1 names that XSD 1.0 schemas use and
+    /// later versions of Unicode renamed.
+    #[test]
+    fn the_superseded_unicode_3_1_names_still_work() {
+        assert!(matches("\\p{IsGreek}+", "αβγ"));
+        assert!(matches("\\p{IsCombiningMarksforSymbols}", "\u{20D0}"));
+        for c in ["\u{E000}", "\u{F0000}", "\u{10FFFD}"] {
+            assert!(matches("\\p{IsPrivateUse}", c), "{c:?}");
+        }
+    }
+
+    /// No XML character is a surrogate, so the surrogate blocks are empty —
+    /// and the `regex` crate refuses to name those code points at all.
+    #[test]
+    fn a_surrogate_block_is_empty() {
+        assert!(!matches("\\p{IsHighSurrogates}", "a"));
+        assert!(matches("\\P{IsHighSurrogates}", "a"));
+        assert!(matches("[a\\p{IsLowSurrogates}]", "a"));
+    }
+
+    /// A block inside a class is a class of its own. Its contents used to be
+    /// spliced in, which made `\P{IsX}` a literal `^` beside the block.
+    #[test]
+    fn a_negated_block_inside_a_class() {
+        assert!(matches("[a\\P{IsBasicLatin}]", "a"));
+        assert!(matches("[a\\P{IsBasicLatin}]", "é"));
+        assert!(!matches("[a\\P{IsBasicLatin}]", "b"));
+        assert!(!matches("[a\\P{IsBasicLatin}]", "^"));
+        assert!(matches("[\\p{IsBasicLatin}-[a-z]]", "Q"));
+        assert!(!matches("[\\p{IsBasicLatin}-[a-z]]", "q"));
+    }
+
+    /// The categories are XSD's grammar, not whatever the `regex` crate
+    /// accepts: it knows scripts and binary properties that XSD does not, and
+    /// XSD leaves out `Cs`.
+    #[test]
+    fn only_xsd_categories_are_categories() {
+        for ok in ["L", "Lu", "Nd", "P", "Pi", "Zs", "So", "C", "Cn"] {
+            assert!(
+                PatternStep::compile(&[format!("\\p{{{ok}}}")]).is_ok(),
+                "\\p{{{ok}}}"
+            );
+        }
+        for bad in [
+            "Greek",
+            "Alphabetic",
+            "Cs",
+            "Lx",
+            "Lul",
+            "",
+            "Is",
+            "Is Greek",
+        ] {
+            let e = PatternStep::compile_noting(&[format!("\\p{{{bad}}}")]);
+            assert!(
+                matches!(e, Err(StepError::Invalid(_))),
+                "\\p{{{bad}}} must be an invalid pattern, got {e:?}"
+            );
+        }
+    }
+
+    /// A valid pattern the engine refuses is told apart from an invalid one:
+    /// the first is this crate's limit, the second the schema's mistake.
+    #[test]
+    fn the_engine_refusing_a_pattern_is_not_the_pattern_being_invalid() {
+        let e = PatternStep::compile_noting(&["(a{1000}){1000}".into()]);
+        let Err(StepError::Unsupported(e)) = e else {
+            panic!("expected the engine to refuse it, got {e:?}");
+        };
+        assert!(e.reason.contains("size limit"), "{}", e.reason);
+        assert!(
+            !e.reason.contains('\n'),
+            "the reason is one line, not the engine's quoted expression: {}",
+            e.reason
+        );
+        assert!(matches!(
+            PatternStep::compile_noting(&["[^]".into()]),
+            Err(StepError::Invalid(_))
+        ));
     }
 }

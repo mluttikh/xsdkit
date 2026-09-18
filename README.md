@@ -297,7 +297,7 @@ versions read as each, 10,511 runs in all:
 | | XSD 1.0 | XSD 1.1 |
 |---|---|---|
 | valid schemas accepted | **99.8%** (4,563 / 4,573) | **99.8%** (5,238 / 5,248) |
-| invalid schemas rejected | **77.4%** (171 / 221) | **69.7%** (327 / 469) |
+| invalid schemas rejected | **77.8%** (172 / 221) | **69.9%** (328 / 469) |
 
 The gap is the honest description of what this is. `xsdkit` reads real
 schemas well; it enforces some of the specification's *validity constraints*

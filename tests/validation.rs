@@ -262,11 +262,30 @@ fn a_complex_type_has_no_value_space() {
 #[test]
 fn uncompilable_patterns_are_reported_not_ignored() {
     // A pattern that never runs makes a type quietly more permissive than it
-    // declares, so it must surface.
-    let s = build(
-        r#"<xs:simpleType name="Bad">
-             <xs:restriction base="xs:string"><xs:pattern value="[a-z"/></xs:restriction>
-           </xs:simpleType>"#,
+    // declares, so it must surface — as a diagnostic when the schema is
+    // compiled, which is where a caller looks, and on the validator for one
+    // whose diagnostics are gone.
+    let Compilation {
+        schemas: s,
+        diagnostics,
+    } = SchemaSetBuilder::new()
+        .text(
+            format!(
+                r#"<xs:schema xmlns:xs="http://www.w3.org/2001/XMLSchema"
+                              xmlns:tns="{NS}" targetNamespace="{NS}">
+                     <xs:simpleType name="Bad">
+                       <xs:restriction base="xs:string"><xs:pattern value="[a-z"/></xs:restriction>
+                     </xs:simpleType>
+                   </xs:schema>"#
+            ),
+            "mem://main.xsd",
+        )
+        .compile();
+    assert!(
+        diagnostics
+            .errors()
+            .any(|d| d.code == DiagCode::InvalidFacetValue),
+        "an invalid pattern must be a compile error:\n{diagnostics}"
     );
     let v = s.value_validator();
     assert!(

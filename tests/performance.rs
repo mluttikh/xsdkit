@@ -143,3 +143,58 @@ fn validating_a_large_document_does_not_scale_quadratically() {
          a per-event line scan is the usual cause"
     );
 }
+
+/// A schema with `n` pattern-restricted simple types, and one element that
+/// uses none of them.
+fn schema_with_patterns(n: usize) -> String {
+    let mut s = format!(r#"<xs:schema xmlns:xs="{XS}">"#);
+    for i in 0..n {
+        s.push_str(&format!(
+            r#"<xs:simpleType name="t{i}"><xs:restriction base="xs:string">
+                 <xs:pattern value="[A-Z]{{2}}-[0-9]{{{}}}"/>
+               </xs:restriction></xs:simpleType>"#,
+            i % 9 + 1
+        ));
+    }
+    s.push_str(r#"<xs:element name="root" type="xs:int"/></xs:schema>"#);
+    s
+}
+
+#[test]
+fn a_validation_does_not_pay_for_every_pattern_in_the_schema() {
+    // Every validation builds a validator, and every validator used to compile
+    // every pattern the schema declares: 20 ms a call against two thousand of
+    // them, for a document of one element. Compiling once, with the schema,
+    // makes the per-call cost independent of how many patterns it holds.
+    let compile = |n: usize| {
+        SchemaSetBuilder::new()
+            .text(schema_with_patterns(n), "urn:scale")
+            .compile()
+            .into_result()
+            .expect("the generated schema must compile")
+    };
+    let small = compile(200);
+    let large = compile(800);
+
+    let time = |s: &xsdkit::Schemas| {
+        let start = Instant::now();
+        for _ in 0..200 {
+            let report = s.document_validator().validate("<root>1</root>");
+            assert!(report.is_valid(), "{}", report.diagnostics);
+        }
+        start.elapsed()
+    };
+    time(&small); // warm up
+    let best = |s: &xsdkit::Schemas| (0..3).map(|_| time(s)).min().unwrap();
+    let small = best(&small);
+    let large = best(&large);
+
+    // Four times the patterns. Paying for them per call says four; paying
+    // once, at compile time, says one.
+    let ratio = large.as_secs_f64() / small.as_secs_f64().max(1e-6);
+    assert!(
+        ratio < 2.5,
+        "200 validations grew {ratio:.1}x for 4x the patterns ({small:?} -> {large:?}); \
+         something is compiling the schema's patterns per call again"
+    );
+}

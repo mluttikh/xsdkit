@@ -154,6 +154,22 @@ cannot express this.
   `xs:int`.
 - **Patterns OR within a restriction step, AND across steps.**
   `FacetSet::patterns` is `Vec<Vec<String>>` for exactly this reason.
+- **A pattern that is not enforced is reported, never dropped.** Each
+  restriction step's patterns compile once, on the type that wrote them, and
+  a step that will not compile is a diagnostic at that type: `XSD1306` when it
+  is not an XSD regular expression, `XSD1104` when it is valid and the `regex`
+  crate refuses it (a warning under `Conformance::Lax`). They used to be
+  dropped without a word — the schema built clean, the type accepted anything,
+  and `saxonData/Simple/simple021` (`[^]`) was accepted as a valid schema. A
+  step that fails no longer takes the type's other steps with it.
+- **An unknown Unicode block matches every character, with a warning.** XSD
+  1.1 §G.4.2.4 says so, and lets a processor refuse the name only at the
+  user's request. The block table is `src/regex/blocks.rs`, generated from the
+  `Blocks.txt` of the Unicode version the `regex` crate implements (16.0.0) by
+  `scripts/generate-unicode-blocks.py`, plus the three Unicode 3.1 names XSD
+  1.1 asks processors to keep. Bump it with the crate. A block is emitted as a
+  class of its own, so `\P{IsX}` nests correctly inside `[...]`; the category
+  names are XSD's fixed grammar, not whatever the `regex` crate accepts.
 - **The innermost enumeration wins**; a restriction may only narrow.
 - **Chameleon includes** key the document cache on `(uri, coerced_ns)`, never
   on `uri` alone. The same file yields different components per includer.
@@ -346,6 +362,15 @@ cannot express this.
   replaced it. `tests/performance.rs` pins the shape: 4× the input must not
   cost more than 8× the time. If you add a per-node query to the loader, check
   what it costs on the *whole* document, not on one node.
+- **A value check must not rebuild what the schema already settled.** Every
+  validation builds a `ValueValidator`, and each one used to compose every
+  type's facets and compile every pattern in the schema — 20 ms a call against
+  two thousand patterns, for a one-element document, from Rust and from every
+  Python entry point alike. That work is `PreparedTypes`, built once while the
+  schema compiles and kept on `Schemas` in a `OnceLock` that serde skips (a
+  compiled regex has no wire form, so a deserialized schema rebuilds it on
+  first use). `tests/performance.rs` holds 200 validations to the same cost
+  against four times the patterns.
 
 ### 9. Security
 - Network fetching is **opt-in**: `FileResolver` refuses `http(s)://`.
@@ -503,7 +528,7 @@ over both would be an average of two different languages:
 | | XSD 1.0 | XSD 1.1 |
 |---|---|---|
 | valid schemas accepted | **99.8%** (4,563/4,573) | **99.8%** (5,238/5,248) |
-| invalid schemas rejected | **77.4%** (171/221) | **69.7%** (327/469) |
+| invalid schemas rejected | **77.8%** (172/221) | **69.9%** (328/469) |
 
 The single figure this replaced was 66.5%, and the difference is not a change
 in the code: it was an average over a mix of 1.0 and 1.1 runs, which is a

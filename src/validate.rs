@@ -24,7 +24,7 @@
 
 use crate::datatypes::{Builtin, FacetSet, Variety, WhiteSpace};
 use crate::model::{Schemas, TypeDefinition, TypeId};
-use crate::regex::Patterns;
+use crate::regex::{PatternError, PatternStep, Patterns, StepError};
 use crate::values::{self, FacetViolation, Value, ValueError};
 use std::fmt;
 
@@ -74,7 +74,7 @@ impl fmt::Display for ValidationError {
 impl std::error::Error for ValidationError {}
 
 /// One simple type, prepared for repeated value checks.
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 struct Prepared {
     variety: Variety,
     /// The nearest built-in ancestor, which is what values are parsed
@@ -90,69 +90,144 @@ struct Prepared {
     members: Vec<TypeId>,
 }
 
+/// Why a pattern a schema declares is not enforced as it was written.
+#[derive(Clone, Debug)]
+pub(crate) enum PatternIssue {
+    /// Not an XSD regular expression, so the schema is in error.
+    Invalid(PatternError),
+    /// A valid XSD pattern the `regex` crate will not compile. The step is
+    /// not enforced.
+    Unsupported(PatternError),
+    /// A `\p{IsX}` naming a block this build does not know, which XSD 1.1
+    /// says matches every character.
+    UnknownBlock { pattern: String, block: String },
+}
+
+/// Every simple type in a schema, prepared for value checks: facets composed
+/// down each chain, and patterns compiled.
+///
+/// Built once per [`Schemas`] and kept on it. Every [`ValueValidator`] used
+/// to build its own, and every validation builds a validator, so validating a
+/// one-element document compiled every pattern in the schema — 20 ms a call
+/// against two thousand of them.
+#[derive(Clone, Debug, Default)]
+pub(crate) struct PreparedTypes {
+    types: Vec<Option<Prepared>>,
+    /// The steps that could not be compiled, for
+    /// [`ValueValidator::pattern_errors`].
+    pattern_errors: Vec<(TypeId, PatternError)>,
+    /// Everything about a pattern worth a diagnostic, keyed by the type that
+    /// declared it rather than by every type that inherits it, so one bad
+    /// pattern is reported once.
+    pub(crate) pattern_issues: Vec<(TypeId, PatternIssue)>,
+}
+
+impl PreparedTypes {
+    pub(crate) fn build(schemas: &Schemas) -> Self {
+        let n = schemas.component_counts().types;
+
+        // Each restriction step compiled once, on the type that wrote it. A
+        // type's patterns are its ancestors' steps and then its own, so
+        // compiling the composed set for every type, as this used to, compiled
+        // a base's pattern again for each type below it — and one step that
+        // would not compile dropped the others with it.
+        let mut own: Vec<Vec<PatternStep>> = vec![Vec::new(); n];
+        let mut pattern_errors = Vec::new();
+        let mut pattern_issues = Vec::new();
+        for (id, def) in schemas.iter_types() {
+            let Some(simple) = def.as_simple() else {
+                continue;
+            };
+            for step in &simple.facets.patterns {
+                match PatternStep::compile_noting(step) {
+                    Ok((compiled, unknown)) => {
+                        own[id.index()].push(compiled);
+                        for block in unknown {
+                            pattern_issues.push((
+                                id,
+                                PatternIssue::UnknownBlock {
+                                    pattern: step.join("|"),
+                                    block,
+                                },
+                            ));
+                        }
+                    }
+                    Err(e) => {
+                        let (issue, error) = match e {
+                            StepError::Invalid(e) => (PatternIssue::Invalid(e.clone()), e),
+                            StepError::Unsupported(e) => (PatternIssue::Unsupported(e.clone()), e),
+                        };
+                        pattern_errors.push((id, error));
+                        pattern_issues.push((id, issue));
+                    }
+                }
+            }
+        }
+
+        let types = (0..n)
+            .map(|i| {
+                let id = TypeId::from_index(i);
+                schemas[id].as_simple()?;
+                let facets = effective_facets(schemas, id);
+                let builtin = nearest_builtin(schemas, id);
+                let white_space = facets.effective_white_space(
+                    builtin.map_or(WhiteSpace::Preserve, Builtin::white_space),
+                );
+                let (variety, item, members) = effective_variety(schemas, id);
+                // Root first, as `effective_facets` composes them.
+                let patterns = simple_chain(schemas, id)
+                    .into_iter()
+                    .rev()
+                    .flat_map(|t| own[t.index()].iter().cloned())
+                    .collect();
+                Some(Prepared {
+                    variety,
+                    builtin,
+                    white_space,
+                    facets,
+                    patterns,
+                    item,
+                    members,
+                })
+            })
+            .collect();
+
+        Self {
+            types,
+            pattern_errors,
+            pattern_issues,
+        }
+    }
+}
+
 /// Validates values against a compiled schema's simple types.
 ///
-/// Compiling patterns is expensive, so a validator is built once and reused —
-/// the same "compile once, use many" shape as [`Schemas`] itself.
+/// Cheap to make: the facets and patterns it checks against were prepared
+/// once, when the schema was compiled, and are shared by every validator.
 #[derive(Debug)]
 pub struct ValueValidator<'a> {
     schemas: &'a Schemas,
-    prepared: Vec<Option<Prepared>>,
-    /// Patterns that would not compile, reported rather than silently
-    /// ignored: a pattern that never runs makes a type quietly permissive.
-    pattern_errors: Vec<(TypeId, crate::regex::PatternError)>,
+    prepared: &'a PreparedTypes,
 }
 
 impl<'a> ValueValidator<'a> {
-    /// Prepares every simple type in the schema for value checking.
+    /// A validator over every simple type in the schema.
     pub fn new(schemas: &'a Schemas) -> Self {
-        let n = schemas.component_counts().types;
-        let mut prepared = Vec::with_capacity(n);
-        let mut pattern_errors = Vec::new();
-
-        for i in 0..n {
-            let id = TypeId::from_index(i);
-            let Some(simple) = schemas[id].as_simple() else {
-                prepared.push(None);
-                continue;
-            };
-            let facets = effective_facets(schemas, id);
-            let builtin = nearest_builtin(schemas, id);
-            let white_space = facets
-                .effective_white_space(builtin.map_or(WhiteSpace::Preserve, Builtin::white_space));
-            let (variety, item, members) = effective_variety(schemas, id);
-            let patterns = match Patterns::compile(&facets.patterns) {
-                Ok(p) => p,
-                Err(e) => {
-                    pattern_errors.push((id, e));
-                    Patterns::default()
-                }
-            };
-            let _ = simple;
-            prepared.push(Some(Prepared {
-                variety,
-                builtin,
-                white_space,
-                facets,
-                patterns,
-                item,
-                members,
-            }));
-        }
-
         Self {
             schemas,
-            prepared,
-            pattern_errors,
+            prepared: schemas.prepared_types(),
         }
     }
 
-    /// Patterns in the schema that could not be compiled.
+    /// Patterns in the schema that could not be compiled, each with the type
+    /// that declared it.
     ///
-    /// Non-empty means some type is more permissive than it declares, which
-    /// is worth surfacing rather than discovering as a false positive.
-    pub fn pattern_errors(&self) -> &[(TypeId, crate::regex::PatternError)] {
-        &self.pattern_errors
+    /// Non-empty means some type is more permissive than it declares. The
+    /// same failures are diagnostics when the schema is compiled, so this is
+    /// for a caller holding a `Schemas` whose diagnostics are gone — one read
+    /// back from a cache, say.
+    pub fn pattern_errors(&self) -> &[(TypeId, PatternError)] {
+        &self.prepared.pattern_errors
     }
 
     /// Validates a lexical form against a simple type, returning its value.
@@ -198,7 +273,7 @@ impl<'a> ValueValidator<'a> {
         if depth > 64 {
             return Err(ValidationError::CircularType);
         }
-        let Some(p) = self.prepared.get(ty.index()).and_then(Option::as_ref) else {
+        let Some(p) = self.prepared.types.get(ty.index()).and_then(Option::as_ref) else {
             return Err(ValidationError::NotSimple);
         };
 
@@ -334,7 +409,7 @@ impl<'a> ValueValidator<'a> {
     /// Useful because a union's *actual* type is part of the PSVI, not merely
     /// whether the value was valid.
     pub fn union_member(&self, ty: TypeId, lexical: &str) -> Option<TypeId> {
-        let p = self.prepared.get(ty.index())?.as_ref()?;
+        let p = self.prepared.types.get(ty.index())?.as_ref()?;
         if p.variety != Variety::Union {
             return None;
         }
@@ -346,12 +421,12 @@ impl<'a> ValueValidator<'a> {
 
     /// The effective whiteSpace of a simple type.
     pub fn white_space(&self, ty: TypeId) -> Option<WhiteSpace> {
-        Some(self.prepared.get(ty.index())?.as_ref()?.white_space)
+        Some(self.prepared.types.get(ty.index())?.as_ref()?.white_space)
     }
 
     /// The facets in force on a simple type, composed up its whole chain.
     pub fn effective_facets(&self, ty: TypeId) -> Option<&FacetSet> {
-        Some(&self.prepared.get(ty.index())?.as_ref()?.facets)
+        Some(&self.prepared.types.get(ty.index())?.as_ref()?.facets)
     }
 
     pub fn schemas(&self) -> &'a Schemas {
@@ -488,8 +563,21 @@ pub(crate) fn nearest_builtin(schemas: &Schemas, id: TypeId) -> Option<Builtin> 
 }
 
 impl Schemas {
-    /// Builds a [`ValueValidator`] over this schema's simple types.
+    /// A [`ValueValidator`] over this schema's simple types.
+    ///
+    /// Cheap: everything it checks against was prepared once and is kept on
+    /// the schema.
     pub fn value_validator(&self) -> ValueValidator<'_> {
         ValueValidator::new(self)
+    }
+
+    /// Every simple type, prepared once.
+    ///
+    /// Compiling fills this in; a schema read back through serde has none,
+    /// since a compiled regular expression cannot be serialized, and builds
+    /// it the first time a value is checked.
+    pub(crate) fn prepared_types(&self) -> &PreparedTypes {
+        self.prepared_types
+            .get_or_init(|| PreparedTypes::build(self))
     }
 }

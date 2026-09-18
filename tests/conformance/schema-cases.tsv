@@ -4,8 +4,8 @@
 #
 # runs                      10511
 # not scored (queried)      4
-# as XSD 1.0   valid accepted 4563/4573   invalid rejected 171/221
-# as XSD 1.1   valid accepted 5238/5248   invalid rejected 327/469
+# as XSD 1.0   valid accepted 4563/4573   invalid rejected 172/221
+# as XSD 1.1   valid accepted 5238/5248   invalid rejected 328/469
 # accepted as 1.0 and rejected as 1.1: 0, of 4786 groups run as both
 #
 # Re-bless with XSDKIT_BLESS=1; see tests/w3c_suite.rs.
@@ -9721,8 +9721,8 @@ Simple/simple019@1.0	invalid	reject	XSD1203
 Simple/simple019@1.1	invalid	reject	XSD1203
 Simple/simple020@1.0	invalid	reject	XSD1203
 Simple/simple020@1.1	invalid	reject	XSD1203
-Simple/simple021@1.0	invalid	accept	-
-Simple/simple021@1.1	invalid	accept	-
+Simple/simple021@1.0	invalid	reject	XSD1306
+Simple/simple021@1.1	invalid	reject	XSD1306
 Simple/simple022@1.0	valid	accept	-
 Simple/simple022@1.1	valid	accept	-
 Simple/simple040@1.0	valid	accept	-
