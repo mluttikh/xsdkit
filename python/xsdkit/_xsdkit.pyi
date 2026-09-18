@@ -734,7 +734,10 @@ class PsviEvent:
         """Whether `xsi:type` chose the type, rather than the declaration."""
     @property
     def nil(self) -> bool:
-        """Whether the element said `xsi:nil="true"`."""
+        """Whether the element is nil: it said `xsi:nil="true"`, and its
+        declaration allows that. An `xsi:nil` the declaration refuses is an
+        error, and leaves this `False`.
+        """
     @property
     def attributes(self) -> list[AttributeValue]:
         """The attributes, typed, including any the schema supplied."""

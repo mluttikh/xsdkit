@@ -36,7 +36,7 @@ name a site and every diagnostic code to be attributable to a row here.
 
 A ✓ in the last column means this crate has its **own** fixtures for the
 rule — the smallest schema that violates it, and a near-miss that must still
-load — in `tests/spec_rules/fixtures.rs`. 10 of 143 rules so far. The W3C
+load — in `tests/spec_rules/fixtures.rs`. 11 of 143 rules so far. The W3C
 suite cannot supply those: it offers about 220 negative schema cases per
 version to share among 66 Schema Component Constraints, so a rule can be
 enforced by a check nobody has ever seen fire.
@@ -119,7 +119,7 @@ enforced by a check nobody has ever seen fire.
 | [Attribute Locally Valid](https://www.w3.org/TR/xmlschema11-1/#cvc-attribute) | yes | `src/instance.rs` — an attribute's value against its type |  |
 | [Attribute Locally Valid (Use)](https://www.w3.org/TR/xmlschema11-1/#cvc-au) | yes | `src/instance.rs` — required, prohibited and fixed attribute uses |  |
 | [Element Locally Valid (Complex Type)](https://www.w3.org/TR/xmlschema11-1/#cvc-complex-type) | yes | `src/instance.rs` — attributes, content and character data against a complex type |  |
-| [Element Locally Valid (Element)](https://www.w3.org/TR/xmlschema11-1/#cvc-elt) | yes | `src/instance.rs` — abstract, xsi:type, xsi:nil and the declaration's own value constraint |  |
+| [Element Locally Valid (Element)](https://www.w3.org/TR/xmlschema11-1/#cvc-elt) | yes | `src/instance.rs` — abstract, xsi:type, the declaration's own value constraint, and xsi:nil against nillable, fixed and content | ✓ |
 | [Element Locally Valid (Type)](https://www.w3.org/TR/xmlschema11-1/#cvc-type) | yes | `src/instance.rs` — abstract types, and the simple-type path into String Valid |  |
 | [Element Sequence Accepted (Particle)](https://www.w3.org/TR/xmlschema11-1/#cvc-accept) | yes | `src/content.rs` — whether the sequence reaches an accepting state |  |
 | [Element Sequence Locally Valid (Complex Content)](https://www.w3.org/TR/xmlschema11-1/#cvc-complex-content) | yes | `src/content.rs` — the automaton, xs:all counters and open content |  |

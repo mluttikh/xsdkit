@@ -48,8 +48,8 @@ pub struct Decoded {
     /// The declaration matched, absent under a `skip` wildcard or a `lax` one
     /// with nothing to match.
     pub declaration: Option<ElementId>,
-    /// `xsi:nil="true"`. A nil element has no content and that is not the
-    /// same as being empty.
+    /// `xsi:nil="true"`, on an element whose declaration allows it. A nil
+    /// element has no content and that is not the same as being empty.
     pub nil: bool,
     pub attributes: Vec<DecodedAttribute>,
     pub content: DecodedContent,

@@ -4523,7 +4523,9 @@ impl PyPsviEvent {
     fn type_from_instance(&self) -> bool {
         self.type_from_instance
     }
-    /// Whether the element said `xsi:nil="true"`.
+    /// Whether the element is nil: it said `xsi:nil="true"`, and its
+    /// declaration allows that. An `xsi:nil` the declaration refuses is an
+    /// error, and leaves this `False`.
     #[getter]
     fn nil(&self) -> bool {
         self.nil

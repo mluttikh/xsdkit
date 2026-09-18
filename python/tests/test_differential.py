@@ -456,6 +456,19 @@ class Writer:
         name = e.name
         if e.nillable and self.draw(st.integers(0, 3)) == 0:
             return f'<{name} xsi:nil="true"/>'
+        out = self.content(e)
+        if self.breaks():
+            # `xsi:nil` where Element Locally Valid (Element) refuses it: on a
+            # declaration that is not nillable, whatever value it gives, or
+            # around the content of one that is. Content left empty is still
+            # a valid nil, and both engines have to say so.
+            nil = "true" if e.nillable else self.draw(st.sampled_from(["true", "false"]))
+            out = f'<{name} xsi:nil="{nil}"' + out[len(name) + 1 :]
+        return out
+
+    def content(self, e: Element) -> str:
+        """The element as its declaration says it may be written."""
+        name = e.name
         if e.type is None:
             return f'<{name} q="1">t<{name}x>u</{name}x><o:k>v</o:k></{name}>'
         if isinstance(e.type, Simple):
@@ -523,7 +536,8 @@ def cases(draw, broken: bool, wild: bool) -> Case:
     """A schema and a document for it.
 
     `broken` lets the document go wrong in small ways — a bad value, a count
-    out of range, a missing or undeclared attribute, children out of order.
+    out of range, a missing or undeclared attribute, children out of order,
+    `xsi:nil` where the declaration refuses it.
     `wild` lets in wildcards, `xs:anyType` and elements of a list type, which
     the two decoders spell differently.
     """

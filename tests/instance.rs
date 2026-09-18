@@ -1587,6 +1587,145 @@ fn a_nil_element_may_not_have_content() {
     );
 }
 
+/// *Element Locally Valid (Element)* clause 3.1. `xsi:nil` used to be read
+/// without looking at the declaration, so marking any element nil emptied it
+/// of whatever its content model required — a validation bypass, and eight of
+/// the W3C suite's invalid documents.
+///
+/// The attribute is the error, not its value: `xsi:nil="false"` is refused on
+/// a declaration that is not nillable, although it asks for nothing.
+#[test]
+fn xsi_nil_needs_a_nillable_declaration() {
+    let s = schema(
+        r#"<xs:element name="v" type="xs:int"/>
+           <xs:element name="report">
+             <xs:complexType><xs:sequence>
+               <xs:element name="title" type="xs:string"/>
+             </xs:sequence></xs:complexType>
+           </xs:element>"#,
+    );
+    invalid(
+        &s,
+        &format!(r#"<v xmlns="urn:example" {XSI} xsi:nil="true"/>"#),
+        DiagCode::NilNotAllowed,
+    );
+    invalid(
+        &s,
+        &format!(r#"<v xmlns="urn:example" {XSI} xsi:nil="false">42</v>"#),
+        DiagCode::NilNotAllowed,
+    );
+    // Refused, the attribute switches nothing off: the required child is
+    // still required.
+    let d = check(
+        &s,
+        &format!(r#"<report xmlns="urn:example" {XSI} xsi:nil="true"/>"#),
+    );
+    let codes: Vec<_> = d.errors().map(|e| e.code).collect();
+    assert!(
+        codes.contains(&DiagCode::NilNotAllowed) && codes.contains(&DiagCode::IncompleteContent),
+        "expected both XSD2019 and XSD2003, got:\n{d}"
+    );
+}
+
+/// The same clause from the other side: a nillable declaration takes it, in
+/// either spelling, whether the element is nil or not.
+#[test]
+fn a_nillable_declaration_accepts_xsi_nil_either_way() {
+    let s = schema(r#"<xs:element name="v" type="xs:int" nillable="true"/>"#);
+    valid(
+        &s,
+        &format!(r#"<v xmlns="urn:example" {XSI} xsi:nil="0">42</v>"#),
+    );
+    valid(
+        &s,
+        &format!(r#"<v xmlns="urn:example" {XSI} xsi:nil=" true "/>"#),
+    );
+}
+
+/// Clause 3.2.3.1 says no character *or element* children. Only text was
+/// checked, and the content model is not consulted for a nil element, so a
+/// child element passed unremarked.
+#[test]
+fn a_nil_element_may_not_have_child_elements() {
+    let s = schema(
+        r#"<xs:element name="p" nillable="true">
+             <xs:complexType><xs:sequence>
+               <xs:element name="c" type="xs:int" minOccurs="0"/>
+             </xs:sequence></xs:complexType>
+           </xs:element>"#,
+    );
+    invalid(
+        &s,
+        &format!(r#"<p xmlns="urn:example" {XSI} xsi:nil="true"><c>1</c></p>"#),
+        DiagCode::NilElementNotEmpty,
+    );
+    // A comment is not a child in the sense that matters.
+    valid(
+        &s,
+        &format!(r#"<p xmlns="urn:example" {XSI} xsi:nil="true"><!-- none --></p>"#),
+    );
+}
+
+/// Whitespace is character data like any other, so a nil element may not
+/// hold it either. It used to be trimmed away first; Saxonica's
+/// `saxonData/All/all004.n02` expects the newline in `<doc xsi:nil="1">`
+/// to make the document invalid, and libxml2 agrees.
+#[test]
+fn a_nil_element_may_not_hold_whitespace() {
+    let s = schema(r#"<xs:element name="v" type="xs:int" nillable="true"/>"#);
+    invalid(
+        &s,
+        &format!("<v xmlns=\"urn:example\" {XSI} xsi:nil=\"true\">\n</v>"),
+        DiagCode::NilElementNotEmpty,
+    );
+}
+
+/// Clause 3.2.3.2: nil would take away a value the schema fixed, so the two
+/// cannot both hold. Without `xsi:nil` the element takes the fixed value.
+#[test]
+fn a_fixed_element_may_not_be_nil() {
+    let s = schema(r#"<xs:element name="f" type="xs:int" fixed="5" nillable="true"/>"#);
+    invalid(
+        &s,
+        &format!(r#"<f xmlns="urn:example" {XSI} xsi:nil="true"/>"#),
+        DiagCode::NilNotAllowed,
+    );
+    valid(
+        &s,
+        &format!(r#"<f xmlns="urn:example" {XSI} xsi:nil="false"/>"#),
+    );
+}
+
+/// `xsi:nil` is an `xs:boolean`, and a value that is not one is an invalid
+/// attribute rather than a quiet `false`.
+#[test]
+fn xsi_nil_must_be_a_boolean() {
+    let s = schema(r#"<xs:element name="v" type="xs:int" nillable="true"/>"#);
+    invalid(
+        &s,
+        &format!(r#"<v xmlns="urn:example" {XSI} xsi:nil="yes">42</v>"#),
+        DiagCode::InvalidValue,
+    );
+}
+
+/// The PSVI's `nil` is the element's nilled state, not the attribute: an
+/// `xsi:nil` the declaration refuses leaves it false, so a consumer does not
+/// read content as absent that was validated as present.
+#[test]
+fn a_refused_xsi_nil_is_not_reported_as_nil() {
+    let s = schema(r#"<xs:element name="v" type="xs:int"/>"#);
+    let mut nil = None;
+    s.document_validator().validate_with(
+        &format!(r#"<v xmlns="urn:example" {XSI} xsi:nil="true">7</v>"#),
+        |e| {
+            if let PsviEvent::StartElement { nil: n, .. } = e {
+                nil = Some(n);
+            }
+        },
+    );
+    assert_eq!(nil, Some(false));
+}
+
 // ---------------------------------------------------------------------------
 // Substitution groups
 // ---------------------------------------------------------------------------

@@ -163,7 +163,7 @@ structures	cvc-attribute	Validation Rule	Attribute Locally Valid	yes	src/instanc
 structures	cvc-au	Validation Rule	Attribute Locally Valid (Use)	yes	src/instance.rs	required, prohibited and fixed attribute uses	-
 structures	cvc-complex-content	Validation Rule	Element Sequence Locally Valid (Complex Content)	yes	src/content.rs	the automaton, xs:all counters and open content	-
 structures	cvc-complex-type	Validation Rule	Element Locally Valid (Complex Type)	yes	src/instance.rs	attributes, content and character data against a complex type	-
-structures	cvc-elt	Validation Rule	Element Locally Valid (Element)	yes	src/instance.rs	abstract, xsi:type, xsi:nil and the declaration's own value constraint	-
+structures	cvc-elt	Validation Rule	Element Locally Valid (Element)	yes	src/instance.rs	abstract, xsi:type, the declaration's own value constraint, and xsi:nil against nillable, fixed and content	fixtures
 structures	cvc-id	Validation Rule	Validation Root Valid (ID/IDREF)	yes	src/instance.rs	xs:ID uniqueness and xs:IDREF resolution over the validation root	-
 structures	cvc-identity-constraint	Validation Rule	Identity-constraint Satisfied	yes	src/identity.rs	xs:key, xs:keyref and xs:unique, matched against the open-element stack	-
 structures	cvc-model-group	Validation Rule	Element Sequence Valid	yes	src/content.rs	sequence, choice and all	-

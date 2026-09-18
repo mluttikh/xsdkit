@@ -189,6 +189,9 @@ pub enum DiagCode {
     /// A wildcard admitted an element the same content model also declares,
     /// and the two declarations disagree about its type.
     InconsistentDeclarations,
+    /// An element carries `xsi:nil` where its declaration does not allow one:
+    /// the declaration is not `nillable`, or it has a `fixed` value.
+    NilNotAllowed,
 }
 
 impl DiagCode {
@@ -203,7 +206,7 @@ impl DiagCode {
     /// compile until it is added here. That matters: the hand-written list
     /// this replaced had drifted six codes behind the enum — the whole
     /// XSD13xx family — so nothing was checking them for a duplicate number.
-    pub const ALL: [DiagCode; 44] = [
+    pub const ALL: [DiagCode; 45] = [
         DiagCode::MalformedXml,
         DiagCode::NotASchemaDocument,
         DiagCode::UnknownSchemaElement,
@@ -248,6 +251,7 @@ impl DiagCode {
         DiagCode::UnresolvedKeyRef,
         DiagCode::UnknownEntity,
         DiagCode::InconsistentDeclarations,
+        DiagCode::NilNotAllowed,
     ];
 
     /// The stable printed form, e.g. `XSD1201`.
@@ -301,6 +305,7 @@ impl DiagCode {
             DiagCode::UnresolvedKeyRef => "XSD2016",
             DiagCode::UnknownEntity => "XSD2017",
             DiagCode::InconsistentDeclarations => "XSD2018",
+            DiagCode::NilNotAllowed => "XSD2019",
         }
     }
 }
@@ -496,7 +501,8 @@ mod tests {
                 | DiagCode::MissingKeyField
                 | DiagCode::UnresolvedKeyRef
                 | DiagCode::UnknownEntity
-                | DiagCode::InconsistentDeclarations => {}
+                | DiagCode::InconsistentDeclarations
+                | DiagCode::NilNotAllowed => {}
             }
         }
         assert_eq!(seen.len(), DiagCode::ALL.len());
