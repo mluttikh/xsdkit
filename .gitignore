@@ -11,6 +11,7 @@ __pycache__/
 /python/xsdkit/*.so
 /python/xsdkit/*.pyd
 .pytest_cache/
+.hypothesis/
 *.egg-info/
 
 # Staged rustdoc, mounted into the docs site by scripts/build-docs.sh
