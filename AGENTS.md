@@ -558,10 +558,10 @@ splits the same way:
 
 | | XSD 1.0 | XSD 1.1 |
 |---|---|---|
-| valid documents accepted | **99.9%** (11,309/11,325) | **99.6%** (11,863/11,906) |
+| valid documents accepted | **99.9%** (11,310/11,325) | **99.6%** (11,864/11,906) |
 | invalid documents rejected | **99.7%** (9,057/9,083) | **98.3%** (9,515/9,680) |
 
-16 false alarms under 1.0 against 43 under 1.1, which is the same story: the
+15 false alarms under 1.0 against 42 under 1.1, which is the same story: the
 1.1-only sets are the features that are not there yet.
 
 It used to be `#[ignore]`d on the strength of a 4.5-minute figure that

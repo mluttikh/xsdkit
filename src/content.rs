@@ -408,6 +408,8 @@ impl<'a> Builder<'a> {
         let before = self.positions.len();
         let mut acc = self.term(pid);
         let per_copy = self.positions.len() - before;
+        // The last copy built, which is the one that repeats when widened.
+        let mut tail = (acc.first.clone(), acc.last.clone());
 
         let unbounded = max == MaxOccurs::Unbounded;
         let mut copies = match max {
@@ -433,15 +435,19 @@ impl<'a> Builder<'a> {
 
         for i in 1..copies {
             let next = self.term(pid);
+            if !next.first.is_empty() {
+                tail = (next.first.clone(), next.last.clone());
+            }
             acc = self.concat(acc, next, i >= min);
         }
 
         if widened {
-            // Loop the tail back to the start, turning it into `T+`. When
-            // several copies were built this links the whole model's last set
-            // to its first, which over-approximates `T{n,}` — it accepts a
-            // superset, never a subset.
-            let (first, last) = (acc.first.clone(), acc.last.clone());
+            // Loop the last copy back onto itself, making `T{n}` into
+            // `T{n-1} T+`: exactly `T{n,}`, and a superset of a range too
+            // large to unroll. Looping the whole unrolled block back to its
+            // start made it `(T{n})+` instead, which for `a{2,}` took two
+            // children and four but refused three.
+            let (first, last) = tail;
             self.link(&last, &first);
         }
 
@@ -1550,9 +1556,10 @@ impl Schemas {
 
     /// Whether `child` may appear more than once inside `parent`.
     ///
-    /// True when a position admitting it can reach itself, which covers both
-    /// `maxOccurs > 1` on the element and a repeating ancestor group. This is
-    /// the table-versus-column question a config generator asks.
+    /// True when one path through the model can pass it twice: `maxOccurs > 1`
+    /// on the element, a repeating ancestor group, or a bounded one unrolled
+    /// into copies. This is the table-versus-column question a config
+    /// generator asks.
     pub fn child_repeats(&self, parent: TypeId, child: ElementId) -> bool {
         let Some(model) = self.content_model(parent) else {
             return false;
@@ -1563,12 +1570,18 @@ impl Schemas {
                 .members
                 .iter()
                 .any(|m| m.admits.contains(&child) && m.max_occurs.is_repeating()),
-            ContentModel::Automaton(a) => a
-                .positions()
-                .iter()
-                .enumerate()
-                .filter(|(_, p)| p.admits.contains(&child))
-                .any(|(i, p)| self[p.particle].is_repeating() || a.repeats(i as PositionId)),
+            ContentModel::Automaton(a) => {
+                let at: Vec<PositionId> = a
+                    .positions()
+                    .iter()
+                    .enumerate()
+                    .filter(|(_, p)| p.admits.contains(&child))
+                    .map(|(i, _)| i as PositionId)
+                    .collect();
+                at.iter()
+                    .any(|&p| self[a.position(p).particle].is_repeating())
+                    || passes_twice(a, &at, &mut vec![u32::MAX; a.positions().len()], 0)
+            }
         }
     }
 
@@ -1622,6 +1635,33 @@ pub struct Child {
     pub repeats: bool,
     /// Whether some valid content leaves it out.
     pub optional: bool,
+}
+
+/// Whether a path through `a` passes a position in `at` and then another, or
+/// the same one again: whether an element admitted only there can appear twice.
+///
+/// A cycle is the usual way, but not the only one. A bounded group unrolls
+/// into copies of its positions with no cycle among them —
+/// `<xs:sequence maxOccurs="2"><xs:element name="e"/></xs:sequence>` is
+/// `e e?` — and its `e` appears twice all the same. Missing that decoded `e`
+/// as a value when a document had one and as a list when it had two.
+///
+/// `seen` is scratch space the length of the automaton, reused so that asking
+/// this of every child does not allocate for each; `stamp` must differ from
+/// every earlier call's.
+fn passes_twice(a: &ContentAutomaton, at: &[PositionId], seen: &mut [u32], stamp: u32) -> bool {
+    let mut stack: Vec<PositionId> = at.iter().flat_map(|&p| a.follow(p)).copied().collect();
+    while let Some(q) = stack.pop() {
+        if seen[q as usize] == stamp {
+            continue;
+        }
+        seen[q as usize] = stamp;
+        if at.contains(&q) {
+            return true;
+        }
+        stack.extend_from_slice(a.follow(q));
+    }
+    false
 }
 
 /// Which positions lie on a cycle, for the whole automaton at once.
@@ -1890,16 +1930,20 @@ impl Schemas {
     fn automaton_children(&self, a: &ContentAutomaton) -> Vec<Child> {
         let mut out: Vec<Child> = Vec::new();
         let mut at: FxHashMap<ElementId, usize> = FxHashMap::default();
-        for p in a.positions() {
+        // The positions admitting each child, in `out`'s order.
+        let mut admitted_at: Vec<Vec<PositionId>> = Vec::new();
+        for (i, p) in a.positions().iter().enumerate() {
             for &e in &p.admits {
-                at.entry(e).or_insert_with(|| {
+                let c = *at.entry(e).or_insert_with(|| {
                     out.push(Child {
                         element: e,
                         repeats: false,
                         optional: false,
                     });
+                    admitted_at.push(Vec::new());
                     out.len() - 1
                 });
+                admitted_at[c].push(i as PositionId);
             }
         }
         if out.is_empty() {
@@ -1915,6 +1959,15 @@ impl Schemas {
             }
             for &e in &p.admits {
                 out[at[&e]].repeats = true;
+            }
+        }
+        // A bounded group unrolls into copies with no cycle among them, so a
+        // child admitted at more than one position also repeats when some
+        // path passes two of them.
+        let mut seen = vec![u32::MAX; a.positions().len()];
+        for (c, child) in out.iter_mut().enumerate() {
+            if !child.repeats && admitted_at[c].len() > 1 {
+                child.repeats = passes_twice(a, &admitted_at[c], &mut seen, c as u32);
             }
         }
 

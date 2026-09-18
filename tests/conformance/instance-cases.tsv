@@ -4,8 +4,8 @@
 #
 # runs                      41994
 # not scored                64
-# as XSD 1.0   valid accepted 11309/11325   invalid rejected 9057/9083
-# as XSD 1.1   valid accepted 11863/11906   invalid rejected 9515/9680
+# as XSD 1.0   valid accepted 11310/11325   invalid rejected 9057/9083
+# as XSD 1.1   valid accepted 11864/11906   invalid rejected 9515/9680
 #
 # Re-bless with XSDKIT_BLESS=1; see tests/w3c_suite.rs.
 
@@ -41948,8 +41948,8 @@ suntest/xsd006/xsd006.n10.xml@1.0	invalid	reject	XSD2003
 suntest/xsd006/xsd006.n10.xml@1.1	invalid	reject	XSD2003
 suntest/xsd006/xsd006.n11.xml@1.0	invalid	reject	XSD2002+XSD2003
 suntest/xsd006/xsd006.n11.xml@1.1	invalid	reject	XSD2002+XSD2003
-suntest/xsd006/xsd006.v00.xml@1.0	valid	reject	XSD2003
-suntest/xsd006/xsd006.v00.xml@1.1	valid	reject	XSD2003
+suntest/xsd006/xsd006.v00.xml@1.0	valid	accept	-
+suntest/xsd006/xsd006.v00.xml@1.1	valid	accept	-
 suntest/xsd008/xsd008.n00.xml@1.0	invalid	reject	XSD2002+XSD2003
 suntest/xsd008/xsd008.n00.xml@1.1	invalid	reject	XSD2002+XSD2003
 suntest/xsd008/xsd008.n01.xml@1.0	invalid	reject	XSD2002+XSD2003
