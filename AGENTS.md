@@ -317,6 +317,14 @@ cannot express this.
   Content before the root is only reported once an element follows it: text
   with no element at all is still "no root element", with the hint about
   passing a file name.
+- **Nor do its attributes check themselves.** `e.attributes()` yields a
+  `Result`, and the errors it carries — a name twice, a value with no quotes
+  around it — were dropped with `filter_map(Result::ok)`, so documents XML
+  refuses validated clean. `read_attributes` returns them, and it adds the two
+  checks the reader cannot make: one namespace under two prefixes is still one
+  attribute twice, and a prefix nothing declares is a fatal error rather than
+  a name in no namespace. That last one matters most: read as no namespace,
+  `p:id` was validated as the `id` the schema declares.
 - **An empty element takes its declaration's `default` or `fixed` value**, the
   same way an absent attribute does, and `PsviEvent::Text::from_schema` says
   so. Whitespace is content, not absence, so `<n> </n>` does not take one.

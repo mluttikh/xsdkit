@@ -227,6 +227,24 @@ def test_malformed_xml_is_a_diagnostic_not_an_exception(schemas):
     assert any(d.code == "XSD1001" for d in report.errors)
 
 
+@pytest.mark.parametrize(
+    "doc",
+    [
+        "<reading xmlns='urn:example' id='r1' id='r2'/>",
+        "<reading xmlns='urn:example' id=r1/>",
+        "<reading xmlns='urn:example' p:id='r1'/>",
+        "<p:reading xmlns='urn:example'/>",
+    ],
+)
+def test_a_document_xml_rejects_is_reported(schemas, doc):
+    """A duplicate attribute, an unquoted value and a prefix nothing declares
+    are all fatal in XML. The reader dropped them, so `p:id='r1'` was even
+    validated as the `id` the schema declares."""
+    report = schemas.validate(doc)
+    assert not report.is_valid
+    assert [d.code for d in report.errors] == ["XSD1001"]
+
+
 # --- schema-supplied attribute values ---------------------------------------
 
 
