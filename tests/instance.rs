@@ -2770,3 +2770,105 @@ fn nesting_is_capped_below_where_namespace_resolution_breaks() {
         DiagCode::MalformedXml,
     );
 }
+
+/// The attribute iterator's errors were dropped, so a document XML rejects
+/// outright validated without a word.
+#[test]
+fn a_malformed_attribute_is_reported() {
+    let s = report_schema();
+    let open = r#"<report xmlns="urn:example" "#;
+    let rest = r#"><title>t</title><count>1</count></report>"#;
+    for bad in [
+        // The same name twice, which XML 1.0 §3.1 forbids.
+        r#"id="r1" id="r2""#,
+        // A value with no quotes around it, and one whose quote never closes.
+        r#"id=r1"#,
+        r#"id="r1"#,
+        // A name with no value at all.
+        r#"id"#,
+        r#"id="#,
+    ] {
+        invalid(&s, &format!("{open}{bad}{rest}"), DiagCode::MalformedXml);
+    }
+    valid(&s, &format!("{open}id = 'r1' {rest}"));
+}
+
+/// Two prefixes for one namespace name one attribute twice, which Namespaces
+/// in XML §5.3 forbids as much as the same prefix twice. The names are only
+/// compared as written before that, so this was accepted, and the attribute
+/// was then validated twice over.
+#[test]
+fn one_attribute_under_two_prefixes_is_reported() {
+    let s = schema(
+        r#"<xs:element name="e"><xs:complexType>
+             <xs:anyAttribute namespace="urn:other" processContents="skip"/>
+           </xs:complexType></xs:element>"#,
+    );
+    let d = check(
+        &s,
+        r#"<e xmlns="urn:example" xmlns:p="urn:other" xmlns:q="urn:other"
+              p:z="1" q:z="2"/>"#,
+    );
+    let first = d.errors().next().expect("an error");
+    assert_eq!(first.code, DiagCode::MalformedXml);
+    assert!(
+        first.message.contains("{urn:other}z"),
+        "the message names the attribute: {}",
+        first.message
+    );
+    // Wide elements take another route to the same answer, so both are
+    // checked here.
+    let many = |dup: bool| {
+        let mut doc =
+            String::from(r#"<e xmlns="urn:example" xmlns:p="urn:other" xmlns:q="urn:other""#);
+        for i in 0..12 {
+            doc.push_str(&format!(r#" p:a{i}="{i}""#));
+        }
+        if dup {
+            // A different prefix, so only the resolved names collide.
+            doc.push_str(r#" q:a3="again""#);
+        }
+        doc + "/>"
+    };
+    valid(&s, &many(false));
+    invalid(&s, &many(true), DiagCode::MalformedXml);
+
+    // Two prefixes for one namespace are fine in themselves.
+    valid(
+        &s,
+        r#"<e xmlns="urn:example" xmlns:p="urn:other" xmlns:q="urn:other"
+              p:z="1" q:y="2"/>"#,
+    );
+}
+
+/// A prefix nothing declares is not a name in no namespace. Read as one, an
+/// attribute was validated against the declaration of the same local name,
+/// so `p:id` passed as `id`; an element was reported as undeclared, which
+/// blames the schema for a fault in the document.
+#[test]
+fn a_prefix_nothing_declares_is_reported() {
+    let s = report_schema();
+    let body = r#"><title>t</title><count>1</count></report>"#;
+    for doc in [
+        format!(r#"<report xmlns="urn:example" p:id="r1"{body}"#),
+        format!(r#"<p:report xmlns="urn:example" id="r1"{body}"#),
+        r#"<report xmlns="urn:example" id="r1"><title>t</title><p:count>1</p:count></report>"#
+            .to_string(),
+    ] {
+        let d = check(&s, &doc);
+        let first = d.errors().next().expect("an error");
+        assert_eq!(first.code, DiagCode::MalformedXml, "{d}");
+        assert!(
+            first.message.contains("prefix nothing declares"),
+            "{}",
+            first.message
+        );
+    }
+    // The prefix XML binds itself needs no declaration.
+    let open = schema(
+        r###"<xs:element name="e"><xs:complexType>
+               <xs:anyAttribute namespace="##any" processContents="skip"/>
+             </xs:complexType></xs:element>"###,
+    );
+    valid(&open, r#"<e xmlns="urn:example" xml:lang="en"/>"#);
+}

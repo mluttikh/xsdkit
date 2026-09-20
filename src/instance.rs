@@ -35,6 +35,7 @@ use crate::values::{Namespaces, Value};
 use fxhash::{FxHashMap, FxHashSet};
 use quick_xml::NsReader;
 use quick_xml::events::Event;
+use quick_xml::events::attributes::AttrError;
 use quick_xml::name::ResolveResult;
 use std::ops::ControlFlow;
 
@@ -702,13 +703,22 @@ impl<'a, S: FnMut(PsviEvent) -> ControlFlow<()>> Run<'a, '_, S> {
                     // The resolved namespace borrows the reader, so anything
                     // needed from it is turned into interned, `Copy` data
                     // before the borrow ends.
+                    let mut unbound = None;
                     let name = match &event {
                         Event::Start(e) | Event::Empty(e) => {
                             let uri = match &ns {
                                 ResolveResult::Bound(n) => {
                                     std::str::from_utf8(n.as_ref()).ok().map(str::to_owned)
                                 }
-                                _ => None,
+                                // A prefix nothing declares. Read as a name in
+                                // no namespace, it was reported as an element
+                                // the schema does not declare, which points at
+                                // the schema for a fault in the document.
+                                ResolveResult::Unknown(prefix) => {
+                                    unbound = Some(String::from_utf8_lossy(prefix).into_owned());
+                                    None
+                                }
+                                ResolveResult::Unbound => None,
                             };
                             let local =
                                 String::from_utf8_lossy(e.local_name().as_ref()).into_owned();
@@ -716,14 +726,23 @@ impl<'a, S: FnMut(PsviEvent) -> ControlFlow<()>> Run<'a, '_, S> {
                         }
                         _ => None,
                     };
-                    (name, event)
+                    (name, unbound, event)
                 }
                 Err(e) => {
                     self.error(DiagCode::MalformedXml, line, e.to_string());
                     return;
                 }
             };
-            let (name, event) = event;
+            let (name, unbound, event) = event;
+            if let Some(prefix) = unbound {
+                let local = name.as_ref().map_or("", |(_, l)| l.as_str());
+                self.error(
+                    DiagCode::MalformedXml,
+                    line,
+                    format!("`{prefix}:{local}` uses a prefix nothing declares"),
+                );
+                return;
+            }
             let position = (reader.buffer_position() as usize).min(xml.len());
             if position > counted {
                 // Bytes, not chars: a UTF-8 continuation byte is never
@@ -764,7 +783,15 @@ impl<'a, S: FnMut(PsviEvent) -> ControlFlow<()>> Run<'a, '_, S> {
                         }
                     }
                     let (ns, local) = name.expect("start events always carry a name");
-                    let attrs = read_attributes(&mut reader, e);
+                    // A malformed attribute is a malformed document, so this
+                    // stops where the other fatal errors above do.
+                    let attrs = match read_attributes(&mut reader, e) {
+                        Ok(attrs) => attrs,
+                        Err(message) => {
+                            self.error(DiagCode::MalformedXml, line, message);
+                            return;
+                        }
+                    };
                     let qname = self.v.schemas.qname(ns.as_deref(), &local);
                     self.start(qname, &ns, &local, attrs, line);
                     if matches!(event, Event::Empty(_)) {
@@ -1803,22 +1830,42 @@ impl<'a, S: FnMut(PsviEvent) -> ControlFlow<()>> Run<'a, '_, S> {
 }
 
 /// Reads an element's attributes with their prefixes resolved.
+///
+/// `Err` is a fatal error in the document's shape, for the caller to report
+/// and stop on. An attribute the reader cannot make sense of used to be
+/// dropped instead, so `<e a="1" a="2"/>` and `<e a=1/>` — neither of them a
+/// well-formed document — validated without a word.
 fn read_attributes(
     reader: &mut NsReader<&[u8]>,
     e: &quick_xml::events::BytesStart<'_>,
-) -> Vec<RawAttr> {
-    let attrs: Vec<_> = e.attributes().filter_map(Result::ok).collect();
-    attrs
+) -> Result<Vec<RawAttr>, String> {
+    let attrs: Vec<_> = e
+        .attributes()
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|err| attribute_error(e, &err))?;
+    let out: Vec<RawAttr> = attrs
         .into_iter()
         .map(|a| {
             let (ns, local) = reader.resolver_mut().resolve_attribute(a.key);
+            let local = String::from_utf8_lossy(local.as_ref()).into_owned();
             let namespace = match ns {
                 ResolveResult::Bound(n) => std::str::from_utf8(n.as_ref()).ok().map(str::to_owned),
-                _ => None,
+                // An attribute with no prefix is in no namespace, which is
+                // ordinary. A prefix nothing declares is not: read as no
+                // namespace, `p:a` was validated as the `a` the schema
+                // declares, so a document XML rejects outright validated
+                // clean.
+                ResolveResult::Unknown(prefix) => {
+                    return Err(format!(
+                        "`{}:{local}` uses a prefix nothing declares",
+                        String::from_utf8_lossy(&prefix)
+                    ));
+                }
+                ResolveResult::Unbound => None,
             };
-            RawAttr {
+            Ok(RawAttr {
                 namespace,
-                local: String::from_utf8_lossy(local.as_ref()).into_owned(),
+                local,
                 // Attribute-value normalization is required by XML 1.0
                 // §3.3.3 — tab, CR and LF become spaces — and is exactly the
                 // difference between an attribute and element text.
@@ -1826,9 +1873,84 @@ fn read_attributes(
                     .normalized_value(quick_xml::XmlVersion::Implicit1_0)
                     .map(std::borrow::Cow::into_owned)
                     .unwrap_or_default(),
-            }
+            })
         })
-        .collect()
+        .collect::<Result<Vec<RawAttr>, String>>()?;
+
+    // The reader above compares the names as written, which leaves the pair
+    // two prefixes for one namespace make: `a:x` and `b:x` are one attribute
+    // twice, and Namespaces in XML §5.3 forbids that as much as `x` twice.
+    // Both were accepted, and the attribute was then validated twice over.
+    // Most elements carry two or three attributes, where a pairwise scan
+    // beats building a table; a document is untrusted input, so the wide case
+    // gets the table rather than a quadratic scan.
+    let mut seen = FxHashSet::default();
+    for (i, a) in out.iter().enumerate() {
+        let key = (a.namespace.as_deref(), a.local.as_str());
+        let repeated = if out.len() > 8 {
+            !seen.insert(key)
+        } else {
+            out[..i]
+                .iter()
+                .any(|b| (b.namespace.as_deref(), b.local.as_str()) == key)
+        };
+        if !repeated {
+            continue;
+        }
+        let name = e.name();
+        let shown = String::from_utf8_lossy(name.as_ref());
+        return Err(match &a.namespace {
+            Some(ns) => format!(
+                "`{{{ns}}}{}` appears twice on `{shown}`, under two prefixes; \
+                 two attributes may not share a name",
+                a.local
+            ),
+            None => format!(
+                "`{}` appears twice on `{shown}`; two attributes may not share a name",
+                a.local
+            ),
+        });
+    }
+    Ok(out)
+}
+
+/// Says what is wrong with an attribute, in the document's own words.
+///
+/// The reader reports a byte offset into the start tag, which is no use to
+/// anyone reading a document: this names the element, and the attribute where
+/// the offset points at one.
+fn attribute_error(e: &quick_xml::events::BytesStart<'_>, err: &AttrError) -> String {
+    let tag = e.as_ref();
+    let shown = String::from_utf8_lossy(e.name().as_ref()).into_owned();
+    // The run of name characters at an offset, which for a duplicate is the
+    // attribute's name and for an unquoted value is the value itself.
+    let token = |at: usize| {
+        let rest = tag.get(at..).unwrap_or_default();
+        let len = rest
+            .iter()
+            .position(|b| b.is_ascii_whitespace() || matches!(b, b'=' | b'/' | b'>'))
+            .unwrap_or(rest.len());
+        String::from_utf8_lossy(&rest[..len]).into_owned()
+    };
+    match err {
+        AttrError::Duplicated(at, _) => format!(
+            "`{}` appears twice on `{shown}`; two attributes may not share a name",
+            token(*at)
+        ),
+        AttrError::UnquotedValue(at) => format!(
+            "the value `{}` on `{shown}` is not quoted; XML requires `\"` or `'` around one",
+            token(*at)
+        ),
+        // The offset points past the attribute's name rather than at it, so
+        // the reader's own words are as close as this gets.
+        other => {
+            let said = other.to_string();
+            let said = said
+                .split_once(": ")
+                .map_or(said.as_str(), |(_, rest)| rest);
+            format!("`{shown}` has a malformed attribute: {said}")
+        }
+    }
 }
 
 /// Whether text outside the root element is only what XML allows there:
